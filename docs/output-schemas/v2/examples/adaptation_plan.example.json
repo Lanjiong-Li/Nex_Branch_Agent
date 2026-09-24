@@ -1,0 +1,141 @@
+{
+  "result_kind": "ready",
+  "payload": {
+    "title": "雨夜车站：钥匙的去向",
+    "logline": "旅人林安在雨夜帮助乔乔寻找钥匙，玩家的信任与取舍决定两人如何离开车站。",
+    "premise_and_scope": "围绕车站相遇、寻找钥匙和离开的短篇互动改编，保留原作人物与场景。",
+    "source_global_analysis_ref": {
+      "record_id": "demo:source_global_analysis",
+      "version": "v1",
+      "item_id": null,
+      "json_pointer": null
+    },
+    "source_character_analysis_ref": {
+      "record_id": "demo:source_character_analysis",
+      "version": "v1",
+      "item_id": null,
+      "json_pointer": null
+    },
+    "strategy_ref": {
+      "record_id": "demo:adaptation_strategy",
+      "version": "v1",
+      "item_id": null,
+      "json_pointer": null
+    },
+    "player_role": {
+      "character_ref": {
+        "record_id": "demo:source_views",
+        "version": "v1",
+        "item_id": "source_character_lin",
+        "json_pointer": null
+      },
+      "description": "玩家扮演林安。",
+      "perspective": "限制在林安当时能够观察到的信息。"
+    },
+    "experience_goals": [
+      "在不完整信息中决定是否信任陌生人",
+      "让帮助或离开的选择产生可见后果"
+    ],
+    "world_and_character_changes": [],
+    "entity_specs": [
+      {
+        "entity_id": "demo:character:lin",
+        "kind": "character",
+        "name": "林安",
+        "overview": "细心的旅人",
+        "description": "习惯观察细节，但对陌生人的请求保持谨慎。",
+        "source_refs": [
+          {
+            "record_id": "demo:source_views",
+            "version": "v1",
+            "item_id": "source_character_lin",
+            "json_pointer": null
+          }
+        ]
+      },
+      {
+        "entity_id": "demo:character:qiao",
+        "kind": "character",
+        "name": "乔乔",
+        "overview": "寻找钥匙的女孩",
+        "description": "因遗失钥匙而焦急，得到帮助后愿意解释缘由。",
+        "source_refs": [
+          {
+            "record_id": "demo:source_views",
+            "version": "v1",
+            "item_id": "source_character_qiao",
+            "json_pointer": null
+          }
+        ]
+      },
+      {
+        "entity_id": "demo:location:station",
+        "kind": "location",
+        "name": "雨夜旧车站",
+        "overview": "雨中的候车室与站台",
+        "description": "旧钟、长椅和微亮的出口构成主要空间。",
+        "source_refs": [
+          {
+            "record_id": "demo:source_views",
+            "version": "v1",
+            "item_id": null,
+            "json_pointer": null
+          }
+        ]
+      }
+    ],
+    "narrative_constraints": [
+      {
+        "constraint_id": "demo:constraint:no_new_magic",
+        "rule": "保持现实背景，不新增超自然能力。",
+        "scope": "全剧",
+        "evidence_refs": [
+          {
+            "record_id": "demo:decision_realism",
+            "version": "v1",
+            "item_id": null,
+            "json_pointer": null
+          }
+        ]
+      }
+    ],
+    "writing_style": {
+      "tone": "克制、温暖",
+      "dialogue": "短句推动交流",
+      "narration": "用具体动作呈现变化",
+      "content_boundaries": [
+        "避免无依据地解释人物内心秘密"
+      ]
+    },
+    "stage_artifact_refs": {
+      "game_events": null,
+      "event_functions": null,
+      "ending_routes": null,
+      "player_profiles": null
+    }
+  },
+  "questions": [],
+  "evidence_refs": [
+    {
+      "record_id": "demo:source_global_analysis",
+      "version": "v1",
+      "item_id": null,
+      "json_pointer": null
+    },
+    {
+      "record_id": "demo:source_character_analysis",
+      "version": "v1",
+      "item_id": null,
+      "json_pointer": null
+    },
+    {
+      "record_id": "demo:adaptation_strategy",
+      "version": "v1",
+      "item_id": null,
+      "json_pointer": null
+    }
+  ],
+  "notes": [
+    "结构说明样例；引用是虚构 fixture，ready 不代表已获得用户确认或完成导入。"
+  ]
+}

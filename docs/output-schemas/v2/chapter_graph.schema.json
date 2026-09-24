@@ -1,0 +1,1149 @@
+{
+  "type": "object",
+  "properties": {
+    "result_kind": {
+      "type": "string",
+      "enum": [
+        "ready",
+        "needs_input"
+      ]
+    },
+    "payload": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "chapter": {
+              "$ref": "#/$defs/Chapter"
+            },
+            "shared_scenes": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Scene"
+              }
+            },
+            "shared_variables": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Variable"
+              }
+            },
+            "removed_node_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "removed_edge_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "chapter",
+            "shared_scenes",
+            "shared_variables",
+            "removed_node_ids",
+            "removed_edge_ids"
+          ],
+          "additionalProperties": false,
+          "description": "Step10 返回完整单章快照；未改节点/连线仍须完整保留。相对冻结基线消失的 ID 必须精确列在 removed_* 并通过删除授权/引用检查。共享对象是待核验提案，不隐式覆盖全局记录。"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "questions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Question"
+      }
+    },
+    "evidence_refs": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/EvidenceRef"
+      }
+    },
+    "notes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "result_kind",
+    "payload",
+    "questions",
+    "evidence_refs",
+    "notes"
+  ],
+  "additionalProperties": false,
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "BranchAgent_chapter_graph_v2",
+  "$defs": {
+    "ScriptInlinePlacement": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "integer",
+          "enum": [
+            1
+          ]
+        },
+        "afterLine": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "order": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "version",
+        "afterLine",
+        "order"
+      ],
+      "additionalProperties": false,
+      "description": "互动插在 body 以换行拆分后的第 afterLine 行之后，0 基；order 决定同一位置顺序。不是原作 UTF-16 偏移，也不是时间轴。"
+    },
+    "Choice": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "action": {
+          "type": "string",
+          "enum": [
+            "continue",
+            "jump"
+          ]
+        },
+        "label": {
+          "type": "string"
+        },
+        "targetNodeId": {
+          "type": "string",
+          "description": "continue 时为空字符串；jump 的完成稿必须解析到同章目标节点。"
+        }
+      },
+      "required": [
+        "id",
+        "action",
+        "label",
+        "targetNodeId"
+      ],
+      "additionalProperties": false
+    },
+    "ChoiceGroup": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "scriptInline": {
+          "$ref": "#/$defs/ScriptInlinePlacement"
+        },
+        "choices": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Choice"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "scriptInline",
+        "choices"
+      ],
+      "additionalProperties": false
+    },
+    "Qte": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "scriptInline": {
+          "$ref": "#/$defs/ScriptInlinePlacement"
+        },
+        "failureEnabled": {
+          "type": "boolean"
+        },
+        "failureAction": {
+          "type": "string",
+          "enum": [
+            "continue",
+            "jump"
+          ]
+        },
+        "failureTargetNodeId": {
+          "type": "string"
+        },
+        "successAction": {
+          "type": "string",
+          "enum": [
+            "continue",
+            "jump"
+          ]
+        },
+        "successTargetNodeId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "scriptInline",
+        "failureEnabled",
+        "failureAction",
+        "failureTargetNodeId",
+        "successAction",
+        "successTargetNodeId"
+      ],
+      "additionalProperties": false,
+      "description": "成功/失败分别选择 continue 或 jump。禁用失败没有可视边，但可保留已验证的失败草稿目标。"
+    },
+    "Condition": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "variableId": {
+          "type": "string"
+        },
+        "operator": {
+          "type": "string",
+          "enum": [
+            "gt",
+            "lt",
+            "eq",
+            "contains"
+          ]
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "variableId",
+        "operator",
+        "value"
+      ],
+      "additionalProperties": false
+    },
+    "Operation": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "variableId": {
+          "type": "string"
+        },
+        "operator": {
+          "type": "string",
+          "enum": [
+            "set",
+            "add",
+            "subtract"
+          ]
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "variableId",
+        "operator",
+        "value"
+      ],
+      "additionalProperties": false
+    },
+    "Branch": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "and"
+          ]
+        },
+        "conditions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Condition"
+          },
+          "maxItems": 0
+        },
+        "conditionDsl": {
+          "type": "string",
+          "description": "唯一权威条件表达式；引用全局变量 key；mode/conditions 仅满足现有领域接口兼容形状。"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "mode",
+        "conditions",
+        "conditionDsl"
+      ],
+      "additionalProperties": false
+    },
+    "JumpTarget": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "node",
+            "chapter"
+          ]
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "id"
+      ],
+      "additionalProperties": false,
+      "description": "kind=node 仅同章或下一章的非开始 story 节点，不能指自己；kind=chapter 仅下一章入口。当前 Inspector/store 对同章开始目标不一致，本 profile 按可稳定保存的交集约束。"
+    },
+    "StoryNode": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "已有对象复用身份；新对象用程序预留 ID 或由程序统一解析的局部 ID。"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "story"
+          ]
+        },
+        "title": {
+          "type": "string"
+        },
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        },
+        "synopsis": {
+          "type": "string"
+        },
+        "body": {
+          "type": "string",
+          "description": "剧情节点的完整正文；不是外部 Markdown 索引。"
+        },
+        "sceneId": {
+          "type": "string",
+          "description": "项目全局 Scene ID；不关联时为空字符串。"
+        },
+        "collapsed": {
+          "type": "boolean"
+        },
+        "chapterStart": {
+          "type": "boolean"
+        },
+        "chapterEnd": {
+          "type": "boolean"
+        },
+        "choiceGroups": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ChoiceGroup"
+          }
+        },
+        "qtes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Qte"
+          }
+        },
+        "operations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Operation"
+          },
+          "maxItems": 0
+        },
+        "branches": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Branch"
+          },
+          "maxItems": 0
+        },
+        "gameUrl": {
+          "type": "string",
+          "enum": [
+            ""
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "title",
+        "x",
+        "y",
+        "synopsis",
+        "body",
+        "sceneId",
+        "collapsed",
+        "chapterStart",
+        "chapterEnd",
+        "choiceGroups",
+        "qtes",
+        "operations",
+        "branches",
+        "gameUrl"
+      ],
+      "additionalProperties": false
+    },
+    "VariableNode": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "已有对象复用身份；新对象用程序预留 ID 或由程序统一解析的局部 ID。"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "variable"
+          ]
+        },
+        "title": {
+          "type": "string"
+        },
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        },
+        "synopsis": {
+          "type": "string",
+          "enum": [
+            ""
+          ]
+        },
+        "body": {
+          "type": "string",
+          "enum": [
+            ""
+          ]
+        },
+        "sceneId": {
+          "type": "string",
+          "enum": [
+            ""
+          ]
+        },
+        "collapsed": {
+          "type": "boolean"
+        },
+        "chapterStart": {
+          "type": "boolean",
+          "enum": [
+            false
+          ]
+        },
+        "chapterEnd": {
+          "type": "boolean",
+          "enum": [
+            false
+          ]
+        },
+        "choiceGroups": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ChoiceGroup"
+          },
+          "maxItems": 0
+        },
+        "qtes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Qte"
+          },
+          "maxItems": 0
+        },
+        "operations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Operation"
+          },
+          "maxItems": 0
+        },
+        "branches": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Branch"
+          },
+          "maxItems": 0
+        },
+        "gameUrl": {
+          "type": "string",
+          "enum": [
+            ""
+          ]
+        },
+        "scriptDsl": {
+          "type": "string",
+          "description": "唯一变量修改程序，使用现有 DSL；operations 保持空数组。"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "title",
+        "x",
+        "y",
+        "synopsis",
+        "body",
+        "sceneId",
+        "collapsed",
+        "chapterStart",
+        "chapterEnd",
+        "choiceGroups",
+        "qtes",
+        "operations",
+        "branches",
+        "gameUrl",
+        "scriptDsl"
+      ],
+      "additionalProperties": false
+    },
+    "ConditionNode": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "已有对象复用身份；新对象用程序预留 ID 或由程序统一解析的局部 ID。"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "condition"
+          ]
+        },
+        "title": {
+          "type": "string"
+        },
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        },
+        "synopsis": {
+          "type": "string",
+          "enum": [
+            ""
+          ]
+        },
+        "body": {
+          "type": "string",
+          "enum": [
+            ""
+          ]
+        },
+        "sceneId": {
+          "type": "string",
+          "enum": [
+            ""
+          ]
+        },
+        "collapsed": {
+          "type": "boolean"
+        },
+        "chapterStart": {
+          "type": "boolean",
+          "enum": [
+            false
+          ]
+        },
+        "chapterEnd": {
+          "type": "boolean",
+          "enum": [
+            false
+          ]
+        },
+        "choiceGroups": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ChoiceGroup"
+          },
+          "maxItems": 0
+        },
+        "qtes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Qte"
+          },
+          "maxItems": 0
+        },
+        "operations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Operation"
+          },
+          "maxItems": 0
+        },
+        "branches": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Branch"
+          }
+        },
+        "gameUrl": {
+          "type": "string",
+          "enum": [
+            ""
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "title",
+        "x",
+        "y",
+        "synopsis",
+        "body",
+        "sceneId",
+        "collapsed",
+        "chapterStart",
+        "chapterEnd",
+        "choiceGroups",
+        "qtes",
+        "operations",
+        "branches",
+        "gameUrl"
+      ],
+      "additionalProperties": false
+    },
+    "GameNode": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "已有对象复用身份；新对象用程序预留 ID 或由程序统一解析的局部 ID。"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "game"
+          ]
+        },
+        "title": {
+          "type": "string"
+        },
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        },
+        "synopsis": {
+          "type": "string",
+          "enum": [
+            ""
+          ]
+        },
+        "body": {
+          "type": "string",
+          "enum": [
+            ""
+          ]
+        },
+        "sceneId": {
+          "type": "string",
+          "enum": [
+            ""
+          ]
+        },
+        "collapsed": {
+          "type": "boolean"
+        },
+        "chapterStart": {
+          "type": "boolean"
+        },
+        "chapterEnd": {
+          "type": "boolean"
+        },
+        "choiceGroups": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ChoiceGroup"
+          },
+          "maxItems": 0
+        },
+        "qtes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Qte"
+          },
+          "maxItems": 0
+        },
+        "operations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Operation"
+          },
+          "maxItems": 0
+        },
+        "branches": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Branch"
+          },
+          "maxItems": 0
+        },
+        "gameUrl": {
+          "type": "string",
+          "description": "游戏节点只引用可信目录 URL；非游戏节点为空。"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "title",
+        "x",
+        "y",
+        "synopsis",
+        "body",
+        "sceneId",
+        "collapsed",
+        "chapterStart",
+        "chapterEnd",
+        "choiceGroups",
+        "qtes",
+        "operations",
+        "branches",
+        "gameUrl"
+      ],
+      "additionalProperties": false
+    },
+    "JumpNode": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "已有对象复用身份；新对象用程序预留 ID 或由程序统一解析的局部 ID。"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "jump"
+          ]
+        },
+        "title": {
+          "type": "string"
+        },
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        },
+        "synopsis": {
+          "type": "string",
+          "enum": [
+            ""
+          ]
+        },
+        "body": {
+          "type": "string",
+          "enum": [
+            ""
+          ]
+        },
+        "sceneId": {
+          "type": "string",
+          "enum": [
+            ""
+          ]
+        },
+        "collapsed": {
+          "type": "boolean"
+        },
+        "chapterStart": {
+          "type": "boolean",
+          "enum": [
+            false
+          ]
+        },
+        "chapterEnd": {
+          "type": "boolean",
+          "enum": [
+            false
+          ]
+        },
+        "choiceGroups": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ChoiceGroup"
+          },
+          "maxItems": 0
+        },
+        "qtes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Qte"
+          },
+          "maxItems": 0
+        },
+        "operations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Operation"
+          },
+          "maxItems": 0
+        },
+        "branches": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Branch"
+          },
+          "maxItems": 0
+        },
+        "gameUrl": {
+          "type": "string",
+          "enum": [
+            ""
+          ]
+        },
+        "jumpTarget": {
+          "$ref": "#/$defs/JumpTarget"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "title",
+        "x",
+        "y",
+        "synopsis",
+        "body",
+        "sceneId",
+        "collapsed",
+        "chapterStart",
+        "chapterEnd",
+        "choiceGroups",
+        "qtes",
+        "operations",
+        "branches",
+        "gameUrl",
+        "jumpTarget"
+      ],
+      "additionalProperties": false
+    },
+    "Node": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/StoryNode"
+        },
+        {
+          "$ref": "#/$defs/VariableNode"
+        },
+        {
+          "$ref": "#/$defs/ConditionNode"
+        },
+        {
+          "$ref": "#/$defs/GameNode"
+        },
+        {
+          "$ref": "#/$defs/JumpNode"
+        }
+      ],
+      "description": "五种对象均兼容编辑器 StoryNode；按 kind 收窄，防止写入错误类型的字段。"
+    },
+    "Edge": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "sourcePort": {
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "source",
+        "sourcePort",
+        "target"
+      ],
+      "additionalProperties": false,
+      "description": "同章可视连线。选项出口=choice.id；QTE 成功=qte.id，失败=qte.id+:failure；普通出口=next；条件为 branch.id/default。"
+    },
+    "Chapter": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "nodes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Node"
+          }
+        },
+        "edges": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Edge"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "summary",
+        "nodes",
+        "edges"
+      ],
+      "additionalProperties": false,
+      "description": "nodes 数组承载剧本编排顺序；edges 表达执行走向，二者不可互相推断。"
+    },
+    "ChapterEdge": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "source",
+        "target"
+      ],
+      "additionalProperties": false,
+      "description": "程序依章节顺序生成 begin→首章→…→末章→end，采用现有 automaticChapterEdges 身份。"
+    },
+    "Scene": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "characterIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "locationIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "location": {
+          "type": "string",
+          "description": "保留现有界面显示字符串，程序根据 locationIds 和可信名称目录投影；不独立生成第二套地点身份。"
+        },
+        "characters": {
+          "type": "string",
+          "description": "保留现有界面显示字符串，程序根据 characterIds 和可信名称目录投影。"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "summary",
+        "characterIds",
+        "locationIds",
+        "location",
+        "characters"
+      ],
+      "additionalProperties": false,
+      "description": "项目全局共享场次，不属于 Chapter；人物/地点档案由另行管理的实体目录提供。"
+    },
+    "Variable": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "key": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "number",
+            "string",
+            "boolean"
+          ]
+        },
+        "value": {
+          "type": "string",
+          "description": "编辑器使用字符串：number 如 \"0\"、boolean 为 \"true\"/\"false\"、string 为原文本。不是玩家当前存档。"
+        }
+      },
+      "required": [
+        "id",
+        "key",
+        "description",
+        "name",
+        "type",
+        "value"
+      ],
+      "additionalProperties": false
+    },
+    "EvidenceRef": {
+      "type": "object",
+      "properties": {
+        "record_id": {
+          "type": "string",
+          "description": "真实来源记录或产物 ID；由 Harness 验证存在性与项目归属。"
+        },
+        "version": {
+          "anyOf": [
+            {
+              "type": "string",
+              "description": "版本化记录必须提供固定版本；普通消息可为 null。"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "item_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "description": "记录内部的稳定条目 ID。"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "json_pointer": {
+          "anyOf": [
+            {
+              "type": "string",
+              "description": "需要定位字段时使用 JSON Pointer。"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "record_id",
+        "version",
+        "item_id",
+        "json_pointer"
+      ],
+      "additionalProperties": false,
+      "description": "模型引用已存在记录，不由模型签发确认、版本或审计身份。"
+    },
+    "Question": {
+      "type": "object",
+      "properties": {
+        "question_id": {
+          "type": "string"
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "target_field": {
+          "anyOf": [
+            {
+              "type": "string",
+              "description": "当前 payload 内的 JSON Pointer。"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "suggested_answers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "blocking_scope": {
+          "type": "string",
+          "description": "明确说明哪些工作依赖此回答。"
+        }
+      },
+      "required": [
+        "question_id",
+        "prompt",
+        "reason",
+        "target_field",
+        "suggested_answers",
+        "blocking_scope"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

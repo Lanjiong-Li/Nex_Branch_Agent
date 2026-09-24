@@ -1,0 +1,985 @@
+{
+  "version": "1.3.0",
+  "status": "design_defaults_not_runtime_implementation",
+  "schema_catalog": "../output-schemas/v2/registry.json",
+  "pointer_syntax": {
+    "root": "selectors 相对已解包来源内容的 JSON 根；业务产物保留模型结果信封，因此通常从 /payload 开始，nexo_graph 从 Project 根开始。空字符串表示根。",
+    "array_wildcard": "* 是配置中的数组 schema 遍历通配符，不是 RFC 6901 实例 JSON Pointer。读取后必须展开为含数字索引的准确 JSON Pointer，并附稳定条目 ID。",
+    "escaping": "字段名中的 ~ 和 / 依 RFC 6901 转义为 ~0 和 ~1。不得使用递归下降、任意表达式或名称猜测。",
+    "validation": "发布配置时将 selectors 沿实际 Schema 的 properties/items/$ref/anyOf 展开校验；payload=null 或尚未完成阶段要求的 needs_input 输出不能作为阶段可用材料。"
+  },
+  "selection_rules": {
+    "version_binding": "任务启动或获准重定基线时，把每个来源绑定为 project_id + artifact_id/record_id + 明确版本 + schema_id/version/hash；同一 Run 使用 ContextSnapshot 的固定清单。业务产物必须是已持久化版本，不能在每次读取时重新解析 latest。 审核按 reviewed_artifact_refs 读取已保存的明确候选草稿，不要求候选已通过本次审核；候选仍标草稿，审核通过后交付相同版本。",
+    "dependency_binding": "Stage 引用优先沿已固定父产物的 EvidenceRef 解析，例如 adaptation_plan.stage_artifact_refs；Task 显式输入用于最初绑定和被修改基线。两者冲突必须先判定旧版继续或新建输入基线，不混拼。",
+    "reference_envelope": "每个加载块均带 project_id、source_ref（record_id/version/item_id/json_pointer）、实际 ArtifactVersion 或不可变记录身份、schema_id/version/hash、scope、准确 selectors、读取原因与快照时的生效/确认范围。内建投影还带 projection_id/version、来源记录列表及内容哈希；产物与 Decision 必须带固定十进制版本；消息、RuntimeEvent、Checkpoint、ContextSnapshot 等非版本化不可变记录可 version=null，ConfigVersion 按数据契约引用固定记录 ID。包络由程序提供，材料正文不能签发身份或状态。",
+    "required": "required=true 表示相应子任务开始前必须解析、读到并校验；load=on_demand 仅改变加载时机。有效空集合允许，来源缺失/失败不等于空。任何材料一旦被声明为直接依赖，即使此模板 required=false 也须读取。",
+    "load": "auto 由 Harness 预取；on_demand 在 Agent 工具请求或对应消费子任务前展开。引用本身不足以满足要求正文的必需材料。",
+    "detail": "full 为 selectors 指向内容的完整值；index 为所列目录/定位字段且不代表全文阅读；ref 仅保留固定引用。改变 full 为 index/ref 不解除 complete_scope 的后续展开义务。",
+    "priority": "整数越大越先装入预算；低优先级必需材料仍不可丢弃。Step2–11 超预算可按契约分批；Step1 全文为不可分批的必需输入，超导入或实际总上下文上限即拒绝启动。",
+    "coverage": "complete_scope 要求固定目标范围内全部选中字段/条目最终被读取并完成任务检查；context_only 仅提供控制/索引/工作连续性；evidence_only 只证明实际展开的证据。索引、摘要和 top-k 不算全量覆盖。",
+    "common": "每个 profile 先加载 common_materials，再按源身份/版本/字段/范围去重；工作摘要非权威且仅当已有有效摘要时加载。",
+    "config_boundary": "允许 HTML 调整 selectors、scope_filter 注册名、load、detail、priority 及可选材料。不得通过配置绕过项目隔离、固定版本、阶段前置确认、必需约束或全量覆盖；修改必须通过静态路径与依赖检查，并生成 ConfigVersion。",
+    "step1_full_text": "Step1 每次执行原作切分或修正的模型调用，都必须在实际输入上下文中同时包含冻结原作完整正文 [0, UTF-16长度)。索引、摘要、历史引用、截断文本和多次调用分批读取均不能替代全文；后续工具调用或修正轮次仍保留全文。先校验 context.step1_source.max_source_tokens 和完整调用输入预算，任一超限阻止启动，不降级。此约束不可通过 HTML 材料选择或压缩配置关闭。"
+  },
+  "builtin_sources": {
+    "runtime.task_frame": {
+      "fields": [
+        "request_refs",
+        "goal",
+        "scope",
+        "task_ref",
+        "config_ref"
+      ],
+      "source": "固定 Task、当前请求 HistoryRecord、Run 的配置快照；goal 是任务授权目标的程序投影，不由模型扩张。"
+    },
+    "runtime.applicable_controls": {
+      "fields": [
+        "decision_refs",
+        "confirmation_refs",
+        "constraint_items"
+      ],
+      "source": "当前范围生效的 Decision、Confirmation、ArtifactState 的固定快照；constraint_items 给出规则正文、来源和适用范围。空集合是已查询无记录，不是漏读。"
+    },
+    "runtime.work_history": {
+      "fields": [
+        "recent_message_refs",
+        "current_exchange_refs",
+        "pending_tool_call_refs"
+      ],
+      "source": "所选 WorkSession 的原始 HistoryRecord 和尚待后续调用消费的 ToolCall 记录；引用展开为实际消息/工具结果，遵守成对交互和历史预算。"
+    },
+    "runtime.project_state": {
+      "fields": [
+        "artifact_refs",
+        "active_task_refs",
+        "pending_question_refs",
+        "pending_confirmation_refs"
+      ],
+      "source": "项目内任务、产物生效状态和待处理事项的持久快照；以真实记录为依据，不从模型文本推断完成或确认。"
+    },
+    "runtime.source_block": {
+      "fields": [
+        "source_ref",
+        "text",
+        "start_utf16",
+        "end_utf16"
+      ],
+      "source": "冻结原作 ArtifactVersion/Blob 中的原样文本区间，仅供 Step2–11 的证据或章节材料读取；保留原始空格、换行、Unicode，区间为 UTF-16 半开区间，不能替代 Step1 全文。"
+    },
+    "runtime.source_index": {
+      "fields": [
+        "source_ref",
+        "sections"
+      ],
+      "source": "冻结原作的程序索引。sections 含稳定 section_id、原题名（无则 null）和起止 UTF-16 区间；没有标题时按物理段落范围索引，不虚构章节。"
+    },
+    "runtime.batch_state": {
+      "fields": [
+        "manifest_ref",
+        "current_batch_id",
+        "owned_source_ranges",
+        "neighbor_source_ranges",
+        "processed_item_refs",
+        "pending_item_refs",
+        "continuity_refs"
+      ],
+      "source": "Step2–11 固定内部 batch_manifest 和当前批次检查点的投影；材料按区间、事件/章/节点按稳定条目引用。衔接资料从已保存批次结果展开，邻接不计完成覆盖。不是 Agent output_type 的新增字段，Step1 不创建或使用分批状态。"
+    },
+    "runtime.default_strategy": {
+      "fields": [
+        "strategy_ref",
+        "text"
+      ],
+      "source": "生效 ConfigVersion 中 adaptation.default_strategy 的固定引用与原文，默认文本见 defaults.json；沉默不代替用户在 Step3 的必要选择。"
+    },
+    "runtime.target_contract": {
+      "fields": [
+        "schema_ref",
+        "capability_ref"
+      ],
+      "source": "Run 固定的输出 Schema 版本/哈希及 Nexo 能力规则配置；执行要求已加载相同正文时只保留引用，避免重复占用输入。"
+    },
+    "runtime.graph_write_context": {
+      "fields": [
+        "baseline_ref",
+        "target_chapter_id",
+        "reserved_identity_refs",
+        "metadata_ref",
+        "change_scope"
+      ],
+      "source": "程序冻结的 Project 基线、目标章及身份/元数据分配快照。首建也须先存初始 Project 基线；整剧模式 target_chapter_id=null，change_scope 列明全部目标章节。"
+    },
+    "runtime.review_context": {
+      "fields": [
+        "reviewed_artifact_refs",
+        "criteria_ref",
+        "program_check_refs",
+        "covered_item_refs",
+        "pending_item_refs"
+      ],
+      "source": "本次审核固定版本清单、审核配置、真实程序检查结果及审核覆盖检查点；criteria/program_check 引用须展开，不能凭引用宣告检查通过。"
+    },
+    "runtime.archive_window": {
+      "fields": [
+        "history_refs",
+        "decision_refs",
+        "artifact_refs",
+        "tool_call_refs"
+      ],
+      "source": "摘要任务指定的原始归档区间，或历史问答实际命中的原始记录集合。所有引用保留项目归属、记录身份及版本，并按需展开原文；搜索无结果与读取失败分别报告。"
+    },
+    "runtime.full_source": {
+      "fields": [
+        "source_ref",
+        "text",
+        "start_utf16",
+        "end_utf16"
+      ],
+      "source": "冻结 source_text ArtifactVersion/Blob 的完整权威原作文本；原样保留空格、换行、Unicode，不按章节、事件、当前批次或范围裁剪。仅 Step1 用作全文输入，原始附件解析后的固定文本版本及哈希必须可追溯。",
+      "range": {
+        "start_utf16": 0,
+        "end_utf16": "frozen_source_utf16_length"
+      },
+      "truncate": false
+    }
+  },
+  "scope_filters": {
+    "task_scope": "按 Task 固定 project/stage/chapter/branch/目标条目范围选择；范围不明确时先解析或询问。它不是相似度 top-k。",
+    "all_pinned": "读取来源绑定中的全部固定版本及所列字段；不自动追踪当前最新版本。",
+    "current_batch": "依据固定批次清单选择本批拥有的完整事件/人物/章节节点条目，及显式登记的邻接材料。事件批次必须另覆盖没有关联事件的人物；邻接不能重复计入完成。",
+    "source_evidence": "沿已加载来源锚点或 EvidenceRef 解析原文固定版本与范围；允许远处片段，禁止以标题或同名角色猜位置。",
+    "selected_player": "以已确认玩家身份的 character_ref 匹配 character_views.character_id，并加载关联 events；新创玩家无原作身份时返回有依据的空集，不伪造原作人物。",
+    "referenced_entities": "按目标事件/章节正文/方案引用收集相关角色和地点的稳定 ID，保留明确所需关系；无法确定关联范围时加载完整目录或分批，不能随意丢弃。",
+    "target_chapters": "按 Task 的稳定 chapter_id 选择完整章节设计或 Project.chapters 元素；未划章时按固定待划章事件范围；整剧模式取固定清单内全部章。Project 根元数据、variables/scenes/chapterEdges 不因过滤 chapters 被删除。",
+    "chapter_dependencies": "按目标章节、章节设计 game_event_refs/entry_exit_contracts/global_entity_refs/state_requirements 及方案 stage_artifact_refs 追溯所需固定版本，加载跨章契约；没有明确章节绑定时先载全局事件索引。",
+    "review_scope": "按本次审核清单选择全部应审条目，分批完整展开正文与互动；每个节点、互动、全局变量及跨章关系均纳入对应检查范围，索引不算全文审核。",
+    "history_query": "仅在本项目按用户问题搜索；命中只是候选，回答历史原因前须展开当时原始记录和版本。历史版本允许失效，但必须标明当时/当前状态。",
+    "summary_window": "按本次摘要任务固定的消息区间与当前有效状态选择原始记录，已覆盖消息可去重但不能仅重复概括旧摘要。",
+    "full_source": "只返回冻结原作全文及 [0, 冻结文本UTF-16长度) 区间；忽略局部章节/事件/批次筛选要求，不允许截断、邻接窗口、摘要或 top-k 替代。超导入或实际调用上下文上限时拒绝启动 Step1。"
+  },
+  "common_materials": [
+    {
+      "id": "task_frame",
+      "source": {
+        "builtin": "runtime.task_frame"
+      },
+      "selectors": [
+        "/request_refs",
+        "/goal",
+        "/scope",
+        "/task_ref",
+        "/config_ref"
+      ],
+      "scope_filter": "task_scope",
+      "load": "auto",
+      "required": true,
+      "detail": "full",
+      "priority": 100,
+      "coverage": "context_only"
+    },
+    {
+      "id": "applicable_controls",
+      "source": {
+        "builtin": "runtime.applicable_controls"
+      },
+      "selectors": [
+        "/decision_refs",
+        "/confirmation_refs",
+        "/constraint_items"
+      ],
+      "scope_filter": "task_scope",
+      "load": "auto",
+      "required": true,
+      "detail": "full",
+      "priority": 100,
+      "coverage": "context_only"
+    },
+    {
+      "id": "work_history",
+      "source": {
+        "builtin": "runtime.work_history"
+      },
+      "selectors": [
+        "/recent_message_refs",
+        "/current_exchange_refs",
+        "/pending_tool_call_refs"
+      ],
+      "scope_filter": "task_scope",
+      "load": "auto",
+      "required": true,
+      "detail": "full",
+      "priority": 90,
+      "coverage": "context_only"
+    },
+    {
+      "id": "work_summary",
+      "source": {
+        "schema_id": "work_summary"
+      },
+      "selectors": [
+        ""
+      ],
+      "scope_filter": "task_scope",
+      "load": "auto",
+      "required": false,
+      "detail": "full",
+      "priority": 90,
+      "coverage": "context_only"
+    }
+  ],
+  "profiles": [
+    {
+      "stage": "coordinator",
+      "label": "项目对话与任务协调",
+      "agent": "conversation_coordinator",
+      "include_common_materials": true,
+      "materials": [
+        {
+          "id": "project_state",
+          "source": {
+            "builtin": "runtime.project_state"
+          },
+          "selectors": [
+            "/artifact_refs",
+            "/active_task_refs",
+            "/pending_question_refs",
+            "/pending_confirmation_refs"
+          ],
+          "scope_filter": "task_scope",
+          "load": "auto",
+          "required": true,
+          "detail": "index",
+          "priority": 70,
+          "coverage": "context_only"
+        },
+        {
+          "id": "history_evidence",
+          "source": {
+            "builtin": "runtime.archive_window"
+          },
+          "selectors": [
+            "/history_refs",
+            "/decision_refs",
+            "/artifact_refs",
+            "/tool_call_refs"
+          ],
+          "scope_filter": "history_query",
+          "load": "on_demand",
+          "required": false,
+          "detail": "full",
+          "priority": 30,
+          "coverage": "evidence_only"
+        }
+      ],
+      "notes": [
+        "确认对象必须定位到用户看到的版本与范围；产物引用展开后才能解释细节，协调上下文不自动复制专业 Agent 历史。"
+      ]
+    },
+    {
+      "stage": "step1",
+      "label": "原作双视图切片",
+      "agent": "source_parser",
+      "include_common_materials": true,
+      "materials": [
+        {
+          "id": "source_index",
+          "source": {
+            "builtin": "runtime.source_index"
+          },
+          "selectors": [
+            "/source_ref",
+            "/sections"
+          ],
+          "scope_filter": "all_pinned",
+          "load": "auto",
+          "required": true,
+          "detail": "index",
+          "priority": 70,
+          "coverage": "context_only"
+        },
+        {
+          "id": "full_source",
+          "source": {
+            "builtin": "runtime.full_source"
+          },
+          "selectors": [
+            "/source_ref",
+            "/text",
+            "/start_utf16",
+            "/end_utf16"
+          ],
+          "scope_filter": "full_source",
+          "load": "auto",
+          "required": true,
+          "detail": "full",
+          "priority": 100,
+          "coverage": "complete_scope"
+        }
+      ],
+      "notes": [
+        "一次基于全本原作执行双视图切分；每次后续切分/修正调用也必须同时保留完整原作。目录索引仅辅助定位，不代替正文。超过 max_source_tokens 或实际总上下文上限时拒绝启动；不摘要、不截断、不分批降级。"
+      ]
+    },
+    {
+      "stage": "step2",
+      "label": "原作核心信息分析",
+      "agent": "adaptation_planner",
+      "include_common_materials": true,
+      "materials": [
+        {
+          "id": "source_views_index",
+          "source": {
+            "schema_id": "source_views"
+          },
+          "selectors": [
+            "/payload/source_ref",
+            "/payload/global_events/*/event_id",
+            "/payload/global_events/*/title",
+            "/payload/global_events/*/narrative_order",
+            "/payload/character_views/*/character_id",
+            "/payload/character_views/*/name"
+          ],
+          "scope_filter": "all_pinned",
+          "load": "auto",
+          "required": true,
+          "detail": "index",
+          "priority": 70,
+          "coverage": "context_only"
+        },
+        {
+          "id": "source_views_detail",
+          "source": {
+            "schema_id": "source_views"
+          },
+          "selectors": [
+            "/payload/source_ref",
+            "/payload/global_events",
+            "/payload/character_views",
+            "/payload/covered_source_anchors",
+            "/payload/remaining_source_anchors"
+          ],
+          "scope_filter": "current_batch",
+          "load": "auto",
+          "required": true,
+          "detail": "full",
+          "priority": 70,
+          "coverage": "complete_scope"
+        }
+      ],
+      "notes": [
+        "Step2 分批分析完整双视图并汇总核心信息；分析时不预设玩家角色，也不把它当成另一次原作切片。"
+      ]
+    },
+    {
+      "stage": "step3",
+      "label": "玩家身份与互动策略",
+      "agent": "adaptation_planner",
+      "include_common_materials": true,
+      "materials": [
+        {
+          "id": "global_event_analysis",
+          "source": {
+            "schema_id": "source_global_analysis"
+          },
+          "selectors": [
+            ""
+          ],
+          "scope_filter": "all_pinned",
+          "load": "auto",
+          "required": true,
+          "detail": "full",
+          "priority": 70,
+          "coverage": "complete_scope"
+        },
+        {
+          "id": "character_event_analysis",
+          "source": {
+            "schema_id": "source_character_analysis"
+          },
+          "selectors": [
+            ""
+          ],
+          "scope_filter": "all_pinned",
+          "load": "auto",
+          "required": true,
+          "detail": "full",
+          "priority": 70,
+          "coverage": "complete_scope"
+        },
+        {
+          "id": "character_candidates",
+          "source": {
+            "schema_id": "source_views"
+          },
+          "selectors": [
+            "/payload/character_views/*/character_id",
+            "/payload/character_views/*/name",
+            "/payload/character_views/*/aliases",
+            "/payload/character_views/*/description"
+          ],
+          "scope_filter": "all_pinned",
+          "load": "auto",
+          "required": true,
+          "detail": "index",
+          "priority": 70,
+          "coverage": "context_only"
+        },
+        {
+          "id": "default_strategy",
+          "source": {
+            "builtin": "runtime.default_strategy"
+          },
+          "selectors": [
+            "/strategy_ref",
+            "/text"
+          ],
+          "scope_filter": "task_scope",
+          "load": "auto",
+          "required": true,
+          "detail": "full",
+          "priority": 70,
+          "coverage": "context_only"
+        },
+        {
+          "id": "candidate_evidence",
+          "source": {
+            "schema_id": "source_views"
+          },
+          "selectors": [
+            "/payload/global_events",
+            "/payload/character_views"
+          ],
+          "scope_filter": "referenced_entities",
+          "load": "on_demand",
+          "required": false,
+          "detail": "full",
+          "priority": 30,
+          "coverage": "evidence_only"
+        }
+      ]
+    },
+    {
+      "stage": "step4",
+      "label": "互动改编方案",
+      "agent": "adaptation_planner",
+      "include_common_materials": true,
+      "materials": [
+        {
+          "id": "global_event_analysis",
+          "source": {
+            "schema_id": "source_global_analysis"
+          },
+          "selectors": [
+            ""
+          ],
+          "scope_filter": "all_pinned",
+          "load": "auto",
+          "required": true,
+          "detail": "full",
+          "priority": 70,
+          "coverage": "complete_scope"
+        },
+        {
+          "id": "character_event_analysis",
+          "source": {
+            "schema_id": "source_character_analysis"
+          },
+          "selectors": [
+            ""
+          ],
+          "scope_filter": "all_pinned",
+          "load": "auto",
+          "required": true,
+          "detail": "full",
+          "priority": 70,
+          "coverage": "complete_scope"
+        },
+        {
+          "id": "strategy",
+          "source": {
+            "schema_id": "adaptation_strategy"
+          },
+          "selectors": [
+            "/payload/source_global_analysis_ref",
+            "/payload/source_character_analysis_ref",
+            "/payload/player_identity",
+            "/payload/strategy_basis",
+            "/payload/experience_goals",
+            "/payload/user_ideas",
+            "/payload/adaptation_principles",
+            "/payload/interaction_principles",
+            "/payload/constraints"
+          ],
+          "scope_filter": "all_pinned",
+          "load": "auto",
+          "required": true,
+          "detail": "full",
+          "priority": 70,
+          "coverage": "complete_scope"
+        },
+        {
+          "id": "source_details",
+          "source": {
+            "schema_id": "source_views"
+          },
+          "selectors": [
+            "/payload/global_events",
+            "/payload/character_views"
+          ],
+          "scope_filter": "referenced_entities",
+          "load": "on_demand",
+          "required": false,
+          "detail": "full",
+          "priority": 30,
+          "coverage": "evidence_only"
+        }
+      ]
+    },
+    {
+      "stage": "step5",
+      "label": "游戏事件视图",
+      "agent": "interaction_architect",
+      "include_common_materials": true,
+      "materials": [
+        {
+          "id": "global_event_analysis",
+          "source": {
+            "schema_id": "source_global_analysis"
+          },
+          "selectors": [
+            ""
+          ],
+          "scope_filter": "all_pinned",
+          "load": "auto",
+          "required": true,
+          "detail": "full",
+          "priority": 70,
+          "coverage": "complete_scope"
+        },
+        {
+          "id": "character_event_analysis",
+          "source": {
+            "schema_id": "source_character_analysis"
+          },
+          "selectors": [
+            ""
+          ],
+          "scope_filter": "all_pinned",
+          "load": "auto",
+          "required": true,
+          "detail": "full",
+          "priority": 70,
+          "coverage": "complete_scope"
+        },
+        {
+          "id": "event_index",
+          "source": {
+            "schema_id": "source_views"
+          },
+          "selectors": [
+            "/payload/source_ref",
+            "/payload/global_events/*/event_id",
+            "/payload/global_events/*/title",
+            "/payload/global_events/*/narrative_order"
+          ],
+          "scope_filter": "all_pinned",
+          "load": "auto",
+          "required": true,
+          "detail": "index",
+          "priority": 70,
+          "coverage": "context_only"
+        },
+        {
+          "id": "source_events",
+          "source": {
+            "schema_id": "source_views"
+          },
+          "selectors": [
+            "/payload/global_events"
+          ],
+          "scope_filter": "current_batch",
+          "load": "auto",
+          "required": true,
+          "detail": "full",
+          "priority": 70,
+          "coverage": "complete_scope"
+        },
+        {
+          "id": "player_view",
+          "source": {
+            "schema_id": "source_views"
+          },
+          "selectors": [
+            "/payload/character_views"
+          ],
+          "scope_filter": "all_pinned",
+          "load": "auto",
+          "required": true,
+          "detail": "full",
+          "priority": 70,
+          "coverage": "complete_scope"
+        },
+        {
+          "id": "original_evidence",
+          "source": {
+            "builtin": "runtime.source_block"
+          },
+          "selectors": [
+            "/source_ref",
+            "/text",
+            "/start_utf16",
+            "/end_utf16"
+          ],
+          "scope_filter": "source_evidence",
+          "load": "auto",
+          "required": true,
+          "detail": "full",
+          "priority": 70,
+          "coverage": "complete_scope"
+        }
+      ],
+      "notes": [
+        "游戏事件由 Step5 独立设计并直接锚定固定原作。双视图和两份分析提供创作背景，不作为游戏事件的组成索引；固定原作全文用于核验 UTF-16 区间。"
+      ]
+    },
+    {
+      "stage": "step6",
+      "label": "叙事功能与玩家意图单元",
+      "agent": "interaction_architect",
+      "include_common_materials": true,
+      "materials": [],
+      "notes": [
+        "Step6 使用与 Step5 相同的 interactive_structure Session；Harness 重新装入固定的 Step5 原作双视图、两份分析及游戏事件视图，确保完整输入与输出可见，历史交互和工具结果由 Session 提供。模型仅输出 event ID 与 narrative_function 补丁；Harness 合并到原 game_event_view 并保存新版本。"
+      ]
+    },
+    {
+      "stage": "step7",
+      "label": "结局与大概路线",
+      "agent": "interaction_architect",
+      "include_common_materials": false,
+      "materials": [
+        {
+          "id": "game_events",
+          "source": {
+            "schema_id": "game_event_view"
+          },
+          "selectors": [
+            "/payload"
+          ],
+          "scope_filter": "all_pinned",
+          "load": "auto",
+          "required": true,
+          "detail": "full",
+          "priority": 70,
+          "coverage": "complete_scope"
+        }
+      ],
+      "notes": [
+        "Harness 仅依据 adaptation_plan.stage_artifact_refs.game_events 解引用已确认的固定事件版本；Step7 使用独立 Session，模型只看到事件视图及本阶段 instructions。来源版本由 Harness 保存。"
+      ]
+    },
+    {
+      "stage": "step8",
+      "label": "目标玩家画像",
+      "agent": "interaction_architect",
+      "include_common_materials": false,
+      "materials": [
+        {
+          "id": "game_events",
+          "source": {
+            "schema_id": "game_event_view"
+          },
+          "selectors": [
+            "/payload"
+          ],
+          "scope_filter": "all_pinned",
+          "load": "auto",
+          "required": true,
+          "detail": "full",
+          "priority": 70,
+          "coverage": "complete_scope"
+        },
+        {
+          "id": "ending_routes",
+          "source": {
+            "schema_id": "ending_routes"
+          },
+          "selectors": [
+            "/payload"
+          ],
+          "scope_filter": "all_pinned",
+          "load": "auto",
+          "required": true,
+          "detail": "full",
+          "priority": 70,
+          "coverage": "complete_scope"
+        }
+      ],
+      "notes": [
+        "Harness 从 adaptation_plan.stage_artifact_refs 解引用已确认的 game_events 和 ending_routes 固定版本；Step8 使用独立 Session，模型只看到两份产物及本阶段 instructions。来源版本由 Harness 保存，确认的 player_profiles 写回方案。"
+      ]
+    },
+    {
+      "stage": "step9",
+      "label": "章节互动设计",
+      "agent": "chapter_designer",
+      "include_common_materials": false,
+      "materials": [
+        {
+          "id": "adaptation_plan",
+          "source": {
+            "schema_id": "adaptation_plan"
+          },
+          "selectors": [
+            "/payload"
+          ],
+          "scope_filter": "all_pinned",
+          "load": "auto",
+          "required": true,
+          "detail": "full",
+          "priority": 70,
+          "coverage": "complete_scope"
+        },
+        {
+          "id": "game_events",
+          "source": {
+            "schema_id": "game_event_view"
+          },
+          "selectors": [
+            "/payload"
+          ],
+          "scope_filter": "all_pinned",
+          "load": "auto",
+          "required": true,
+          "detail": "full",
+          "priority": 70,
+          "coverage": "complete_scope"
+        },
+        {
+          "id": "ending_routes",
+          "source": {
+            "schema_id": "ending_routes"
+          },
+          "selectors": [
+            "/payload"
+          ],
+          "scope_filter": "all_pinned",
+          "load": "auto",
+          "required": true,
+          "detail": "full",
+          "priority": 70,
+          "coverage": "complete_scope"
+        },
+        {
+          "id": "player_profiles",
+          "source": {
+            "schema_id": "player_profiles"
+          },
+          "selectors": [
+            "/payload"
+          ],
+          "scope_filter": "all_pinned",
+          "load": "auto",
+          "required": true,
+          "detail": "full",
+          "priority": 70,
+          "coverage": "complete_scope"
+        },
+        {
+          "id": "chapter_source",
+          "source": {
+            "builtin": "runtime.source_block"
+          },
+          "selectors": [
+            "/source_ref",
+            "/text",
+            "/start_utf16",
+            "/end_utf16"
+          ],
+          "scope_filter": "source_evidence",
+          "load": "auto",
+          "required": true,
+          "detail": "full",
+          "priority": 70,
+          "coverage": "complete_scope"
+        }
+      ],
+      "notes": [
+        "Step9 模型仅接收固定 adaptation_plan、由其 stage_artifact_refs 解出的 game_event_view、ending_routes、player_profiles 完整产物、本章固定原作正文及本阶段 instructions。未有可核验章节起止锚点时，原作正文使用固定原作全文，不推测截断。"
+      ]
+    },
+    {
+      "stage": "step10",
+      "label": "章节剧本与 Graph",
+      "agent": "chapter_writer",
+      "include_common_materials": false,
+      "materials": [
+        {
+          "id": "chapter_design",
+          "source": {
+            "schema_id": "chapter_design"
+          },
+          "selectors": [
+            ""
+          ],
+          "scope_filter": "target_chapters",
+          "load": "auto",
+          "required": true,
+          "detail": "full",
+          "priority": 70,
+          "coverage": "complete_scope"
+        },
+        {
+          "id": "chapter_original",
+          "source": {
+            "builtin": "runtime.source_block"
+          },
+          "selectors": [
+            "/source_ref",
+            "/text",
+            "/start_utf16",
+            "/end_utf16"
+          ],
+          "scope_filter": "source_evidence",
+          "load": "auto",
+          "required": false,
+          "detail": "full",
+          "priority": 70,
+          "coverage": "complete_scope"
+        }
+      ],
+      "notes": [
+        "模型只接收固定版本的本章完整 chapter_design 与其 chapter_source_anchors 对应的原作正文；纯新增章节允许无原文片段。Step10 使用独立 Session。Graph 基线、写入上下文及来源版本由 Harness 内部处理，不进入模型材料。"
+      ]
+    },
+    {
+      "stage": "step11",
+      "label": "可选校验 Agent",
+      "agent": "validation_agent",
+      "include_common_materials": false,
+      "materials": [
+        {
+          "id": "final_graph",
+          "source": {
+            "schema_id": "nexo_graph"
+          },
+          "selectors": [
+            ""
+          ],
+          "scope_filter": "all_pinned",
+          "load": "auto",
+          "required": true,
+          "detail": "full",
+          "priority": 70,
+          "coverage": "complete_scope"
+        }
+      ],
+      "notes": [
+        "只向可选校验 Agent 提供 Step10 汇总形成的最终 Nexo Graph；程序校验结果不作为模型输入。"
+      ]
+    },
+    {
+      "stage": "aux.summary",
+      "label": "工作摘要",
+      "agent": "aux.summary",
+      "include_common_materials": true,
+      "materials": [
+        {
+          "id": "archive_window",
+          "source": {
+            "builtin": "runtime.archive_window"
+          },
+          "selectors": [
+            "/history_refs",
+            "/decision_refs",
+            "/artifact_refs",
+            "/tool_call_refs"
+          ],
+          "scope_filter": "summary_window",
+          "load": "auto",
+          "required": true,
+          "detail": "full",
+          "priority": 70,
+          "coverage": "complete_scope"
+        },
+        {
+          "id": "project_state",
+          "source": {
+            "builtin": "runtime.project_state"
+          },
+          "selectors": [
+            "/artifact_refs",
+            "/active_task_refs",
+            "/pending_question_refs",
+            "/pending_confirmation_refs"
+          ],
+          "scope_filter": "task_scope",
+          "load": "auto",
+          "required": true,
+          "detail": "index",
+          "priority": 70,
+          "coverage": "context_only"
+        }
+      ],
+      "notes": [
+        "原始归档、正式决策和产物版本优先于已有摘要；摘要不新增确认、不推进阶段、不修改运行状态。"
+      ]
+    },
+    {
+      "stage": "aux.history_answer",
+      "label": "历史问答",
+      "agent": "conversation_coordinator",
+      "include_common_materials": true,
+      "materials": [
+        {
+          "id": "historical_records",
+          "source": {
+            "builtin": "runtime.archive_window"
+          },
+          "selectors": [
+            "/history_refs",
+            "/decision_refs",
+            "/artifact_refs",
+            "/tool_call_refs"
+          ],
+          "scope_filter": "history_query",
+          "load": "on_demand",
+          "required": true,
+          "detail": "full",
+          "priority": 80,
+          "coverage": "evidence_only"
+        },
+        {
+          "id": "current_state",
+          "source": {
+            "builtin": "runtime.project_state"
+          },
+          "selectors": [
+            "/artifact_refs",
+            "/active_task_refs",
+            "/pending_question_refs",
+            "/pending_confirmation_refs"
+          ],
+          "scope_filter": "task_scope",
+          "load": "auto",
+          "required": true,
+          "detail": "index",
+          "priority": 70,
+          "coverage": "context_only"
+        }
+      ],
+      "notes": [
+        "required 表示完成搜索和命中证据读取；没有命中时可以如实回答未找到，不捏造依据。按历史版本回答不使旧决策重新生效。"
+      ]
+    }
+  ],
+  "readme": [
+    "source.schema_id 只指 output-schemas/v2 注册表中的真实业务 Schema；source.builtin 指本文件明确登记的程序投影，二者互斥。runtime.* 不增加业务 output_type 字段，也不允许模型把投影冒充正式产物。",
+    "scope_filter 是受控注册处理器名，先按固定身份/范围选取对象，再执行 selectors。HTML 不执行用户填入的 Python/JavaScript。只保留标题/摘要的 index 材料不能用于完整内容验收。",
+    "source_views 的 global_events 与 character_views.events 是独立事件集合，各自以 source_anchors 直接指向固定原作的 UTF-16 区间；游戏事件是 Step5 重新设计的集合，也独立锚定原文。三类事件 ID 不按同名自动互换。",
+    "payload 保留要求、策略和方案说明不等于人工确认；确认范围来自 runtime.applicable_controls。只有方案中的固定 stage_artifact_refs 生效引用才能提供下游阶段依赖。",
+    "Step5–8 确认后由 Harness 写回方案并形成新版本。Step5 产物不含 plan_ref；Step6 复用 Step5 Session 生成仅含事件 ID 和 narrative_function 的补丁；Harness 合并为新版 game_event_view，并将新版本写回 game_events。Step7 独立 Session 仅读取方案引用的固定事件视图，确认后写回 ending_routes；Step8 独立 Session 仅读取方案引用的固定事件视图与已确认结局路线，确认后写回 player_profiles。各阶段另加本阶段 instructions。输入解析按最新获准基线的引用清单协调，不循环要求旧产物改写引用。是否受影响由依赖/范围映射判断。",
+    "Step1 使用冻结原作全文，不创建批次清单；Step2–11 的阶段事件、章节材料及审核批次使用内部 batch_manifest。当前文件只声明其供模型消费的稳定投影；具体分批和版本映射规则由上下文执行契约规定。",
+    "Step9 所选游戏事件确定章节原文范围，Harness 合并其固定 source_anchors 并写入 chapter_design；Step10 精确读取这些范围。完整正文不缩成摘要。材料可分批读取，但单章交付格式不因此变成部分章；如果完整输出超预算，应暂停并调整获准预算或任务，而非静默截断或改变业务章节边界。"
+  ]
+}

@@ -1,0 +1,841 @@
+[
+  {
+    "record_type": "project",
+    "schema_version": "1.0.0",
+    "id": "7ff01c29-4b96-5ee5-9966-0c164742c87e",
+    "project_id": "7ff01c29-4b96-5ee5-9966-0c164742c87e",
+    "created_at": "2026-09-21T02:00:00Z",
+    "updated_at": "2026-09-21T02:00:00Z",
+    "row_version": 1,
+    "owner_account_id": "example-platform-account",
+    "title": "演示：原作读取",
+    "state": "active",
+    "nexo_project_id": null
+  },
+  {
+    "record_type": "conversation",
+    "schema_version": "1.0.0",
+    "id": "2ab5a995-b241-530b-8180-d564516ed48f",
+    "project_id": "7ff01c29-4b96-5ee5-9966-0c164742c87e",
+    "created_at": "2026-09-21T02:00:00Z",
+    "updated_at": "2026-09-21T02:00:00Z",
+    "row_version": 1,
+    "title": "改编讨论",
+    "state": "active",
+    "last_message_seq": 4
+  },
+  {
+    "record_type": "history_record",
+    "schema_version": "1.0.0",
+    "id": "a94fba39-da00-5f93-9b8a-1e363cd68b24",
+    "project_id": "7ff01c29-4b96-5ee5-9966-0c164742c87e",
+    "created_at": "2026-09-21T02:00:00Z",
+    "conversation_id": "2ab5a995-b241-530b-8180-d564516ed48f",
+    "sequence": 1,
+    "session_id": null,
+    "task_id": null,
+    "run_id": null,
+    "role": "user",
+    "visibility": "conversation",
+    "kind": "message",
+    "content": {
+      "storage": "inline_text",
+      "text": "使用这份原作进行改编。"
+    },
+    "attachment_blob_ids": [
+      "e1b0b7ce-8bc2-5f2b-9506-1347a316d76d"
+    ],
+    "source_message_id": null,
+    "operation_id": null,
+    "provider_item_id": null
+  },
+  {
+    "record_type": "work_session",
+    "schema_version": "1.0.0",
+    "id": "f57f652f-b89a-5568-9825-b44eef06faa9",
+    "project_id": "7ff01c29-4b96-5ee5-9966-0c164742c87e",
+    "created_at": "2026-09-21T02:00:00Z",
+    "updated_at": "2026-09-21T02:00:00Z",
+    "row_version": 1,
+    "conversation_id": "2ab5a995-b241-530b-8180-d564516ed48f",
+    "session_key": "step1:source:1",
+    "scope": {
+      "stage": 1,
+      "chapter_ids": [],
+      "branch_ids": [],
+      "target_refs": [
+        {
+          "record_id": "2d755261-02c4-5d03-857b-08c0011c9c3d",
+          "version": "1",
+          "item_id": null,
+          "json_pointer": null
+        }
+      ],
+      "description": "核对已提交原作并准备切片"
+    },
+    "state": "active",
+    "generation": 1,
+    "latest_summary_ref": null,
+    "last_item_seq": 1,
+    "lease_owner": null,
+    "lease_expires_at": null,
+    "fencing_token": 0
+  },
+  {
+    "record_type": "session_item",
+    "schema_version": "1.0.0",
+    "id": "5b56ca1e-9b37-5ae9-9e1b-19fe2ff11d32",
+    "project_id": "7ff01c29-4b96-5ee5-9966-0c164742c87e",
+    "created_at": "2026-09-21T02:00:00Z",
+    "session_id": "f57f652f-b89a-5568-9825-b44eef06faa9",
+    "generation": 1,
+    "sequence": 1,
+    "sdk_item": {
+      "storage": "inline_json",
+      "value": {
+        "role": "user",
+        "content": "使用这份原作进行改编。"
+      }
+    },
+    "history_ids": [
+      "a94fba39-da00-5f93-9b8a-1e363cd68b24"
+    ],
+    "summary_ref": null
+  },
+  {
+    "record_type": "artifact",
+    "schema_version": "1.0.0",
+    "id": "2d755261-02c4-5d03-857b-08c0011c9c3d",
+    "project_id": "7ff01c29-4b96-5ee5-9966-0c164742c87e",
+    "created_at": "2026-09-21T02:00:00Z",
+    "updated_at": "2026-09-21T02:00:00Z",
+    "row_version": 1,
+    "artifact_kind": "source_text",
+    "scope": {
+      "stage": 1,
+      "chapter_ids": [],
+      "branch_ids": [],
+      "target_refs": [
+        {
+          "record_id": "2d755261-02c4-5d03-857b-08c0011c9c3d",
+          "version": "1",
+          "item_id": null,
+          "json_pointer": null
+        }
+      ],
+      "description": "核对已提交原作并准备切片"
+    },
+    "latest_version": 1,
+    "current_effective_version": 1
+  },
+  {
+    "record_type": "artifact_version",
+    "schema_version": "1.0.0",
+    "id": "9a2ab883-6e56-5db5-b36f-05bb5b2368b1",
+    "project_id": "7ff01c29-4b96-5ee5-9966-0c164742c87e",
+    "created_at": "2026-09-21T02:00:00Z",
+    "artifact_id": "2d755261-02c4-5d03-857b-08c0011c9c3d",
+    "version": 1,
+    "parent_version": null,
+    "content": {
+      "storage": "blob",
+      "blob_id": "e1b0b7ce-8bc2-5f2b-9506-1347a316d76d"
+    },
+    "content_sha256": "35722c16b10a9a4e54cfb2d9daec260caadea9ac7a3f4185e99f245d8ba344d1",
+    "output_schema": null,
+    "source_refs": [
+      {
+        "record_id": "a94fba39-da00-5f93-9b8a-1e363cd68b24",
+        "version": null,
+        "item_id": null,
+        "json_pointer": null
+      }
+    ],
+    "dependency_ids": [],
+    "producer_run_id": null,
+    "config_version_id": null,
+    "origin": "user"
+  },
+  {
+    "record_type": "artifact_state",
+    "schema_version": "1.0.0",
+    "id": "1805fcd7-13f9-5fc2-b638-1ce34df91047",
+    "project_id": "7ff01c29-4b96-5ee5-9966-0c164742c87e",
+    "created_at": "2026-09-21T02:00:00Z",
+    "updated_at": "2026-09-21T02:00:00Z",
+    "row_version": 1,
+    "artifact_id": "2d755261-02c4-5d03-857b-08c0011c9c3d",
+    "artifact_version_id": "9a2ab883-6e56-5db5-b36f-05bb5b2368b1",
+    "version": 1,
+    "confirmation_status": "confirmed",
+    "dependency_status": "valid",
+    "quality_status": "unchecked",
+    "effective_selections": [
+      {
+        "item_id": null,
+        "json_pointer": ""
+      }
+    ],
+    "confirmation_ids": [
+      "81b6b809-9b96-5a55-8823-f7d956810c15"
+    ],
+    "check_record_ids": []
+  },
+  {
+    "record_type": "decision",
+    "schema_version": "1.0.0",
+    "id": "f4e3f6ad-1f59-5fe7-a601-44b13819d45c",
+    "project_id": "7ff01c29-4b96-5ee5-9966-0c164742c87e",
+    "created_at": "2026-09-21T02:00:00Z",
+    "decision_id": "d8c58c04-8718-5745-8f10-120f9f83ba7f",
+    "version": 1,
+    "topic": "原作选择",
+    "value": {
+      "storage": "inline_text",
+      "text": "使用这份原作进行改编"
+    },
+    "origin": "user",
+    "status": "confirmed",
+    "reason": null,
+    "scope": {
+      "stage": 1,
+      "chapter_ids": [],
+      "branch_ids": [],
+      "target_refs": [
+        {
+          "record_id": "2d755261-02c4-5d03-857b-08c0011c9c3d",
+          "version": "1",
+          "item_id": null,
+          "json_pointer": null
+        }
+      ],
+      "description": "核对已提交原作并准备切片"
+    },
+    "source_refs": [
+      {
+        "record_id": "a94fba39-da00-5f93-9b8a-1e363cd68b24",
+        "version": null,
+        "item_id": null,
+        "json_pointer": null
+      }
+    ],
+    "supersedes_ref": null
+  },
+  {
+    "record_type": "confirmation",
+    "schema_version": "1.0.0",
+    "id": "81b6b809-9b96-5a55-8823-f7d956810c15",
+    "project_id": "7ff01c29-4b96-5ee5-9966-0c164742c87e",
+    "created_at": "2026-09-21T02:00:00Z",
+    "subject": {
+      "record_id": "2d755261-02c4-5d03-857b-08c0011c9c3d",
+      "version": "1",
+      "item_id": null,
+      "json_pointer": null
+    },
+    "selections": [
+      {
+        "item_id": null,
+        "json_pointer": ""
+      }
+    ],
+    "action": "confirm",
+    "basis": "user_statement",
+    "source_message_ids": [
+      "a94fba39-da00-5f93-9b8a-1e363cd68b24"
+    ],
+    "carried_from_confirmation_ids": [],
+    "scope_mapping_ref": null,
+    "revokes_confirmation_ids": [],
+    "applied_run_id": null
+  },
+  {
+    "record_type": "task",
+    "schema_version": "1.0.0",
+    "id": "62210f25-dfd7-57dd-8cf0-d6f35bd29e5b",
+    "project_id": "7ff01c29-4b96-5ee5-9966-0c164742c87e",
+    "created_at": "2026-09-21T02:00:00Z",
+    "updated_at": "2026-09-21T02:00:00.180Z",
+    "row_version": 1,
+    "conversation_id": "2ab5a995-b241-530b-8180-d564516ed48f",
+    "parent_task_id": null,
+    "budget_root_task_id": "62210f25-dfd7-57dd-8cf0-d6f35bd29e5b",
+    "requested_by_message_id": "a94fba39-da00-5f93-9b8a-1e363cd68b24",
+    "intent": "generate",
+    "scope": {
+      "stage": 1,
+      "chapter_ids": [],
+      "branch_ids": [],
+      "target_refs": [
+        {
+          "record_id": "2d755261-02c4-5d03-857b-08c0011c9c3d",
+          "version": "1",
+          "item_id": null,
+          "json_pointer": null
+        }
+      ],
+      "description": "核对已提交原作并准备切片"
+    },
+    "state": "paused",
+    "pause_reason": "usage_uncertain",
+    "budget": {
+      "max_active_seconds": 600,
+      "max_cost": {
+        "amount": "2.00",
+        "currency": "USD"
+      },
+      "disabled_limits": []
+    },
+    "usage": {
+      "input_tokens": 100,
+      "output_tokens": 25,
+      "cached_input_tokens": 0,
+      "reasoning_tokens": null,
+      "active_ms": 180,
+      "estimated_cost": null,
+      "reported_cost": null,
+      "pricing_version": null
+    },
+    "repair_rounds_used": 0,
+    "current_run_id": null,
+    "latest_checkpoint_id": "b037524c-18bc-5995-a820-9b6aaa7e1abe"
+  },
+  {
+    "record_type": "run",
+    "schema_version": "1.0.0",
+    "id": "3e28e237-12b5-5e1b-be18-b660c426e8b0",
+    "project_id": "7ff01c29-4b96-5ee5-9966-0c164742c87e",
+    "created_at": "2026-09-21T02:00:00Z",
+    "updated_at": "2026-09-21T02:00:00.180Z",
+    "row_version": 1,
+    "task_id": "62210f25-dfd7-57dd-8cf0-d6f35bd29e5b",
+    "agent_key": "source_parser",
+    "session_id": "f57f652f-b89a-5568-9825-b44eef06faa9",
+    "state": "paused",
+    "config_version_id": "ca15f3ce-197b-5b26-b0e0-2fdf2133348b",
+    "input_refs": [
+      {
+        "record_id": "2d755261-02c4-5d03-857b-08c0011c9c3d",
+        "version": "1",
+        "item_id": null,
+        "json_pointer": null
+      }
+    ],
+    "started_at": "2026-09-21T02:00:00Z",
+    "finished_at": "2026-09-21T02:00:00.180Z",
+    "max_turns": 10,
+    "model_turns_used": 1,
+    "latest_checkpoint_id": "b037524c-18bc-5995-a820-9b6aaa7e1abe",
+    "error": null,
+    "lease_owner": null,
+    "lease_expires_at": null,
+    "fencing_token": 0,
+    "execution_kind": "runner"
+  },
+  {
+    "record_type": "queued_request",
+    "schema_version": "1.0.0",
+    "id": "f62e436f-9dcc-5791-87f1-aa2d8f4deaef",
+    "project_id": "7ff01c29-4b96-5ee5-9966-0c164742c87e",
+    "created_at": "2026-09-21T02:00:00Z",
+    "updated_at": "2026-09-21T02:00:00Z",
+    "row_version": 1,
+    "conversation_id": "2ab5a995-b241-530b-8180-d564516ed48f",
+    "source_message_id": "f90e6ae6-6419-538c-aad4-b87e09e37781",
+    "mode": "queue",
+    "target_run_id": null,
+    "sequence": 1,
+    "scope": {
+      "stage": 1,
+      "chapter_ids": [],
+      "branch_ids": [],
+      "target_refs": [
+        {
+          "record_id": "2d755261-02c4-5d03-857b-08c0011c9c3d",
+          "version": "1",
+          "item_id": null,
+          "json_pointer": null
+        }
+      ],
+      "description": "核对已提交原作并准备切片"
+    },
+    "state": "pending",
+    "adopted_run_id": null,
+    "adopted_context_snapshot_id": null,
+    "created_task_id": null,
+    "resolved_at": null,
+    "blocked_reason": null
+  },
+  {
+    "record_type": "checkpoint",
+    "schema_version": "1.0.0",
+    "id": "b037524c-18bc-5995-a820-9b6aaa7e1abe",
+    "project_id": "7ff01c29-4b96-5ee5-9966-0c164742c87e",
+    "created_at": "2026-09-21T02:00:00.180Z",
+    "task_id": "62210f25-dfd7-57dd-8cf0-d6f35bd29e5b",
+    "run_id": "3e28e237-12b5-5e1b-be18-b660c426e8b0",
+    "cursor": {
+      "kind": "after_tool",
+      "stage": 1,
+      "chapter_id": null,
+      "batch_key": null,
+      "handler_version": "runtime.v1",
+      "state": {
+        "schema_version": "1.0.0",
+        "workflow_root_task_id": "62210f25-dfd7-57dd-8cf0-d6f35bd29e5b",
+        "work_key": "source:1:read:revision1",
+        "next_action": "resolve_usage",
+        "continuation": {
+          "root_run_id": "3e28e237-12b5-5e1b-be18-b660c426e8b0",
+          "previous_run_id": null,
+          "recovery_attempts_used": 0,
+          "max_auto_recoveries": 3,
+          "last_recovery_event_id": null,
+          "next_retry_at": null
+        },
+        "turn_allowance": {
+          "allowance_id": "9f050c91-2082-50d1-aff4-aebea2c1895d",
+          "limit": 10,
+          "used": 1,
+          "reserved_operation_ids": [],
+          "source_event_id": "db9b2474-81b6-565c-95de-e9f58051effe"
+        },
+        "retry_limits": [],
+        "repair_round_limit": 2,
+        "pending_control_request_ids": [],
+        "pending_user_items": [],
+        "queue_gate": {
+          "conversation_id": "2ab5a995-b241-530b-8180-d564516ed48f",
+          "row_version": 1,
+          "holds": [
+            {
+              "task_id": "62210f25-dfd7-57dd-8cf0-d6f35bd29e5b",
+              "reason_code": "usage_uncertain",
+              "basis_event_id": "db9b2474-81b6-565c-95de-e9f58051effe"
+            }
+          ]
+        },
+        "stop": {
+          "requested": false,
+          "requested_event_id": null,
+          "deadline_at": null,
+          "task_ids": []
+        },
+        "operation_reconciliation": [],
+        "last_applied_event_seq": 1
+      }
+    },
+    "session_id": "f57f652f-b89a-5568-9825-b44eef06faa9",
+    "session_generation": 1,
+    "config_version_id": "ca15f3ce-197b-5b26-b0e0-2fdf2133348b",
+    "input_refs": [
+      {
+        "record_id": "2d755261-02c4-5d03-857b-08c0011c9c3d",
+        "version": "1",
+        "item_id": null,
+        "json_pointer": null
+      }
+    ],
+    "adopted_message_ids": [
+      "a94fba39-da00-5f93-9b8a-1e363cd68b24"
+    ],
+    "completed_operation_ids": [
+      "e81f7c70-cb81-5603-827b-c6c04ff33226",
+      "08aaa6a0-9da5-5b5f-adb5-e9ef096c741c"
+    ],
+    "unresolved_operation_ids": [],
+    "usage": {
+      "input_tokens": 100,
+      "output_tokens": 25,
+      "cached_input_tokens": 0,
+      "reasoning_tokens": null,
+      "active_ms": 180,
+      "estimated_cost": null,
+      "reported_cost": null,
+      "pricing_version": null
+    },
+    "repair_rounds_used": 0,
+    "pause_reason": "usage_uncertain"
+  },
+  {
+    "record_type": "config_version",
+    "schema_version": "1.0.0",
+    "id": "ca15f3ce-197b-5b26-b0e0-2fdf2133348b",
+    "project_id": "7ff01c29-4b96-5ee5-9966-0c164742c87e",
+    "created_at": "2026-09-21T02:00:00Z",
+    "updated_at": "2026-09-21T02:00:00Z",
+    "row_version": 1,
+    "config_key": "demo:run-snapshot",
+    "version": 1,
+    "scope_kind": "run_snapshot",
+    "scope_key": "3e28e237-12b5-5e1b-be18-b660c426e8b0",
+    "state": "snapshot",
+    "parent_config_id": null,
+    "resolved_from_ids": [],
+    "values": {
+      "model": {
+        "name": "gpt-5.6-sol",
+        "reasoning_effort": "medium",
+        "temperature": null,
+        "max_output_tokens": 8000
+      },
+      "run": {
+        "max_turns": 10
+      },
+      "retry": {
+        "max_retries": 2
+      },
+      "repair": {
+        "max_rounds": 2
+      },
+      "task": {
+        "max_active_seconds": 600,
+        "max_cost": {
+          "amount": "2.00",
+          "currency": "USD"
+        },
+        "disabled_limits": []
+      },
+      "prompts": {
+        "base": "依据原作证据回答。",
+        "agent": "核对原作并准备事件切片。",
+        "stage": "先读取原作。"
+      },
+      "tools": {
+        "enabled": [
+          "get_artifact"
+        ]
+      },
+      "context": {
+        "input_token_cap": 32000,
+        "safety_margin_tokens": 2000,
+        "recent_turns": 6
+      }
+    },
+    "sha256": "2207d2faa9780b898ed852b078af4ca26b3593f2a8353d69e4d1d4bd62ba955f",
+    "published_at": null
+  },
+  {
+    "record_type": "context_snapshot",
+    "schema_version": "1.0.0",
+    "id": "ed4529db-1941-557d-b4f2-30afb5a99a68",
+    "project_id": "7ff01c29-4b96-5ee5-9966-0c164742c87e",
+    "created_at": "2026-09-21T02:00:00Z",
+    "task_id": "62210f25-dfd7-57dd-8cf0-d6f35bd29e5b",
+    "run_id": "3e28e237-12b5-5e1b-be18-b660c426e8b0",
+    "session_id": "f57f652f-b89a-5568-9825-b44eef06faa9",
+    "config_version_id": "ca15f3ce-197b-5b26-b0e0-2fdf2133348b",
+    "model": "gpt-5.6-sol",
+    "reasoning_effort": "medium",
+    "output_schema": null,
+    "instructions": {
+      "storage": "inline_text",
+      "text": "依据原作证据回答。先读取原作。"
+    },
+    "input_items": {
+      "storage": "inline_json",
+      "value": [
+        {
+          "role": "user",
+          "content": "使用这份原作进行改编。"
+        }
+      ]
+    },
+    "tool_definitions": {
+      "storage": "inline_json",
+      "value": [
+        {
+          "name": "get_artifact",
+          "type": "function",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "artifact_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "artifact_id"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    "materials": [
+      {
+        "source_ref": {
+          "record_id": "2d755261-02c4-5d03-857b-08c0011c9c3d",
+          "version": "1",
+          "item_id": null,
+          "json_pointer": null
+        },
+        "selection": {
+          "item_id": null,
+          "json_pointer": ""
+        },
+        "inclusion": "omitted",
+        "reason": "通过 get_artifact 按需读取",
+        "estimated_tokens": null
+      }
+    ],
+    "history_ids": [
+      "a94fba39-da00-5f93-9b8a-1e363cd68b24"
+    ],
+    "summary_ref": null,
+    "input_token_estimate": 100,
+    "input_token_budget": 32000,
+    "content_sha256": "dedc5803977d54b608eefa73537f89d1fc1c3ae472ce3435e0aa9aeb3da3efd3"
+  },
+  {
+    "record_type": "model_call",
+    "schema_version": "1.0.0",
+    "id": "4df44deb-c0ac-530b-a2c7-e17c10174256",
+    "project_id": "7ff01c29-4b96-5ee5-9966-0c164742c87e",
+    "created_at": "2026-09-21T02:00:00Z",
+    "updated_at": "2026-09-21T02:00:00Z",
+    "row_version": 1,
+    "task_id": "62210f25-dfd7-57dd-8cf0-d6f35bd29e5b",
+    "run_id": "3e28e237-12b5-5e1b-be18-b660c426e8b0",
+    "operation_id": "e81f7c70-cb81-5603-827b-c6c04ff33226",
+    "attempt": 1,
+    "turn_index": 1,
+    "context_snapshot_id": "ed4529db-1941-557d-b4f2-30afb5a99a68",
+    "provider_response_id": "example-response",
+    "state": "succeeded",
+    "started_at": "2026-09-21T02:00:00Z",
+    "finished_at": "2026-09-21T02:00:00.150Z",
+    "response_history_ids": [
+      "fb1c6be9-674d-582c-9cc3-e8005789a570"
+    ],
+    "usage": {
+      "input_tokens": 100,
+      "output_tokens": 25,
+      "cached_input_tokens": 0,
+      "reasoning_tokens": null,
+      "active_ms": 150,
+      "estimated_cost": null,
+      "reported_cost": null,
+      "pricing_version": null
+    },
+    "error": null
+  },
+  {
+    "record_type": "tool_call",
+    "schema_version": "1.0.0",
+    "id": "c757608d-22c2-5873-869a-98374303ce2c",
+    "project_id": "7ff01c29-4b96-5ee5-9966-0c164742c87e",
+    "created_at": "2026-09-21T02:00:00Z",
+    "updated_at": "2026-09-21T02:00:00Z",
+    "row_version": 1,
+    "task_id": "62210f25-dfd7-57dd-8cf0-d6f35bd29e5b",
+    "run_id": "3e28e237-12b5-5e1b-be18-b660c426e8b0",
+    "operation_id": "08aaa6a0-9da5-5b5f-adb5-e9ef096c741c",
+    "provider_tool_call_id": "example-tool-call",
+    "tool_name": "get_artifact",
+    "arguments": {
+      "storage": "inline_json",
+      "value": {
+        "artifact_id": "2d755261-02c4-5d03-857b-08c0011c9c3d"
+      }
+    },
+    "result": {
+      "storage": "inline_text",
+      "text": "演示原作：小林在车站发现一封没有署名的信。\n"
+    },
+    "state": "succeeded",
+    "attempt": 1,
+    "started_at": "2026-09-21T02:00:00.150Z",
+    "finished_at": "2026-09-21T02:00:00.180Z",
+    "history_ids": [
+      "fb1c6be9-674d-582c-9cc3-e8005789a570",
+      "35c61f13-8c3d-526a-bc51-e5548d0ea4b5"
+    ],
+    "error": null,
+    "model_call_id": "4df44deb-c0ac-530b-a2c7-e17c10174256"
+  },
+  {
+    "record_type": "dependency",
+    "schema_version": "1.0.0",
+    "id": "876831f4-4b77-57fb-b91c-285097ae41c4",
+    "project_id": "7ff01c29-4b96-5ee5-9966-0c164742c87e",
+    "created_at": "2026-09-21T02:00:00Z",
+    "updated_at": "2026-09-21T02:00:00Z",
+    "row_version": 1,
+    "consumer_ref": {
+      "record_id": "b037524c-18bc-5995-a820-9b6aaa7e1abe",
+      "version": null,
+      "item_id": null,
+      "json_pointer": null
+    },
+    "producer_ref": {
+      "record_id": "2d755261-02c4-5d03-857b-08c0011c9c3d",
+      "version": "1",
+      "item_id": null,
+      "json_pointer": null
+    },
+    "relation": "material",
+    "consumer_selections": [
+      {
+        "item_id": null,
+        "json_pointer": ""
+      }
+    ],
+    "producer_selections": [
+      {
+        "item_id": null,
+        "json_pointer": ""
+      }
+    ],
+    "state": "valid",
+    "assessment_ref": null
+  },
+  {
+    "record_type": "blob",
+    "schema_version": "1.0.0",
+    "id": "e1b0b7ce-8bc2-5f2b-9506-1347a316d76d",
+    "project_id": "7ff01c29-4b96-5ee5-9966-0c164742c87e",
+    "created_at": "2026-09-21T02:00:00Z",
+    "updated_at": "2026-09-21T02:00:00Z",
+    "row_version": 1,
+    "filename": "source.txt",
+    "media_type": "text/plain; charset=utf-8",
+    "byte_size": 64,
+    "sha256": "35722c16b10a9a4e54cfb2d9daec260caadea9ac7a3f4185e99f245d8ba344d1",
+    "storage_key": "example/source.txt",
+    "state": "ready",
+    "error": null
+  },
+  {
+    "record_type": "runtime_event",
+    "schema_version": "1.0.0",
+    "id": "db9b2474-81b6-565c-95de-e9f58051effe",
+    "project_id": "7ff01c29-4b96-5ee5-9966-0c164742c87e",
+    "created_at": "2026-09-21T02:00:00.180Z",
+    "sequence": 1,
+    "conversation_id": "2ab5a995-b241-530b-8180-d564516ed48f",
+    "task_id": "62210f25-dfd7-57dd-8cf0-d6f35bd29e5b",
+    "run_id": "3e28e237-12b5-5e1b-be18-b660c426e8b0",
+    "event_name": "task.paused",
+    "subject_ref": {
+      "record_id": "62210f25-dfd7-57dd-8cf0-d6f35bd29e5b",
+      "version": null,
+      "item_id": null,
+      "json_pointer": null
+    },
+    "actor_kind": "program",
+    "actor_account_id": null,
+    "payload": {
+      "reason": "usage_uncertain",
+      "checkpoint_id": "b037524c-18bc-5995-a820-9b6aaa7e1abe"
+    },
+    "causation_id": null
+  },
+  {
+    "record_type": "idempotency_record",
+    "schema_version": "1.0.0",
+    "id": "e2bed0a3-c89d-5fbe-a1af-b6f0185fb5f7",
+    "project_id": "7ff01c29-4b96-5ee5-9966-0c164742c87e",
+    "created_at": "2026-09-21T02:00:00Z",
+    "updated_at": "2026-09-21T02:00:00Z",
+    "row_version": 1,
+    "account_id": "example-platform-account",
+    "operation": "append_history",
+    "key": "example-submit-1",
+    "request_sha256": "7cc82cbf85d50c1e3c3b596b681e5b02e0946ec6335935734566af3906bcccc8",
+    "state": "succeeded",
+    "result": {
+      "storage": "inline_json",
+      "value": {
+        "record_id": "a94fba39-da00-5f93-9b8a-1e363cd68b24"
+      }
+    },
+    "error": null,
+    "resource_refs": [
+      {
+        "record_id": "a94fba39-da00-5f93-9b8a-1e363cd68b24",
+        "version": null,
+        "item_id": null,
+        "json_pointer": null
+      }
+    ]
+  },
+  {
+    "record_type": "history_record",
+    "schema_version": "1.0.0",
+    "id": "fb1c6be9-674d-582c-9cc3-e8005789a570",
+    "project_id": "7ff01c29-4b96-5ee5-9966-0c164742c87e",
+    "created_at": "2026-09-21T02:00:00Z",
+    "conversation_id": "2ab5a995-b241-530b-8180-d564516ed48f",
+    "sequence": 2,
+    "session_id": "f57f652f-b89a-5568-9825-b44eef06faa9",
+    "task_id": "62210f25-dfd7-57dd-8cf0-d6f35bd29e5b",
+    "run_id": "3e28e237-12b5-5e1b-be18-b660c426e8b0",
+    "role": "assistant",
+    "visibility": "internal",
+    "kind": "tool_call",
+    "content": {
+      "storage": "inline_json",
+      "value": {
+        "type": "function_call",
+        "call_id": "example-tool-call",
+        "name": "get_artifact",
+        "arguments": "{\"artifact_id\": \"2d755261-02c4-5d03-857b-08c0011c9c3d\"}"
+      }
+    },
+    "attachment_blob_ids": [],
+    "source_message_id": null,
+    "operation_id": "08aaa6a0-9da5-5b5f-adb5-e9ef096c741c",
+    "provider_item_id": "example-tool-call"
+  },
+  {
+    "record_type": "history_record",
+    "schema_version": "1.0.0",
+    "id": "35c61f13-8c3d-526a-bc51-e5548d0ea4b5",
+    "project_id": "7ff01c29-4b96-5ee5-9966-0c164742c87e",
+    "created_at": "2026-09-21T02:00:00.180Z",
+    "conversation_id": "2ab5a995-b241-530b-8180-d564516ed48f",
+    "sequence": 3,
+    "session_id": "f57f652f-b89a-5568-9825-b44eef06faa9",
+    "task_id": "62210f25-dfd7-57dd-8cf0-d6f35bd29e5b",
+    "run_id": "3e28e237-12b5-5e1b-be18-b660c426e8b0",
+    "role": "tool",
+    "visibility": "internal",
+    "kind": "tool_result",
+    "content": {
+      "storage": "inline_json",
+      "value": {
+        "type": "function_call_output",
+        "call_id": "example-tool-call",
+        "output": "演示原作：小林在车站发现一封没有署名的信。\n"
+      }
+    },
+    "attachment_blob_ids": [],
+    "source_message_id": null,
+    "operation_id": "08aaa6a0-9da5-5b5f-adb5-e9ef096c741c",
+    "provider_item_id": "example-tool-call"
+  },
+  {
+    "record_type": "history_record",
+    "schema_version": "1.0.0",
+    "id": "f90e6ae6-6419-538c-aad4-b87e09e37781",
+    "project_id": "7ff01c29-4b96-5ee5-9966-0c164742c87e",
+    "created_at": "2026-09-21T02:00:00.200Z",
+    "conversation_id": "2ab5a995-b241-530b-8180-d564516ed48f",
+    "sequence": 4,
+    "session_id": null,
+    "task_id": null,
+    "run_id": null,
+    "role": "user",
+    "visibility": "conversation",
+    "kind": "message",
+    "content": {
+      "storage": "inline_text",
+      "text": "随后解释一下切片的依据。"
+    },
+    "attachment_blob_ids": [],
+    "source_message_id": null,
+    "operation_id": null,
+    "provider_item_id": null
+  }
+]

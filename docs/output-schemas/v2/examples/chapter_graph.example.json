@@ -1,0 +1,329 @@
+{
+  "result_kind": "ready",
+  "payload": {
+    "chapter": {
+      "id": "ch:station",
+      "title": "雨夜候车室",
+      "summary": "林安决定是否帮忙，并赶往列车。",
+      "nodes": [
+        {
+          "id": "n:arrival",
+          "kind": "story",
+          "title": "是否帮忙",
+          "x": 0,
+          "y": 0,
+          "synopsis": "是否帮忙",
+          "body": "候车室里，乔乔蹲在长椅旁找钥匙。\n她抬头望向林安，等他回答。",
+          "sceneId": "fixture:scene:station",
+          "collapsed": false,
+          "chapterStart": true,
+          "chapterEnd": false,
+          "choiceGroups": [
+            {
+              "id": "g:help",
+              "name": "是否留下帮忙",
+              "scriptInline": {
+                "version": 1,
+                "afterLine": 1,
+                "order": 0
+              },
+              "choices": [
+                {
+                  "id": "c:help",
+                  "label": "留下找钥匙",
+                  "action": "jump",
+                  "targetNodeId": "n:help"
+                },
+                {
+                  "id": "c:leave",
+                  "label": "先去站台",
+                  "action": "jump",
+                  "targetNodeId": "n:leave"
+                }
+              ]
+            }
+          ],
+          "qtes": [],
+          "operations": [],
+          "branches": [],
+          "gameUrl": ""
+        },
+        {
+          "id": "n:help",
+          "kind": "story",
+          "title": "找到钥匙",
+          "x": 480,
+          "y": 0,
+          "synopsis": "找到钥匙",
+          "body": "林安挪开长椅，捡起椅脚后的钥匙。乔乔接过钥匙，轻声道谢。",
+          "sceneId": "fixture:scene:station",
+          "collapsed": false,
+          "chapterStart": false,
+          "chapterEnd": false,
+          "choiceGroups": [],
+          "qtes": [],
+          "operations": [],
+          "branches": [],
+          "gameUrl": ""
+        },
+        {
+          "id": "n:leave",
+          "kind": "story",
+          "title": "独自离开",
+          "x": 960,
+          "y": 0,
+          "synopsis": "独自离开",
+          "body": "林安看了一眼旧钟，向乔乔道歉，先走到候车室门口。",
+          "sceneId": "fixture:scene:station",
+          "collapsed": false,
+          "chapterStart": false,
+          "chapterEnd": false,
+          "choiceGroups": [],
+          "qtes": [],
+          "operations": [],
+          "branches": [],
+          "gameUrl": ""
+        },
+        {
+          "id": "n:trust",
+          "kind": "variable",
+          "title": "记录帮助",
+          "x": 0,
+          "y": 320,
+          "synopsis": "",
+          "body": "",
+          "sceneId": "",
+          "collapsed": false,
+          "chapterStart": false,
+          "chapterEnd": false,
+          "choiceGroups": [],
+          "qtes": [],
+          "operations": [],
+          "branches": [],
+          "gameUrl": "",
+          "scriptDsl": "trust += 1;"
+        },
+        {
+          "id": "n:check",
+          "kind": "condition",
+          "title": "检查信任",
+          "x": 480,
+          "y": 320,
+          "synopsis": "",
+          "body": "",
+          "sceneId": "",
+          "collapsed": false,
+          "chapterStart": false,
+          "chapterEnd": false,
+          "choiceGroups": [],
+          "qtes": [],
+          "operations": [],
+          "branches": [
+            {
+              "id": "b:trust",
+              "name": "得到提醒",
+              "mode": "and",
+              "conditions": [],
+              "conditionDsl": "trust >= 1"
+            }
+          ],
+          "gameUrl": ""
+        },
+        {
+          "id": "n:qte",
+          "kind": "story",
+          "title": "接住车票",
+          "x": 960,
+          "y": 320,
+          "synopsis": "接住车票",
+          "body": "乔乔追到门口，递回林安掉落的车票。车票被风卷起。",
+          "sceneId": "fixture:scene:station",
+          "collapsed": false,
+          "chapterStart": false,
+          "chapterEnd": false,
+          "choiceGroups": [],
+          "qtes": [
+            {
+              "id": "q:ticket",
+              "name": "接住车票",
+              "scriptInline": {
+                "version": 1,
+                "afterLine": 0,
+                "order": 0
+              },
+              "successAction": "jump",
+              "successTargetNodeId": "n:depart",
+              "failureEnabled": true,
+              "failureAction": "jump",
+              "failureTargetNodeId": "n:recover"
+            }
+          ],
+          "operations": [],
+          "branches": [],
+          "gameUrl": ""
+        },
+        {
+          "id": "n:recover",
+          "kind": "story",
+          "title": "捡回车票",
+          "x": 0,
+          "y": 640,
+          "synopsis": "捡回车票",
+          "body": "车票落在门边。林安俯身捡起，向乔乔挥了挥手。",
+          "sceneId": "fixture:scene:station",
+          "collapsed": false,
+          "chapterStart": false,
+          "chapterEnd": false,
+          "choiceGroups": [],
+          "qtes": [],
+          "operations": [],
+          "branches": [],
+          "gameUrl": ""
+        },
+        {
+          "id": "n:depart",
+          "kind": "story",
+          "title": "走向列车",
+          "x": 480,
+          "y": 640,
+          "synopsis": "走向列车",
+          "body": "列车进站。林安收好随身物品，踏上站台。",
+          "sceneId": "fixture:scene:station",
+          "collapsed": false,
+          "chapterStart": false,
+          "chapterEnd": true,
+          "choiceGroups": [],
+          "qtes": [],
+          "operations": [],
+          "branches": [],
+          "gameUrl": ""
+        },
+        {
+          "id": "n:jump",
+          "kind": "jump",
+          "title": "进入下一章",
+          "x": 960,
+          "y": 640,
+          "synopsis": "",
+          "body": "",
+          "sceneId": "",
+          "collapsed": false,
+          "chapterStart": false,
+          "chapterEnd": false,
+          "choiceGroups": [],
+          "qtes": [],
+          "operations": [],
+          "branches": [],
+          "gameUrl": "",
+          "jumpTarget": {
+            "kind": "chapter",
+            "id": "ch:train"
+          }
+        }
+      ],
+      "edges": [
+        {
+          "id": "e:help",
+          "source": "n:arrival",
+          "sourcePort": "c:help",
+          "target": "n:help"
+        },
+        {
+          "id": "e:leave",
+          "source": "n:arrival",
+          "sourcePort": "c:leave",
+          "target": "n:leave"
+        },
+        {
+          "id": "e:gain",
+          "source": "n:help",
+          "sourcePort": "next",
+          "target": "n:trust"
+        },
+        {
+          "id": "e:trust",
+          "source": "n:trust",
+          "sourcePort": "next",
+          "target": "n:check"
+        },
+        {
+          "id": "e:skip",
+          "source": "n:leave",
+          "sourcePort": "next",
+          "target": "n:check"
+        },
+        {
+          "id": "e:yes",
+          "source": "n:check",
+          "sourcePort": "b:trust",
+          "target": "n:qte"
+        },
+        {
+          "id": "e:no",
+          "source": "n:check",
+          "sourcePort": "default",
+          "target": "n:depart"
+        },
+        {
+          "id": "e:success",
+          "source": "n:qte",
+          "sourcePort": "q:ticket",
+          "target": "n:depart"
+        },
+        {
+          "id": "e:failure",
+          "source": "n:qte",
+          "sourcePort": "q:ticket:failure",
+          "target": "n:recover"
+        },
+        {
+          "id": "e:recover",
+          "source": "n:recover",
+          "sourcePort": "next",
+          "target": "n:depart"
+        },
+        {
+          "id": "e:nextchapter",
+          "source": "n:depart",
+          "sourcePort": "next",
+          "target": "n:jump"
+        }
+      ]
+    },
+    "shared_scenes": [
+      {
+        "id": "fixture:scene:station",
+        "name": "候车室",
+        "summary": "雨夜的小站候车室。",
+        "characterIds": [],
+        "locationIds": [],
+        "location": "",
+        "characters": ""
+      }
+    ],
+    "shared_variables": [
+      {
+        "id": "v:trust",
+        "key": "trust",
+        "name": "信任",
+        "description": "记录林安是否帮助乔乔。",
+        "type": "number",
+        "value": "0"
+      }
+    ],
+    "removed_node_ids": [],
+    "removed_edge_ids": []
+  },
+  "questions": [],
+  "evidence_refs": [
+    {
+      "record_id": "fixture:chapter_design",
+      "version": "v1",
+      "item_id": "ch:station",
+      "json_pointer": null
+    }
+  ],
+  "notes": [
+    "离线结构示例；跨章目标由同目录完整 Project 样例提供。未获得真实用户确认。角色地点资产尚未绑定，示例不伪造资产 ID。"
+  ]
+}

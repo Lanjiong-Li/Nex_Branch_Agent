@@ -1,0 +1,39 @@
+{
+  "contract_id": "nexo-authoring-contract",
+  "version": "1.0.0",
+  "scope": "与当前 Nexo Graph JSON Schema 配合使用的创作语义；不是剧情、变量目录或用户决策。示例变量和值只说明语法，实际使用已确认章节设计与全局变量目录中的 key、类型和值。",
+  "source": {
+    "repository": "nexo-studio",
+    "branch": "feature/v2.1.0",
+    "commit": "006296ff0d43685792961292fb32dd9a8bd58b21",
+    "files_sha256": {
+      "src/domain/variable-script.ts": "af5f1a250add68bd13ede1909c8555d723f56f1de6b43bdb9ea266b9c0d53907",
+      "src/domain/condition-script.ts": "7980501277728b69fc709c4bd2fff3870a4442057cf5aad4bbb841329713b4c6",
+      "src/domain/__tests__/variable-script.test.ts": "c4080916f9af4de8f32be74028c68efb005d5279da3f55255254bb2405652ac1",
+      "src/api/project-mapping.ts": "b33dff53ac9e142eba5fa1ef94e225bcf907ce7e6cd63e5f0bae924599c6cbe9"
+    }
+  },
+  "variable_references": {
+    "identifier_pattern": "[A-Za-z_][A-Za-z_0-9]*",
+    "rule": "DSL 直接引用全局变量 key，不使用显示名、global. 前缀或对象路径；沿用已确认类型。Project.variables[].value 始终是字符串容器：number 初值如 \"1\"，boolean 如 \"false\"，string 如 \"route_a\"。"
+  },
+  "variable_script": {
+    "field": "variable 节点的 scriptDsl",
+    "statements": "key = expression;。数字变量还支持 += 和 -=。多条语句按顺序执行；生成时每条末尾写分号，可用换行分隔。",
+    "literals": "字符串采用 JSON 双引号与转义；数字、小写 true/false 不加引号。数字表达式支持 + - * /、括号和一元正负号。可以引用同类型变量；字符串和布尔赋值使用 =。",
+    "unsupported": ["函数调用", "数组索引", "对象属性访问", "if/else", "*=", "/=", "++", "任意 JavaScript"],
+    "json_example": {"scriptDsl": "selected_route = \"route_a\";\nbattery -= 1;"},
+    "compatibility_fields": "scriptDsl 是变量修改的权威来源；operations 保持 []，不重复写入另一份运算列表。"
+  },
+  "condition_script": {
+    "field": "condition 节点分支的 conditionDsl",
+    "expression": "单条布尔表达式，不带分号。数字比较支持 == != > >= < <=；字符串、布尔使用 == !=；逻辑组合使用 && || ! 和括号。",
+    "json_example": {"conditionDsl": "selected_route == \"route_a\" && battery >= 1"},
+    "routing": "conditionDsl 不写 if/else。分支顺序、目标及 default 出口使用 Graph 的结构字段；保留 mode 为 and、conditions 为 []。"
+  },
+  "one_time_resource_example": {
+    "number": "若确认目录中 battery 为 number 且初值为字符串 1，先通过条件 battery >= 1，再进入 variable 节点执行 battery -= 1;，然后进入后续剧情；不要在循环内重新初始化。",
+    "boolean": "若固定目录中 battery 为 boolean，则使用条件 battery == true 与修改 battery = false;；不要为了套示例改变现有类型。"
+  },
+  "generation_boundary": "章节输出仍严格遵守 chapter_graph 的完整快照 Schema，最终 Project 由程序组装。这里已给出编辑器支持的可靠 DSL 子集，不需要从历史对话搜索或猜测另一种 DSL；遇到缺少真实变量定义时明确提问。本文不证明部署后端已通过执行或发布验收。"
+}

@@ -1,0 +1,3572 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Nexo 当前剧本数据结构（编辑包格式 4，产品／运营说明版）",
+  "description": "基于 2026-09-14 当前工作区源码的文档镜像，校验完整剧本或单节点编辑包本体，不含 HTTP 响应 envelope。不是新增运行协议。字段类型与可表达的局部规则在此校验；ID 关联、DSL、区间比较、发布可达性及媒体可用性仍由服务端校验。详见 README.md。",
+  "$comment": "公共契约正本仍为 nexo-api-contracts。本镜像相对当前 OpenAPI 补齐实际导出的 Node.events、Event.project_id、Asset.overview，并容纳空图 chapter_edges=null。仅用于当前源码结构说明，不代表线上状态或发布验收。",
+  "$ref": "#/$defs/EditorPackage",
+  "$defs": {
+    "EditorPackage": {
+      "additionalProperties": false,
+      "properties": {
+        "content": {
+          "$ref": "#/$defs/Content",
+          "description": "全部创作数据；通过 ID 关联的平铺集合。"
+        },
+        "external_references": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/ExternalReference"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "包外目标引用；完整项目通常为空，单节点包可能有。"
+        },
+        "format_version": {
+          "type": "integer",
+          "enum": [
+            4
+          ],
+          "description": "编辑包结构版本，当前为 4；与软件版本、节点 revision 和业务发版号相互独立。",
+          "const": 4
+        },
+        "release_context": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReleaseContext"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "发布时附加的版本和入口章节信息；普通导出通常省略。"
+        },
+        "resources": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/Resource"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "资源 URL 及媒体事实清单，不包含媒体二进制。",
+          "maxItems": 10000
+        },
+        "scope": {
+          "type": "string",
+          "description": "导出范围：project 为完整剧本，node 为单节点及其依赖。",
+          "enum": [
+            "project",
+            "node"
+          ]
+        },
+        "source": {
+          "$ref": "#/$defs/Source",
+          "description": "来源项目及可选的来源节点信息。"
+        }
+      },
+      "required": [
+        "content",
+        "external_references",
+        "format_version",
+        "resources",
+        "scope",
+        "source"
+      ],
+      "type": "object",
+      "title": "完整剧本编辑包",
+      "description": "完整剧本编辑包。字段描述以 2026-09-14 当前源码为基准。",
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "scope": {
+                "const": "node"
+              }
+            },
+            "required": [
+              "scope"
+            ]
+          },
+          "then": {
+            "properties": {
+              "content": {
+                "properties": {
+                  "nodes": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 1
+                  },
+                  "chapter_edges": {
+                    "maxItems": 0
+                  }
+                }
+              },
+              "source": {
+                "required": [
+                  "node_id",
+                  "revision"
+                ]
+              }
+            }
+          }
+        }
+      ]
+    },
+    "Content": {
+      "additionalProperties": false,
+      "properties": {
+        "assets": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/Asset"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "角色与场景设定实体，包括各自的视觉样式和角色音色。"
+        },
+        "chapters": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/Chapter"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "所有章节。"
+        },
+        "nodes": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/Node"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "全部五类节点，用 chapter_id 关联章节。",
+          "maxItems": 2000
+        },
+        "project": {
+          "$ref": "#/$defs/Project",
+          "description": "作品名称、简介、整体提示词和总览布局。"
+        },
+        "scenes": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/Scene"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "项目共享的场次；不属于某个章节。"
+        },
+        "variables": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/Variable"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "全局变量定义和初始值。"
+        },
+        "chapter_edges": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/ChapterEdge"
+          },
+          "description": "作品入口、章节允许跳转关系、作品出口。"
+        },
+        "asset_folders": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Folder"
+          },
+          "description": "目录树；既含实体内部目录，也含普通分类目录。"
+        },
+        "library_files": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/LibraryFile"
+          },
+          "description": "故事板、3D 白模、游戏 UI、其他四类的普通文件条目。"
+        }
+      },
+      "required": [
+        "assets",
+        "chapters",
+        "nodes",
+        "project",
+        "scenes",
+        "variables",
+        "chapter_edges",
+        "asset_folders",
+        "library_files"
+      ],
+      "type": "object",
+      "title": "剧本内容集合",
+      "description": "剧本内容集合。字段描述以 2026-09-14 当前源码为基准。"
+    },
+    "Asset": {
+      "additionalProperties": false,
+      "properties": {
+        "created_at": {
+          "format": "date-time",
+          "type": "string",
+          "description": "创建时间，带时区的 RFC 3339 字符串；导入后的审计时间由服务端重建。"
+        },
+        "description": {
+          "type": "string",
+          "description": "完整人物／场景设定，自由文本。"
+        },
+        "id": {
+          "type": "string",
+          "description": "对象的稳定标识；引用它时使用此值，不用显示名称。"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "character",
+            "location"
+          ],
+          "description": "character 角色或 location 场景设定；其他四类走普通文件分类。"
+        },
+        "name": {
+          "type": "string",
+          "description": "角色／场景设定名称。",
+          "minLength": 1,
+          "maxLength": 200,
+          "pattern": "\\S"
+        },
+        "project_id": {
+          "type": "string",
+          "description": "所属／来源项目标识；包内关系应指向同一来源项目。"
+        },
+        "sort_order": {
+          "type": "integer",
+          "description": "展示排序值，通常按升序排列；不代表剧情的实际执行顺序。"
+        },
+        "styles": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/AssetStyle"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "实体的多套视觉样式。"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "type": "string",
+          "description": "最近修改时间，带时区的 RFC 3339 字符串。"
+        },
+        "voices": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/Voice"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "角色的多套音色；场景实体必须为空。"
+        },
+        "overview": {
+          "type": "string",
+          "description": "简短概要，当前源码已保存并导出；旧导出 OpenAPI 中尚未声明。"
+        }
+      },
+      "required": [
+        "created_at",
+        "description",
+        "id",
+        "kind",
+        "name",
+        "project_id",
+        "sort_order",
+        "styles",
+        "updated_at",
+        "voices",
+        "overview"
+      ],
+      "type": "object",
+      "title": "角色或场景设定实体",
+      "description": "角色或场景设定实体。字段描述以 2026-09-14 当前源码为基准。",
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "location"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "voices": {
+                "maxItems": 0
+              }
+            }
+          }
+        }
+      ]
+    },
+    "AssetStyle": {
+      "additionalProperties": false,
+      "properties": {
+        "created_at": {
+          "format": "date-time",
+          "type": "string",
+          "description": "创建时间，带时区的 RFC 3339 字符串；导入后的审计时间由服务端重建。"
+        },
+        "description": {
+          "type": "string",
+          "description": "样式说明。"
+        },
+        "id": {
+          "type": "string",
+          "description": "对象的稳定标识；引用它时使用此值，不用显示名称。"
+        },
+        "is_default": {
+          "type": "boolean",
+          "description": "是否为默认样式；同一实体最多一个默认项。"
+        },
+        "name": {
+          "type": "string",
+          "description": "视觉样式名称，例如雨夜便装。",
+          "minLength": 1,
+          "maxLength": 200,
+          "pattern": "\\S"
+        },
+        "resource_key": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "样式图片，引用 resources[].key；未配置时省略或为 null。"
+        },
+        "sort_order": {
+          "type": "integer",
+          "description": "展示排序值，通常按升序排列；不代表剧情的实际执行顺序。"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "type": "string",
+          "description": "最近修改时间，带时区的 RFC 3339 字符串。"
+        },
+        "folder_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "所在目录 ID；null 表示所属分类或实体的根层。"
+        }
+      },
+      "required": [
+        "created_at",
+        "description",
+        "id",
+        "is_default",
+        "name",
+        "sort_order",
+        "updated_at",
+        "folder_id"
+      ],
+      "type": "object",
+      "title": "角色／场景的视觉样式",
+      "description": "角色／场景的视觉样式。字段描述以 2026-09-14 当前源码为基准。"
+    },
+    "Voice": {
+      "additionalProperties": false,
+      "properties": {
+        "config_version": {
+          "type": "integer",
+          "description": "配置结构版本；当前支持 1。",
+          "const": 1
+        },
+        "created_at": {
+          "format": "date-time",
+          "type": "string",
+          "description": "创建时间，带时区的 RFC 3339 字符串；导入后的审计时间由服务端重建。"
+        },
+        "description": {
+          "type": "string",
+          "description": "音色说明。"
+        },
+        "id": {
+          "type": "string",
+          "description": "对象的稳定标识；引用它时使用此值，不用显示名称。"
+        },
+        "is_default": {
+          "type": "boolean",
+          "description": "是否为默认音色；同一角色最多一个默认项。"
+        },
+        "name": {
+          "type": "string",
+          "description": "角色音色名称。",
+          "minLength": 1,
+          "maxLength": 200,
+          "pattern": "\\S"
+        },
+        "sample_resource_key": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "音色试听音频，引用 resources[].key；允许省略或 null。"
+        },
+        "sort_order": {
+          "type": "integer",
+          "description": "展示排序值，通常按升序排列；不代表剧情的实际执行顺序。"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "type": "string",
+          "description": "最近修改时间，带时区的 RFC 3339 字符串。"
+        },
+        "voice_config": {
+          "$ref": "#/$defs/VoiceConfig",
+          "description": "公开音色选择参数；不包含渠道凭据。"
+        },
+        "folder_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "所在目录 ID；null 表示所属分类或实体的根层。"
+        }
+      },
+      "required": [
+        "config_version",
+        "created_at",
+        "description",
+        "id",
+        "is_default",
+        "name",
+        "sort_order",
+        "updated_at",
+        "voice_config",
+        "folder_id"
+      ],
+      "type": "object",
+      "title": "角色音色",
+      "description": "角色音色。字段描述以 2026-09-14 当前源码为基准。"
+    },
+    "VoiceConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "language": {
+          "type": "string",
+          "description": "语言字符串，可为空。"
+        },
+        "pitch_rate": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "音高调整值，-12 至 12；可省略。",
+          "minimum": -12,
+          "maximum": 12
+        },
+        "speaker": {
+          "type": "string",
+          "description": "音色／说话人选择标识，必填；不是角色资产 ID。",
+          "minLength": 1
+        },
+        "speech_rate": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "语速调整值，-50 至 100；可省略。",
+          "minimum": -50,
+          "maximum": 100
+        },
+        "style": {
+          "type": "string",
+          "description": "语音风格字符串，可为空。"
+        }
+      },
+      "required": [
+        "language",
+        "speaker",
+        "style"
+      ],
+      "type": "object",
+      "title": "音色参数",
+      "description": "音色参数。字段描述以 2026-09-14 当前源码为基准。"
+    },
+    "Chapter": {
+      "additionalProperties": false,
+      "properties": {
+        "created_at": {
+          "format": "date-time",
+          "type": "string",
+          "description": "创建时间，带时区的 RFC 3339 字符串；导入后的审计时间由服务端重建。"
+        },
+        "id": {
+          "type": "string",
+          "description": "对象的稳定标识；引用它时使用此值，不用显示名称。"
+        },
+        "overview_x": {
+          "type": "number",
+          "description": "章节在总览画布的横坐标。"
+        },
+        "overview_y": {
+          "type": "number",
+          "description": "章节在总览画布的纵坐标。"
+        },
+        "project_id": {
+          "type": "string",
+          "description": "所属／来源项目标识；包内关系应指向同一来源项目。"
+        },
+        "sort_order": {
+          "type": "integer",
+          "description": "展示排序值，通常按升序排列；不代表剧情的实际执行顺序。"
+        },
+        "summary": {
+          "type": "string",
+          "description": "章节概要。"
+        },
+        "title": {
+          "type": "string",
+          "description": "章节标题。",
+          "minLength": 1,
+          "maxLength": 200,
+          "pattern": "\\S"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "type": "string",
+          "description": "最近修改时间，带时区的 RFC 3339 字符串。"
+        }
+      },
+      "required": [
+        "created_at",
+        "id",
+        "overview_x",
+        "overview_y",
+        "project_id",
+        "sort_order",
+        "summary",
+        "title",
+        "updated_at"
+      ],
+      "type": "object",
+      "title": "章节",
+      "description": "章节。字段描述以 2026-09-14 当前源码为基准。"
+    },
+    "Node": {
+      "additionalProperties": false,
+      "properties": {
+        "boundary": {
+          "type": "string",
+          "description": "none 普通、chapter_start 章开始、chapter_end 章结束；只有剧情／游戏能设置章节边界。",
+          "enum": [
+            "none",
+            "chapter_start",
+            "chapter_end"
+          ]
+        },
+        "branches": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/Branch"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "仅条件节点有内容：按 sort_order 首个命中的条件分支。"
+        },
+        "chapter_id": {
+          "type": "string",
+          "description": "所属章节 ID；每个节点只属于一个章节。"
+        },
+        "collapsed": {
+          "type": "boolean",
+          "description": "是否在编辑画布中折叠显示。"
+        },
+        "created_at": {
+          "format": "date-time",
+          "type": "string",
+          "description": "创建时间，带时区的 RFC 3339 字符串；导入后的审计时间由服务端重建。"
+        },
+        "favorites": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/Favorite"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "节点共享候选素材；收藏不等于已经放入时间轴。"
+        },
+        "game": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Game"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "仅小游戏节点有：外部游戏地址。"
+        },
+        "id": {
+          "type": "string",
+          "description": "对象的稳定标识；引用它时使用此值，不用显示名称。"
+        },
+        "kind": {
+          "type": "string",
+          "description": "节点类型：narrative 剧情、game 小游戏、condition 判断、variable 变量修改、jump 跳转；创建后固定。",
+          "enum": [
+            "narrative",
+            "game",
+            "condition",
+            "variable",
+            "jump"
+          ]
+        },
+        "narrative": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Narrative"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "仅剧情节点有：节点概要与正文。"
+        },
+        "position": {
+          "$ref": "#/$defs/Position",
+          "description": "编辑画布坐标，不决定播放顺序。"
+        },
+        "project_id": {
+          "type": "string",
+          "description": "所属／来源项目标识；包内关系应指向同一来源项目。"
+        },
+        "revision": {
+          "type": "integer",
+          "description": "节点并发修改修订号，从 1 开始；事件修改也会推进此值。",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "edges": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/NodeEdge"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "各个稳定出口的动作及目标，包含尚未连接的出口。"
+        },
+        "scene_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "可空的项目全局场次 ID；只有 narrative 节点允许关联。"
+        },
+        "sort_order": {
+          "type": "integer",
+          "description": "展示排序值，通常按升序排列；不代表剧情的实际执行顺序。"
+        },
+        "timeline": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Timeline"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "仅剧情节点有：时间轴、媒体、字幕和互动配置。"
+        },
+        "title": {
+          "type": "string",
+          "description": "节点标题。",
+          "minLength": 1,
+          "maxLength": 200,
+          "pattern": "\\S"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "type": "string",
+          "description": "最近修改时间，带时区的 RFC 3339 字符串。"
+        },
+        "variable": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VariableDetails"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "仅变量节点有：修改变量的 DSL 源码。"
+        },
+        "events": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/Event"
+          },
+          "description": "仅剧情节点有内容：有序事件／分镜，每条记录描述和生成提示词。"
+        }
+      },
+      "required": [
+        "boundary",
+        "branches",
+        "chapter_id",
+        "collapsed",
+        "created_at",
+        "favorites",
+        "id",
+        "kind",
+        "position",
+        "project_id",
+        "revision",
+        "edges",
+        "scene_id",
+        "sort_order",
+        "title",
+        "updated_at",
+        "events"
+      ],
+      "type": "object",
+      "title": "创作节点",
+      "description": "创作节点。字段描述以 2026-09-14 当前源码为基准。",
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "narrative"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "required": [
+              "narrative",
+              "timeline"
+            ],
+            "properties": {
+              "narrative": {
+                "type": "object"
+              },
+              "timeline": {
+                "type": "object"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "narrative": {
+                "type": "null"
+              },
+              "timeline": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "game"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "required": [
+              "game"
+            ],
+            "properties": {
+              "game": {
+                "type": "object"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "game": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "variable"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "required": [
+              "variable"
+            ],
+            "properties": {
+              "variable": {
+                "type": "object"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "variable": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "not": {
+                  "const": "narrative"
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "scene_id": {
+                "type": "null"
+              },
+              "events": {
+                "maxItems": 0
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "condition"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {},
+          "else": {
+            "properties": {
+              "branches": {
+                "maxItems": 0
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "condition",
+                  "variable",
+                  "jump"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "boundary": {
+                "const": "none"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "Branch": {
+      "additionalProperties": false,
+      "properties": {
+        "condition_dsl": {
+          "type": "string",
+          "description": "判断条件源码，结果必须为布尔值；不在这里填写跳转目标。"
+        },
+        "dsl_version": {
+          "type": "integer",
+          "description": "条件／修改脚本语法版本；当前支持 1。",
+          "enum": [
+            1
+          ]
+        },
+        "id": {
+          "type": "string",
+          "description": "对象的稳定标识；引用它时使用此值，不用显示名称。"
+        },
+        "name": {
+          "type": "string",
+          "description": "分支名称。"
+        },
+        "sort_order": {
+          "type": "integer",
+          "description": "分支检查顺序，节点内唯一；升序取第一条成立分支。"
+        }
+      },
+      "required": [
+        "condition_dsl",
+        "dsl_version",
+        "id",
+        "name",
+        "sort_order"
+      ],
+      "type": "object",
+      "title": "条件判断分支",
+      "description": "条件判断分支。字段描述以 2026-09-14 当前源码为基准。"
+    },
+    "Favorite": {
+      "additionalProperties": false,
+      "properties": {
+        "created_at": {
+          "format": "date-time",
+          "type": "string",
+          "description": "创建时间，带时区的 RFC 3339 字符串；导入后的审计时间由服务端重建。"
+        },
+        "created_by_user_id": {
+          "type": "string",
+          "description": "最初收藏者的审计标识；不代表成员关系或导入授权。"
+        },
+        "id": {
+          "type": "string",
+          "description": "对象的稳定标识；引用它时使用此值，不用显示名称。"
+        },
+        "resource_key": {
+          "type": "string",
+          "description": "引用 resources[].key；不是 file_id 或 project_file_id。"
+        }
+      },
+      "required": [
+        "created_at",
+        "created_by_user_id",
+        "id",
+        "resource_key"
+      ],
+      "type": "object",
+      "title": "节点候选素材",
+      "description": "节点候选素材。字段描述以 2026-09-14 当前源码为基准。"
+    },
+    "Game": {
+      "additionalProperties": false,
+      "properties": {
+        "url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "小游戏的绝对 HTTP(S) URL；null 是尚未填写的草稿。"
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "type": "object",
+      "title": "小游戏配置",
+      "description": "小游戏配置。字段描述以 2026-09-14 当前源码为基准。"
+    },
+    "Narrative": {
+      "additionalProperties": false,
+      "properties": {
+        "body": {
+          "type": "string",
+          "description": "剧情正文，自由文本；当前没有独立的结构化对白／动作段落模型。"
+        },
+        "synopsis": {
+          "type": "string",
+          "description": "这个剧情节点的概要。"
+        }
+      },
+      "required": [
+        "body",
+        "synopsis"
+      ],
+      "type": "object",
+      "title": "剧情概要与正文",
+      "description": "剧情概要与正文。字段描述以 2026-09-14 当前源码为基准。"
+    },
+    "Position": {
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "type": "number",
+          "description": "节点横坐标，编辑布局值。"
+        },
+        "y": {
+          "type": "number",
+          "description": "节点纵坐标，编辑布局值。"
+        }
+      },
+      "required": [
+        "x",
+        "y"
+      ],
+      "type": "object",
+      "title": "节点画布坐标",
+      "description": "节点画布坐标。字段描述以 2026-09-14 当前源码为基准。"
+    },
+    "NodeEdge": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "type": "string",
+          "description": "jump 跳转到目标；continue 在当前剧情节点继续时间轴。",
+          "enum": [
+            "jump",
+            "continue"
+          ]
+        },
+        "id": {
+          "type": "string",
+          "description": "对象的稳定标识；引用它时使用此值，不用显示名称。"
+        },
+        "result_key": {
+          "type": "string",
+          "description": "触发结果：completed、default、jumped、matched、clicked、success 或 failure。"
+        },
+        "source_id": {
+          "type": "string",
+          "description": "对应节点／QTE 元素／选项／条件分支的 ID。"
+        },
+        "source_kind": {
+          "type": "string",
+          "description": "出口来源：node 节点、qte 互动、choice 选项、condition_branch 判断分支。",
+          "enum": [
+            "node",
+            "qte",
+            "choice",
+            "condition_branch"
+          ]
+        },
+        "target_chapter_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "章节目标；仅 jump 节点可使用，不能同时设置节点目标。"
+        },
+        "target_kind": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "jump 时为 node 或 chapter；continue 时为 null。",
+          "enum": [
+            "node",
+            "chapter",
+            null
+          ]
+        },
+        "target_node_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "节点目标；未连接草稿可为 null。"
+        }
+      },
+      "required": [
+        "action",
+        "id",
+        "result_key",
+        "source_id",
+        "source_kind",
+        "target_chapter_id",
+        "target_kind",
+        "target_node_id"
+      ],
+      "type": "object",
+      "title": "节点出口与去向",
+      "description": "节点出口与去向。字段描述以 2026-09-14 当前源码为基准。",
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "source_kind": {
+                "const": "node"
+              }
+            },
+            "required": [
+              "source_kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "result_key": {
+                "enum": [
+                  "completed",
+                  "default",
+                  "jumped"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "source_kind": {
+                "const": "qte"
+              }
+            },
+            "required": [
+              "source_kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "result_key": {
+                "enum": [
+                  "success",
+                  "failure"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "source_kind": {
+                "const": "choice"
+              }
+            },
+            "required": [
+              "source_kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "result_key": {
+                "enum": [
+                  "clicked"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "source_kind": {
+                "const": "condition_branch"
+              }
+            },
+            "required": [
+              "source_kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "result_key": {
+                "enum": [
+                  "matched"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "continue"
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          "then": {
+            "properties": {
+              "source_kind": {
+                "enum": [
+                  "qte",
+                  "choice"
+                ]
+              },
+              "target_kind": {
+                "type": "null"
+              },
+              "target_node_id": {
+                "type": "null"
+              },
+              "target_chapter_id": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "target_kind": {
+                "enum": [
+                  "node",
+                  "chapter"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "target_kind": {
+                "const": "node"
+              }
+            },
+            "required": [
+              "target_kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "target_chapter_id": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "target_kind": {
+                "const": "chapter"
+              }
+            },
+            "required": [
+              "target_kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "target_node_id": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "Timeline": {
+      "additionalProperties": false,
+      "properties": {
+        "canvas_height": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "画面高度，像素。",
+          "minimum": 1,
+          "maximum": 32768
+        },
+        "canvas_width": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "画面宽度，像素；与高度同时有值或同时为 null。",
+          "minimum": 1,
+          "maximum": 32768
+        },
+        "elements": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/Element"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "本节点所有媒体、字幕、QTE 与选项组，包括未排入轨道的草稿。",
+          "maxItems": 10000
+        },
+        "frame_rate_den": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "有理数帧率分母，例如 1001，和分子成对。",
+          "minimum": 1,
+          "maximum": 1000000
+        },
+        "frame_rate_num": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "有理数帧率分子，例如 30000。",
+          "minimum": 1,
+          "maximum": 1000000
+        },
+        "ticks_per_second": {
+          "type": "integer",
+          "description": "固定 120000；所有 ticks 字段都使用此时间基准。",
+          "const": 120000
+        },
+        "tracks": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/Track"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "本节点的轨道定义。"
+        }
+      },
+      "required": [
+        "canvas_height",
+        "canvas_width",
+        "elements",
+        "frame_rate_den",
+        "frame_rate_num",
+        "ticks_per_second",
+        "tracks"
+      ],
+      "type": "object",
+      "title": "剧情节点时间轴",
+      "description": "剧情节点时间轴。字段描述以 2026-09-14 当前源码为基准。",
+      "allOf": [
+        {
+          "oneOf": [
+            {
+              "properties": {
+                "canvas_width": {
+                  "type": "null"
+                },
+                "canvas_height": {
+                  "type": "null"
+                }
+              }
+            },
+            {
+              "properties": {
+                "canvas_width": {
+                  "type": "integer"
+                },
+                "canvas_height": {
+                  "type": "integer"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "oneOf": [
+            {
+              "properties": {
+                "frame_rate_num": {
+                  "type": "null"
+                },
+                "frame_rate_den": {
+                  "type": "null"
+                }
+              }
+            },
+            {
+              "properties": {
+                "frame_rate_num": {
+                  "type": "integer"
+                },
+                "frame_rate_den": {
+                  "type": "integer"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "Element": {
+      "additionalProperties": false,
+      "properties": {
+        "active_end_ticks": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "互动可操作窗口结束，与开始成对；可空。",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "active_start_ticks": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "互动可操作窗口开始，绝对时间，需落在显示区间内；可空。",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "animations": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Animations"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "互动元素的进场／退场动画；可省略。"
+        },
+        "choice_group": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChoiceGroup"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "选项组，含多个独立选项。"
+        },
+        "config_version": {
+          "type": "integer",
+          "description": "配置结构版本；当前支持 1。",
+          "const": 1
+        },
+        "end_ticks": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "显示结束时刻，不包含此刻，必须大于开始时刻。",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "hit_regions": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/HitRegion"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "QTE／选项的操作区域；非互动元素不使用。"
+        },
+        "id": {
+          "type": "string",
+          "description": "对象的稳定标识；引用它时使用此值，不用显示名称。"
+        },
+        "kind": {
+          "type": "string",
+          "description": "video、audio、image、qte、choice_group、subtitle 六种元素。",
+          "enum": [
+            "video",
+            "audio",
+            "image",
+            "qte",
+            "choice_group",
+            "subtitle"
+          ]
+        },
+        "media": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Media"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "视频／音频／图片的资源引用与裁剪参数。"
+        },
+        "qte": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/QTE"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "QTE 的手势、成功／失败与显示设置。"
+        },
+        "start_ticks": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "节点时间轴上的显示开始时刻，包含此刻；null 表示未排期。",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "subtitle": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Subtitle"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "字幕文字及说话角色。"
+        },
+        "track_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "所在轨道 ID；与 start_ticks/end_ticks 同时有值或同时为 null。"
+        }
+      },
+      "required": [
+        "active_end_ticks",
+        "active_start_ticks",
+        "config_version",
+        "end_ticks",
+        "id",
+        "kind",
+        "start_ticks",
+        "track_id"
+      ],
+      "type": "object",
+      "title": "时间轴元素",
+      "description": "时间轴元素。字段描述以 2026-09-14 当前源码为基准。",
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "video"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "required": [
+              "media"
+            ],
+            "properties": {
+              "media": {
+                "type": "object"
+              },
+              "qte": {
+                "type": "null"
+              },
+              "choice_group": {
+                "type": "null"
+              },
+              "subtitle": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "audio"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "required": [
+              "media"
+            ],
+            "properties": {
+              "media": {
+                "type": "object"
+              },
+              "qte": {
+                "type": "null"
+              },
+              "choice_group": {
+                "type": "null"
+              },
+              "subtitle": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "image"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "required": [
+              "media"
+            ],
+            "properties": {
+              "media": {
+                "type": "object"
+              },
+              "qte": {
+                "type": "null"
+              },
+              "choice_group": {
+                "type": "null"
+              },
+              "subtitle": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "qte"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "required": [
+              "qte"
+            ],
+            "properties": {
+              "media": {
+                "type": "null"
+              },
+              "qte": {
+                "type": "object"
+              },
+              "choice_group": {
+                "type": "null"
+              },
+              "subtitle": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "choice_group"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "required": [
+              "choice_group"
+            ],
+            "properties": {
+              "media": {
+                "type": "null"
+              },
+              "qte": {
+                "type": "null"
+              },
+              "choice_group": {
+                "type": "object"
+              },
+              "subtitle": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "subtitle"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "required": [
+              "subtitle"
+            ],
+            "properties": {
+              "media": {
+                "type": "null"
+              },
+              "qte": {
+                "type": "null"
+              },
+              "choice_group": {
+                "type": "null"
+              },
+              "subtitle": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        {
+          "oneOf": [
+            {
+              "properties": {
+                "track_id": {
+                  "type": "null"
+                },
+                "start_ticks": {
+                  "type": "null"
+                },
+                "end_ticks": {
+                  "type": "null"
+                },
+                "active_start_ticks": {
+                  "type": "null"
+                },
+                "active_end_ticks": {
+                  "type": "null"
+                },
+                "hit_regions": {
+                  "maxItems": 0
+                }
+              }
+            },
+            {
+              "properties": {
+                "track_id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "start_ticks": {
+                  "type": "integer"
+                },
+                "end_ticks": {
+                  "type": "integer"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "oneOf": [
+            {
+              "properties": {
+                "active_start_ticks": {
+                  "type": "null"
+                },
+                "active_end_ticks": {
+                  "type": "null"
+                }
+              }
+            },
+            {
+              "properties": {
+                "active_start_ticks": {
+                  "type": "integer"
+                },
+                "active_end_ticks": {
+                  "type": "integer"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "video",
+                  "audio",
+                  "image",
+                  "subtitle"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "active_start_ticks": {
+                "type": "null"
+              },
+              "active_end_ticks": {
+                "type": "null"
+              },
+              "hit_regions": {
+                "maxItems": 0
+              },
+              "animations": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "image"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "media": {
+                "properties": {
+                  "source_in_ticks": {
+                    "type": "null"
+                  },
+                  "source_out_ticks": {
+                    "type": "null"
+                  },
+                  "playback_rate": {
+                    "const": 1
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "video",
+                  "audio"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "media": {
+                "properties": {
+                  "source_in_ticks": {
+                    "type": "integer"
+                  },
+                  "source_out_ticks": {
+                    "type": "integer"
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "Animations": {
+      "additionalProperties": false,
+      "properties": {
+        "enter": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Animation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "进场动画；null 表示无。"
+        },
+        "exit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Animation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "退场动画；null 表示无。"
+        }
+      },
+      "required": [
+        "enter",
+        "exit"
+      ],
+      "type": "object",
+      "title": "进出场动画",
+      "description": "进出场动画。字段描述以 2026-09-14 当前源码为基准。"
+    },
+    "Animation": {
+      "additionalProperties": false,
+      "properties": {
+        "duration_ticks": {
+          "type": "integer",
+          "description": "动画持续时间，正整数，使用 120000 ticks/秒。",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "easing": {
+          "type": "string",
+          "description": "linear/ease_in/ease_out/ease_in_out 缓动方式。",
+          "enum": [
+            "linear",
+            "ease_in",
+            "ease_out",
+            "ease_in_out"
+          ]
+        },
+        "preset_key": {
+          "type": "string",
+          "description": "fade_in/fade_out/slide_left/slide_right/scale_in/scale_out 动画预设。",
+          "enum": [
+            "fade_in",
+            "fade_out",
+            "slide_left",
+            "slide_right",
+            "scale_in",
+            "scale_out"
+          ]
+        },
+        "preset_version": {
+          "type": "integer",
+          "description": "预设版本，当前为 1。",
+          "const": 1
+        }
+      },
+      "required": [
+        "duration_ticks",
+        "easing",
+        "preset_key",
+        "preset_version"
+      ],
+      "type": "object",
+      "title": "单段动画",
+      "description": "单段动画。字段描述以 2026-09-14 当前源码为基准。"
+    },
+    "ChoiceGroup": {
+      "additionalProperties": false,
+      "properties": {
+        "choices": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/Choice"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "组内选项；每项独立使用 clicked 出口。"
+        },
+        "config_version": {
+          "type": "integer",
+          "description": "配置结构版本；当前支持 1。",
+          "const": 1
+        },
+        "display_config": {
+          "$ref": "#/$defs/Presentation",
+          "description": "选项组展示内容及布局样式。"
+        },
+        "name": {
+          "type": "string",
+          "description": "选项组名称。"
+        }
+      },
+      "required": [
+        "choices",
+        "config_version",
+        "display_config",
+        "name"
+      ],
+      "type": "object",
+      "title": "选项组",
+      "description": "选项组。字段描述以 2026-09-14 当前源码为基准。"
+    },
+    "Choice": {
+      "additionalProperties": false,
+      "properties": {
+        "condition_dsl": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "可选的选项可用条件；与 dsl_version 同时有值或同时为空／省略。"
+        },
+        "config_version": {
+          "type": "integer",
+          "description": "配置结构版本；当前支持 1。",
+          "const": 1
+        },
+        "dsl_version": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "条件／修改脚本语法版本；当前支持 1。",
+          "enum": [
+            1,
+            null
+          ]
+        },
+        "id": {
+          "type": "string",
+          "description": "对象的稳定标识；引用它时使用此值，不用显示名称。"
+        },
+        "label": {
+          "type": "string",
+          "description": "玩家看到的选项文字。",
+          "minLength": 1,
+          "maxLength": 200,
+          "pattern": "\\S"
+        },
+        "sort_order": {
+          "type": "integer",
+          "description": "展示排序值，通常按升序排列；不代表剧情的实际执行顺序。"
+        },
+        "style_config": {
+          "$ref": "#/$defs/Style",
+          "description": "这个选项的显示样式。"
+        }
+      },
+      "required": [
+        "config_version",
+        "id",
+        "label",
+        "sort_order",
+        "style_config"
+      ],
+      "type": "object",
+      "title": "单个选项",
+      "description": "单个选项。字段描述以 2026-09-14 当前源码为基准。",
+      "allOf": [
+        {
+          "oneOf": [
+            {
+              "properties": {
+                "condition_dsl": {
+                  "type": "null"
+                },
+                "dsl_version": {
+                  "type": "null"
+                }
+              }
+            },
+            {
+              "required": [
+                "condition_dsl",
+                "dsl_version"
+              ],
+              "properties": {
+                "condition_dsl": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "dsl_version": {
+                  "const": 1
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "Style": {
+      "additionalProperties": false,
+      "properties": {
+        "align": {
+          "type": "string",
+          "description": "对齐方式：left/center/right，空字符串表示未指定。",
+          "enum": [
+            "",
+            "left",
+            "center",
+            "right"
+          ]
+        },
+        "background_color": {
+          "type": "string",
+          "description": "背景颜色字符串。"
+        },
+        "border_radius": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "圆角大小，0–1024。",
+          "minimum": 0,
+          "maximum": 1024
+        },
+        "font_family": {
+          "type": "string",
+          "description": "字体名称。"
+        },
+        "font_size": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "字号，大于 0 且不超过 1024。",
+          "exclusiveMinimum": 0,
+          "maximum": 1024
+        },
+        "layout": {
+          "type": "string",
+          "description": "vertical/horizontal/grid，空字符串表示未指定。",
+          "enum": [
+            "",
+            "vertical",
+            "horizontal",
+            "grid"
+          ]
+        },
+        "opacity": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "透明度，0–1。",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "text_color": {
+          "type": "string",
+          "description": "文字颜色字符串。"
+        }
+      },
+      "type": "object",
+      "title": "显示样式",
+      "description": "显示样式。字段描述以 2026-09-14 当前源码为基准。"
+    },
+    "Presentation": {
+      "additionalProperties": false,
+      "properties": {
+        "icon": {
+          "type": "string",
+          "description": "图标标识字符串；不是包内资源引用，也不是文件 ID。"
+        },
+        "style": {
+          "$ref": "#/$defs/Style",
+          "description": "显示样式对象，允许空对象。"
+        },
+        "text": {
+          "type": "string",
+          "description": "显示文字。"
+        }
+      },
+      "required": [
+        "style"
+      ],
+      "type": "object",
+      "title": "展示内容",
+      "description": "展示内容。字段描述以 2026-09-14 当前源码为基准。"
+    },
+    "HitRegion": {
+      "additionalProperties": false,
+      "properties": {
+        "center_x": {
+          "type": "number",
+          "description": "中心点横坐标，按画面归一化为 0–1。",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "center_y": {
+          "type": "number",
+          "description": "中心点纵坐标，按画面归一化为 0–1。",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "height": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "矩形高度，归一化值，大于 0 且不超过 1。",
+          "exclusiveMinimum": 0,
+          "maximum": 1
+        },
+        "id": {
+          "type": "string",
+          "description": "对象的稳定标识；引用它时使用此值，不用显示名称。"
+        },
+        "radius": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "圆形半径，归一化值，大于 0 且不超过 1。",
+          "exclusiveMinimum": 0,
+          "maximum": 1
+        },
+        "shape": {
+          "type": "string",
+          "description": "circle 圆形或 rectangle 矩形。",
+          "enum": [
+            "circle",
+            "rectangle"
+          ]
+        },
+        "target_id": {
+          "type": "string",
+          "description": "QTE 元素 ID 或本组选项 ID。"
+        },
+        "width": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "矩形宽度，归一化值，大于 0 且不超过 1。",
+          "exclusiveMinimum": 0,
+          "maximum": 1
+        }
+      },
+      "required": [
+        "center_x",
+        "center_y",
+        "id",
+        "shape",
+        "target_id"
+      ],
+      "type": "object",
+      "title": "点击／手势热区",
+      "description": "点击／手势热区。字段描述以 2026-09-14 当前源码为基准。",
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "shape": {
+                "const": "circle"
+              }
+            },
+            "required": [
+              "shape"
+            ]
+          },
+          "then": {
+            "required": [
+              "radius"
+            ],
+            "properties": {
+              "radius": {
+                "type": "number"
+              },
+              "width": {
+                "type": "null"
+              },
+              "height": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "required": [
+              "width",
+              "height"
+            ],
+            "properties": {
+              "width": {
+                "type": "number"
+              },
+              "height": {
+                "type": "number"
+              },
+              "radius": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "Media": {
+      "additionalProperties": false,
+      "properties": {
+        "playback_rate": {
+          "type": "number",
+          "description": "播放倍速，大于 0 且不超过 64；图片固定 1。",
+          "exclusiveMinimum": 0,
+          "maximum": 64
+        },
+        "resource_key": {
+          "type": "string",
+          "description": "引用 resources[].key；不是 file_id 或 project_file_id。"
+        },
+        "source_in_ticks": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "源视频／音频裁剪开始时刻；图片为 null。",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "source_out_ticks": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "源视频／音频裁剪结束时刻；图片为 null。",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "playback_rate",
+        "resource_key",
+        "source_in_ticks",
+        "source_out_ticks"
+      ],
+      "type": "object",
+      "title": "媒体片段",
+      "description": "媒体片段。字段描述以 2026-09-14 当前源码为基准。"
+    },
+    "QTE": {
+      "additionalProperties": false,
+      "properties": {
+        "config_version": {
+          "type": "integer",
+          "description": "配置结构版本；当前支持 1。",
+          "const": 1
+        },
+        "failure_enabled": {
+          "type": "boolean",
+          "description": "是否启用失败结果；关闭仍在编辑包中保留 failure 出口草稿。"
+        },
+        "kind": {
+          "type": "string",
+          "description": "tap 点击或 swipe 滑动。",
+          "enum": [
+            "tap",
+            "swipe"
+          ]
+        },
+        "name": {
+          "type": "string",
+          "description": "QTE 显示名称。"
+        },
+        "parameters": {
+          "$ref": "#/$defs/QTEParameters",
+          "description": "手势参数；点击次数或滑动方向。"
+        },
+        "presentation": {
+          "$ref": "#/$defs/Presentation",
+          "description": "互动提示的文字、图标和样式。"
+        }
+      },
+      "required": [
+        "config_version",
+        "failure_enabled",
+        "kind",
+        "name",
+        "parameters",
+        "presentation"
+      ],
+      "type": "object",
+      "title": "快速反应互动",
+      "description": "快速反应互动。字段描述以 2026-09-14 当前源码为基准。",
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "tap"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "parameters": {
+                "required": [
+                  "required_taps"
+                ],
+                "properties": {
+                  "required_taps": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 1000
+                  },
+                  "direction": {
+                    "const": ""
+                  }
+                }
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "parameters": {
+                "required": [
+                  "direction"
+                ],
+                "properties": {
+                  "direction": {
+                    "enum": [
+                      "up",
+                      "down",
+                      "left",
+                      "right"
+                    ]
+                  },
+                  "required_taps": {
+                    "const": 0
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "QTEParameters": {
+      "additionalProperties": false,
+      "properties": {
+        "direction": {
+          "type": "string",
+          "description": "swipe 方向：up/down/left/right；tap 时省略或为空。"
+        },
+        "required_taps": {
+          "type": "integer",
+          "description": "tap 需要的点击次数，1–1000；swipe 时省略或为 0。"
+        }
+      },
+      "type": "object",
+      "title": "QTE 手势参数",
+      "description": "QTE 手势参数。字段描述以 2026-09-14 当前源码为基准。"
+    },
+    "Subtitle": {
+      "additionalProperties": false,
+      "properties": {
+        "config_version": {
+          "type": "integer",
+          "description": "配置结构版本；当前支持 1。",
+          "const": 1
+        },
+        "speaker_asset_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "可空的说话角色 ID；必须引用 character 实体，null 可用于旁白。"
+        },
+        "style_config": {
+          "$ref": "#/$defs/Style",
+          "description": "字幕显示样式。"
+        },
+        "text": {
+          "type": "string",
+          "description": "字幕内容。"
+        }
+      },
+      "required": [
+        "config_version",
+        "speaker_asset_id",
+        "style_config",
+        "text"
+      ],
+      "type": "object",
+      "title": "字幕",
+      "description": "字幕。字段描述以 2026-09-14 当前源码为基准。"
+    },
+    "Track": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "对象的稳定标识；引用它时使用此值，不用显示名称。"
+        },
+        "kind": {
+          "type": "string",
+          "description": "video 画面轨（含图片）、audio 音频轨、interaction 互动轨、subtitle 字幕轨。",
+          "enum": [
+            "video",
+            "audio",
+            "interaction",
+            "subtitle"
+          ]
+        },
+        "name": {
+          "type": "string",
+          "description": "轨道显示名称。"
+        },
+        "sort_order": {
+          "type": "integer",
+          "description": "展示排序值，通常按升序排列；不代表剧情的实际执行顺序。"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "name",
+        "sort_order"
+      ],
+      "type": "object",
+      "title": "时间轴轨道",
+      "description": "时间轴轨道。字段描述以 2026-09-14 当前源码为基准。"
+    },
+    "VariableDetails": {
+      "additionalProperties": false,
+      "properties": {
+        "dsl_version": {
+          "type": "integer",
+          "description": "条件／修改脚本语法版本；当前支持 1。",
+          "enum": [
+            1
+          ]
+        },
+        "script_dsl": {
+          "type": "string",
+          "description": "按顺序执行的变量修改源码；空字符串表示不修改。"
+        }
+      },
+      "required": [
+        "dsl_version",
+        "script_dsl"
+      ],
+      "type": "object",
+      "title": "变量修改脚本",
+      "description": "变量修改脚本。字段描述以 2026-09-14 当前源码为基准。"
+    },
+    "Project": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "type": "string",
+          "description": "作品简介／整体说明。"
+        },
+        "editor_layout": {
+          "$ref": "#/$defs/EditorLayout",
+          "description": "总览中作品起点和终点的显示坐标。"
+        },
+        "name": {
+          "type": "string",
+          "description": "作品名称。",
+          "minLength": 1,
+          "maxLength": 200,
+          "pattern": "\\S"
+        },
+        "prompt": {
+          "type": "string",
+          "description": "项目层面的整体创作提示词；保存文字不等于发起 AI 生成。"
+        }
+      },
+      "required": [
+        "description",
+        "editor_layout",
+        "name",
+        "prompt"
+      ],
+      "type": "object",
+      "title": "作品基础信息",
+      "description": "作品基础信息。字段描述以 2026-09-14 当前源码为基准。"
+    },
+    "EditorLayout": {
+      "additionalProperties": false,
+      "properties": {
+        "end_x": {
+          "type": "number",
+          "description": "总览终点横坐标。"
+        },
+        "end_y": {
+          "type": "number",
+          "description": "总览终点纵坐标。"
+        },
+        "start_x": {
+          "type": "number",
+          "description": "总览起点横坐标，编辑布局值。"
+        },
+        "start_y": {
+          "type": "number",
+          "description": "总览起点纵坐标。"
+        }
+      },
+      "required": [
+        "end_x",
+        "end_y",
+        "start_x",
+        "start_y"
+      ],
+      "type": "object",
+      "title": "作品总览起终点坐标",
+      "description": "作品总览起终点坐标。字段描述以 2026-09-14 当前源码为基准。"
+    },
+    "Scene": {
+      "additionalProperties": false,
+      "properties": {
+        "character_ids": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "出场角色，引用 assets 中 kind=character 的实体。"
+        },
+        "created_at": {
+          "format": "date-time",
+          "type": "string",
+          "description": "创建时间，带时区的 RFC 3339 字符串；导入后的审计时间由服务端重建。"
+        },
+        "id": {
+          "type": "string",
+          "description": "对象的稳定标识；引用它时使用此值，不用显示名称。"
+        },
+        "location_ids": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "发生地点，引用 assets 中 kind=location 的场景设定实体，可多个。"
+        },
+        "name": {
+          "type": "string",
+          "description": "场次名称。",
+          "minLength": 1,
+          "maxLength": 200,
+          "pattern": "\\S"
+        },
+        "project_id": {
+          "type": "string",
+          "description": "所属／来源项目标识；包内关系应指向同一来源项目。"
+        },
+        "sort_order": {
+          "type": "integer",
+          "description": "展示排序值，通常按升序排列；不代表剧情的实际执行顺序。"
+        },
+        "summary": {
+          "type": "string",
+          "description": "场次概要／这一场发生的事。"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "type": "string",
+          "description": "最近修改时间，带时区的 RFC 3339 字符串。"
+        }
+      },
+      "required": [
+        "character_ids",
+        "created_at",
+        "id",
+        "location_ids",
+        "name",
+        "project_id",
+        "sort_order",
+        "summary",
+        "updated_at"
+      ],
+      "type": "object",
+      "title": "项目共享场次",
+      "description": "项目共享场次。字段描述以 2026-09-14 当前源码为基准。"
+    },
+    "Variable": {
+      "additionalProperties": false,
+      "properties": {
+        "created_at": {
+          "format": "date-time",
+          "type": "string",
+          "description": "创建时间，带时区的 RFC 3339 字符串；导入后的审计时间由服务端重建。"
+        },
+        "description": {
+          "type": "string",
+          "description": "变量业务含义及使用说明。"
+        },
+        "id": {
+          "type": "string",
+          "description": "对象的稳定标识；引用它时使用此值，不用显示名称。"
+        },
+        "initial_value": {
+          "oneOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "boolean"
+            }
+          ],
+          "description": "初始值，JSON 类型必须与 value_type 一致。"
+        },
+        "key": {
+          "type": "string",
+          "description": "DSL 使用的稳定英文标识，例如 trust；创建后不可修改，禁止保留字。",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,99}$"
+        },
+        "name": {
+          "type": "string",
+          "description": "给用户看的变量名称，例如信任值，可以修改。"
+        },
+        "project_id": {
+          "type": "string",
+          "description": "所属／来源项目标识；包内关系应指向同一来源项目。"
+        },
+        "sort_order": {
+          "type": "integer",
+          "description": "展示排序值，通常按升序排列；不代表剧情的实际执行顺序。"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "type": "string",
+          "description": "最近修改时间，带时区的 RFC 3339 字符串。"
+        },
+        "value_type": {
+          "type": "string",
+          "description": "number 数值、string 文本、boolean 布尔值。",
+          "enum": [
+            "number",
+            "string",
+            "boolean"
+          ]
+        }
+      },
+      "required": [
+        "created_at",
+        "description",
+        "id",
+        "initial_value",
+        "key",
+        "name",
+        "project_id",
+        "sort_order",
+        "updated_at",
+        "value_type"
+      ],
+      "type": "object",
+      "title": "全局变量定义",
+      "description": "全局变量定义。字段描述以 2026-09-14 当前源码为基准。",
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "value_type": {
+                "const": "number"
+              }
+            },
+            "required": [
+              "value_type"
+            ]
+          },
+          "then": {
+            "properties": {
+              "initial_value": {
+                "type": "number"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "value_type": {
+                "const": "string"
+              }
+            },
+            "required": [
+              "value_type"
+            ]
+          },
+          "then": {
+            "properties": {
+              "initial_value": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "value_type": {
+                "const": "boolean"
+              }
+            },
+            "required": [
+              "value_type"
+            ]
+          },
+          "then": {
+            "properties": {
+              "initial_value": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "ChapterEdge": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "对象的稳定标识；引用它时使用此值，不用显示名称。"
+        },
+        "project_id": {
+          "type": "string",
+          "description": "所属／来源项目标识；包内关系应指向同一来源项目。"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "entry",
+            "transition",
+            "exit"
+          ],
+          "description": "entry：作品入口；transition：章间允许关系；exit：作品出口。"
+        },
+        "source_chapter_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "起始章节 ID；entry 时为 null。"
+        },
+        "target_chapter_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "目标章节 ID；exit 时为 null。"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "创建时间，带时区的 RFC 3339 字符串；导入后的审计时间由服务端重建。"
+        }
+      },
+      "required": [
+        "id",
+        "project_id",
+        "kind",
+        "source_chapter_id",
+        "target_chapter_id",
+        "created_at"
+      ],
+      "title": "章节之间的允许关系",
+      "description": "章节之间的允许关系。字段描述以 2026-09-14 当前源码为基准。",
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "entry"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "source_chapter_id": {
+                "type": "null"
+              },
+              "target_chapter_id": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "transition"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "source_chapter_id": {
+                "type": "string"
+              },
+              "target_chapter_id": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "exit"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "source_chapter_id": {
+                "type": "string"
+              },
+              "target_chapter_id": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "Folder": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "对象的稳定标识；引用它时使用此值，不用显示名称。"
+        },
+        "category": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "storyboard",
+                "model3d",
+                "game_ui",
+                "other"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "普通分类 storyboard/model3d/game_ui/other；与 asset_id 恰好一项有值。"
+        },
+        "asset_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "所属角色或场景实体 ID；与 category 恰好一项有值。"
+        },
+        "parent_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "父目录 ID；null 表示根目录；父子必须属于同一实体／分类。"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "目录名称。",
+          "pattern": "\\S"
+        },
+        "sort_order": {
+          "type": "integer",
+          "description": "展示排序值，通常按升序排列；不代表剧情的实际执行顺序。"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "创建时间，带时区的 RFC 3339 字符串；导入后的审计时间由服务端重建。"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "最近修改时间，带时区的 RFC 3339 字符串。"
+        }
+      },
+      "required": [
+        "id",
+        "category",
+        "asset_id",
+        "parent_id",
+        "name",
+        "sort_order",
+        "created_at",
+        "updated_at"
+      ],
+      "title": "资产目录",
+      "description": "资产目录。字段描述以 2026-09-14 当前源码为基准。",
+      "allOf": [
+        {
+          "oneOf": [
+            {
+              "properties": {
+                "category": {
+                  "type": "string"
+                },
+                "asset_id": {
+                  "type": "null"
+                }
+              }
+            },
+            {
+              "properties": {
+                "category": {
+                  "type": "null"
+                },
+                "asset_id": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "LibraryFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "对象的稳定标识；引用它时使用此值，不用显示名称。"
+        },
+        "category": {
+          "type": "string",
+          "enum": [
+            "storyboard",
+            "model3d",
+            "game_ui",
+            "other"
+          ],
+          "description": "普通文件分类：storyboard 故事板、model3d 3D 白模、game_ui 游戏 UI、other 其他。"
+        },
+        "folder_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "所在目录 ID；null 表示所属分类或实体的根层。"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "归档显示名称，不一定等于源文件名。",
+          "pattern": "\\S"
+        },
+        "sort_order": {
+          "type": "integer",
+          "description": "展示排序值，通常按升序排列；不代表剧情的实际执行顺序。"
+        },
+        "resource_key": {
+          "type": "string",
+          "description": "引用 resources[].key；不是 file_id 或 project_file_id。"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "创建时间，带时区的 RFC 3339 字符串；导入后的审计时间由服务端重建。"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "最近修改时间，带时区的 RFC 3339 字符串。"
+        }
+      },
+      "required": [
+        "id",
+        "category",
+        "folder_id",
+        "name",
+        "sort_order",
+        "resource_key",
+        "created_at",
+        "updated_at"
+      ],
+      "title": "普通分类文件条目",
+      "description": "普通分类文件条目。字段描述以 2026-09-14 当前源码为基准。"
+    },
+    "ExternalReference": {
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "type": "string",
+          "description": "包外目标的来源 ID。"
+        },
+        "kind": {
+          "type": "string",
+          "description": "外部引用类型：node 或 chapter。",
+          "enum": [
+            "node",
+            "chapter"
+          ]
+        },
+        "node_key": {
+          "type": "string",
+          "description": "发出该引用的包内节点 ID；当前结构没有额外 field_path 字段。"
+        }
+      },
+      "required": [
+        "key",
+        "kind",
+        "node_key"
+      ],
+      "type": "object",
+      "title": "单节点包的外部引用",
+      "description": "单节点包的外部引用。字段描述以 2026-09-14 当前源码为基准。"
+    },
+    "ReleaseContext": {
+      "additionalProperties": false,
+      "properties": {
+        "entry_chapter_id": {
+          "type": "string",
+          "description": "本次发布所选入口章节，应与章节图 entry 一致。"
+        },
+        "version_id": {
+          "type": "string",
+          "description": "本次发布生成的成功版本标识。"
+        }
+      },
+      "required": [
+        "entry_chapter_id",
+        "version_id"
+      ],
+      "type": "object",
+      "title": "发布快照信息",
+      "description": "发布快照信息。字段描述以 2026-09-14 当前源码为基准。"
+    },
+    "Resource": {
+      "additionalProperties": false,
+      "properties": {
+        "filename": {
+          "type": "string",
+          "description": "原始文件名称。"
+        },
+        "key": {
+          "type": "string",
+          "description": "包内资源唯一键，例如 media_1；其他对象通过 resource_key 引用。"
+        },
+        "media": {
+          "$ref": "#/$defs/MediaFacts",
+          "description": "源媒体探测到的尺寸、时长、帧率等事实。"
+        },
+        "sha256": {
+          "type": "string",
+          "description": "可选的内容 SHA-256 校验值；真实导出适配器要求能够获取此值。"
+        },
+        "type": {
+          "type": "string",
+          "description": "文件类型，常见 image/video/audio/file；不得按后缀猜测。"
+        },
+        "url": {
+          "type": "string",
+          "description": "导出资源访问 URL，指向媒体内容；示例域名只是占位。"
+        }
+      },
+      "required": [
+        "filename",
+        "key",
+        "media",
+        "type",
+        "url"
+      ],
+      "type": "object",
+      "title": "包内资源清单项",
+      "description": "包内资源清单项。字段描述以 2026-09-14 当前源码为基准。"
+    },
+    "MediaFacts": {
+      "additionalProperties": false,
+      "properties": {
+        "duration_ticks": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "源媒体总时长；单位同为 120000 ticks/秒。"
+        },
+        "frame_rate_den": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "源媒体有理数帧率分母。"
+        },
+        "frame_rate_num": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "源媒体有理数帧率分子。"
+        },
+        "height": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "源媒体高度，像素；缺失表示未知。"
+        },
+        "status": {
+          "type": "string",
+          "description": "媒体事实状态；当前 Base 适配中为 pending 或 ready，不等于文件上传状态。"
+        },
+        "width": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "源媒体宽度，像素；缺失表示未知。"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "type": "object",
+      "title": "源媒体事实",
+      "description": "源媒体事实。字段描述以 2026-09-14 当前源码为基准。"
+    },
+    "Source": {
+      "additionalProperties": false,
+      "properties": {
+        "node_id": {
+          "type": "string",
+          "description": "单节点导出时的来源节点 ID；项目导出省略。"
+        },
+        "project_id": {
+          "type": "string",
+          "description": "来源项目标识，仅说明来源，不是导入目标或权限证明。"
+        },
+        "revision": {
+          "type": "integer",
+          "description": "单节点导出的来源节点修订号；不是目标写入的 expected_revision。"
+        }
+      },
+      "required": [
+        "project_id"
+      ],
+      "type": "object",
+      "title": "导出来源",
+      "description": "导出来源。字段描述以 2026-09-14 当前源码为基准。"
+    },
+    "Event": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "对象的稳定标识；引用它时使用此值，不用显示名称。"
+        },
+        "node_id": {
+          "type": "string",
+          "description": "所属剧情节点 ID。"
+        },
+        "title": {
+          "type": "string",
+          "description": "事件／分镜标题，必填，最多 200 字符。",
+          "maxLength": 200,
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "description": {
+          "type": "string",
+          "description": "事件／分镜的文字内容，最多 65536 字符。",
+          "maxLength": 65536
+        },
+        "prompt": {
+          "type": "string",
+          "description": "该事件的创作／生成提示词，最多 65536 字符；不直接关联生成记录或媒体片段。",
+          "maxLength": 65536
+        },
+        "sort_order": {
+          "type": "integer",
+          "description": "节点内事件顺序，非负整数且节点内唯一。",
+          "minimum": 0
+        },
+        "created_at": {
+          "format": "date-time",
+          "type": "string",
+          "description": "创建时间，带时区的 RFC 3339 字符串；导入后的审计时间由服务端重建。"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "type": "string",
+          "description": "最近修改时间，带时区的 RFC 3339 字符串。"
+        },
+        "project_id": {
+          "type": "string",
+          "description": "所属／来源项目标识；包内关系应指向同一来源项目。"
+        }
+      },
+      "required": [
+        "id",
+        "node_id",
+        "title",
+        "description",
+        "prompt",
+        "sort_order",
+        "created_at",
+        "updated_at",
+        "project_id"
+      ],
+      "type": "object",
+      "title": "剧情事件／分镜",
+      "description": "剧情事件／分镜。字段描述以 2026-09-14 当前源码为基准。"
+    }
+  }
+}

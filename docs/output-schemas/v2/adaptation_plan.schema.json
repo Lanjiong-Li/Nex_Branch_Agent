@@ -1,0 +1,424 @@
+{
+  "type": "object",
+  "properties": {
+    "result_kind": {
+      "type": "string",
+      "enum": [
+        "ready",
+        "needs_input"
+      ]
+    },
+    "payload": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string"
+            },
+            "logline": {
+              "type": "string"
+            },
+            "premise_and_scope": {
+              "type": "string"
+            },
+            "source_global_analysis_ref": {
+              "$ref": "#/$defs/EvidenceRef"
+            },
+            "source_character_analysis_ref": {
+              "$ref": "#/$defs/EvidenceRef"
+            },
+            "strategy_ref": {
+              "$ref": "#/$defs/EvidenceRef"
+            },
+            "player_role": {
+              "type": "object",
+              "properties": {
+                "character_ref": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/EvidenceRef"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "description": {
+                  "type": "string"
+                },
+                "perspective": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "character_ref",
+                "description",
+                "perspective"
+              ],
+              "additionalProperties": false
+            },
+            "experience_goals": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "world_and_character_changes": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "change_id": {
+                    "type": "string"
+                  },
+                  "subject_ref": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/EvidenceRef"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "original": {
+                    "type": "string"
+                  },
+                  "adapted": {
+                    "type": "string"
+                  },
+                  "rationale": {
+                    "type": "string"
+                  },
+                  "evidence_refs": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/$defs/EvidenceRef"
+                    }
+                  }
+                },
+                "required": [
+                  "change_id",
+                  "subject_ref",
+                  "original",
+                  "adapted",
+                  "rationale",
+                  "evidence_refs"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "entity_specs": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/EntitySpec"
+              },
+              "description": "叙事设计中的角色和地点身份目录，保留稳定 ID 与文字说明；不是最终 Project 的角色/地点资产列表或资源绑定。场次在 Step10 显式提案为 Project.scenes 的全局对象，不能由地点条目自动一对一生成。"
+            },
+            "narrative_constraints": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Constraint"
+              },
+              "description": "保留已确认的叙事要求，并将其与已配置 Graph 目标能力对照；当前章节按顺序组织且跨章只到紧接下一章。不能为了满足图结构而静默重写已确认路线，需决策时使用 questions。"
+            },
+            "writing_style": {
+              "type": "object",
+              "properties": {
+                "tone": {
+                  "type": "string"
+                },
+                "dialogue": {
+                  "type": "string"
+                },
+                "narration": {
+                  "type": "string"
+                },
+                "content_boundaries": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "tone",
+                "dialogue",
+                "narration",
+                "content_boundaries"
+              ],
+              "additionalProperties": false
+            },
+            "stage_artifact_refs": {
+              "type": "object",
+              "properties": {
+                "game_events": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/EvidenceRef"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "event_functions": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/EvidenceRef"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "ending_routes": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/EvidenceRef"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "player_profiles": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/EvidenceRef"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "game_events",
+                "event_functions",
+                "ending_routes",
+                "player_profiles"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "title",
+            "logline",
+            "premise_and_scope",
+            "source_global_analysis_ref",
+            "source_character_analysis_ref",
+            "strategy_ref",
+            "player_role",
+            "experience_goals",
+            "world_and_character_changes",
+            "entity_specs",
+            "narrative_constraints",
+            "writing_style",
+            "stage_artifact_refs"
+          ],
+          "additionalProperties": false,
+          "description": "Step4 初稿的 Step5–8 引用为 null；后续由程序关联已确认的固定版本，保留原输入版本形成无环依赖。"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "questions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Question"
+      }
+    },
+    "evidence_refs": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/EvidenceRef"
+      }
+    },
+    "notes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "result_kind",
+    "payload",
+    "questions",
+    "evidence_refs",
+    "notes"
+  ],
+  "additionalProperties": false,
+  "description": "模型输出合同：ready 表示有待验证产物；needs_input 返回具体缺项。此字段不决定保存、确认、完成或生效状态。",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "BranchAgent_adaptation_plan_v2_1",
+  "$defs": {
+    "Constraint": {
+      "type": "object",
+      "properties": {
+        "constraint_id": {
+          "type": "string"
+        },
+        "rule": {
+          "type": "string"
+        },
+        "scope": {
+          "type": "string"
+        },
+        "evidence_refs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EvidenceRef"
+          }
+        }
+      },
+      "required": [
+        "constraint_id",
+        "rule",
+        "scope",
+        "evidence_refs"
+      ],
+      "additionalProperties": false,
+      "description": "约束提取或设计内容；是否已确认由程序从真实来源核对。"
+    },
+    "EntitySpec": {
+      "type": "object",
+      "properties": {
+        "entity_id": {
+          "type": "string",
+          "description": "已有 ID 保留；新增使用当前任务内唯一逻辑 ID，由程序登记稳定身份。"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "character",
+            "location"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "overview": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "source_refs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EvidenceRef"
+          }
+        }
+      },
+      "required": [
+        "entity_id",
+        "kind",
+        "name",
+        "overview",
+        "description",
+        "source_refs"
+      ],
+      "additionalProperties": false,
+      "description": "角色/地点设计资料仍留在改编方案中，由正文与场次引用追溯；不扩张 Project 合同，也不生成媒体资产或编辑包。"
+    },
+    "EvidenceRef": {
+      "type": "object",
+      "properties": {
+        "record_id": {
+          "type": "string",
+          "description": "真实来源记录或产物 ID；由 Harness 验证存在性与项目归属。"
+        },
+        "version": {
+          "anyOf": [
+            {
+              "type": "string",
+              "description": "版本化记录必须提供固定版本；普通消息可为 null。"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "item_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "description": "记录内部的稳定条目 ID。"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "json_pointer": {
+          "anyOf": [
+            {
+              "type": "string",
+              "description": "需要定位字段时使用 JSON Pointer。"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "record_id",
+        "version",
+        "item_id",
+        "json_pointer"
+      ],
+      "additionalProperties": false,
+      "description": "模型引用已存在记录，不由模型签发确认、版本或审计身份。"
+    },
+    "Question": {
+      "type": "object",
+      "properties": {
+        "question_id": {
+          "type": "string"
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "target_field": {
+          "anyOf": [
+            {
+              "type": "string",
+              "description": "当前 payload 内的 JSON Pointer。"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "suggested_answers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "blocking_scope": {
+          "type": "string",
+          "description": "明确说明哪些工作依赖此回答。"
+        }
+      },
+      "required": [
+        "question_id",
+        "prompt",
+        "reason",
+        "target_field",
+        "suggested_answers",
+        "blocking_scope"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

@@ -1,0 +1,31 @@
+services:
+  database:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: branch_agent
+      POSTGRES_USER: branch_agent
+      POSTGRES_PASSWORD: ${BRANCH_DB_PASSWORD:?Set BRANCH_DB_PASSWORD in environment}
+    volumes:
+      - database:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U branch_agent -d branch_agent"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+  app:
+    build: .
+    ports:
+      - "127.0.0.1:8767:8767"
+    environment:
+      DATABASE_URL: postgresql://branch_agent:${BRANCH_DB_PASSWORD}@database:5432/branch_agent
+      OPENAI_API_KEY: ${OPENAI_API_KEY:?Set OPENAI_API_KEY in environment}
+      BRANCH_LOCAL_USER: ${BRANCH_LOCAL_USER:-developer}
+      BRANCH_LOCAL_PASSWORD: ${BRANCH_LOCAL_PASSWORD:?Set BRANCH_LOCAL_PASSWORD in environment}
+    volumes:
+      - files:/data
+    depends_on:
+      database:
+        condition: service_healthy
+volumes:
+  database:
+  files:

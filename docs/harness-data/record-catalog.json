@@ -1,0 +1,115 @@
+{
+  "schema_version": "1.0.0",
+  "records": [
+    {
+      "definition": "Project",
+      "record_type": "project",
+      "mutable": true
+    },
+    {
+      "definition": "Conversation",
+      "record_type": "conversation",
+      "mutable": true
+    },
+    {
+      "definition": "HistoryRecord",
+      "record_type": "history_record",
+      "mutable": false
+    },
+    {
+      "definition": "WorkSession",
+      "record_type": "work_session",
+      "mutable": true
+    },
+    {
+      "definition": "SessionItem",
+      "record_type": "session_item",
+      "mutable": false
+    },
+    {
+      "definition": "Artifact",
+      "record_type": "artifact",
+      "mutable": true
+    },
+    {
+      "definition": "ArtifactVersion",
+      "record_type": "artifact_version",
+      "mutable": false
+    },
+    {
+      "definition": "ArtifactState",
+      "record_type": "artifact_state",
+      "mutable": true
+    },
+    {
+      "definition": "Decision",
+      "record_type": "decision",
+      "mutable": false
+    },
+    {
+      "definition": "Confirmation",
+      "record_type": "confirmation",
+      "mutable": false
+    },
+    {
+      "definition": "Task",
+      "record_type": "task",
+      "mutable": true
+    },
+    {
+      "definition": "Run",
+      "record_type": "run",
+      "mutable": true
+    },
+    {
+      "definition": "QueuedRequest",
+      "record_type": "queued_request",
+      "mutable": true
+    },
+    {
+      "definition": "Checkpoint",
+      "record_type": "checkpoint",
+      "mutable": false
+    },
+    {
+      "definition": "ConfigVersion",
+      "record_type": "config_version",
+      "mutable": true
+    },
+    {
+      "definition": "ContextSnapshot",
+      "record_type": "context_snapshot",
+      "mutable": false
+    },
+    {
+      "definition": "ModelCall",
+      "record_type": "model_call",
+      "mutable": true
+    },
+    {
+      "definition": "ToolCall",
+      "record_type": "tool_call",
+      "mutable": true
+    },
+    {
+      "definition": "Dependency",
+      "record_type": "dependency",
+      "mutable": true
+    },
+    {
+      "definition": "Blob",
+      "record_type": "blob",
+      "mutable": true
+    },
+    {
+      "definition": "RuntimeEvent",
+      "record_type": "runtime_event",
+      "mutable": false
+    },
+    {
+      "definition": "IdempotencyRecord",
+      "record_type": "idempotency_record",
+      "mutable": true
+    }
+  ]
+}

@@ -1,0 +1,170 @@
+{
+  "result_kind": "ready",
+  "payload": {
+    "chapter_ref": "fixture:chapter:rain_station",
+    "chapter_title": "雨夜失物",
+    "chapter_summary": "玩家在站台捡到钱包，选择当面归还或交给工作人员，两条路线分别形成一个结局。",
+    "node_changes": [
+      {
+        "operation": "create",
+        "node_ref": "new:node:wallet_found",
+        "title": "站台上的钱包",
+        "edge_writes": [
+          {
+            "edge_ref": "new:edge:found_completed",
+            "source_kind": "node",
+            "source_ref": "new:node:wallet_found",
+            "result_key": "completed",
+            "action": "jump",
+            "target_kind": "node",
+            "target_ref": "new:node:wallet_at_desk"
+          },
+          {
+            "edge_ref": "new:edge:return_clicked",
+            "source_kind": "choice",
+            "source_ref": "new:choice:return_directly",
+            "result_key": "clicked",
+            "action": "jump",
+            "target_kind": "node",
+            "target_ref": "new:node:wallet_returned"
+          },
+          {
+            "edge_ref": "new:edge:desk_clicked",
+            "source_kind": "choice",
+            "source_ref": "new:choice:leave_at_desk",
+            "result_key": "clicked",
+            "action": "jump",
+            "target_kind": "node",
+            "target_ref": "new:node:wallet_at_desk"
+          }
+        ],
+        "edge_removal_proposals": [],
+        "kind": "narrative",
+        "boundary": "chapter_start",
+        "scene_ref": null,
+        "synopsis": "玩家在站台捡到钱包，决定如何归还。",
+        "body": "雨声盖过广播。林安从长椅下捡起一个钱包。门外，一位穿灰外套的旅客正翻找口袋；旁边的失物招领窗口还亮着灯。林安握住钱包，朝两个方向各看了一眼。",
+        "event_writes": [],
+        "event_removal_proposals": [],
+        "interaction_writes": [
+          {
+            "operation": "create",
+            "element_ref": "new:interaction:return_wallet",
+            "config_version": 1,
+            "schedule_action": "unschedule",
+            "schedule": {
+              "track_ref": null,
+              "start_ticks": null,
+              "end_ticks": null,
+              "active_start_ticks": null,
+              "active_end_ticks": null
+            },
+            "kind": "choice_group",
+            "name": "归还钱包",
+            "prompt_text": "你准备怎么做？",
+            "choice_writes": [
+              {
+                "choice_ref": "new:choice:return_directly",
+                "label": "追上旅客，核对后归还",
+                "sort_order": 0,
+                "condition_dsl": null,
+                "dsl_version": null
+              },
+              {
+                "choice_ref": "new:choice:leave_at_desk",
+                "label": "交给失物招领工作人员",
+                "sort_order": 1,
+                "condition_dsl": null,
+                "dsl_version": null
+              }
+            ],
+            "choice_removal_proposals": []
+          }
+        ],
+        "interaction_removal_proposals": []
+      },
+      {
+        "operation": "create",
+        "node_ref": "new:node:wallet_returned",
+        "title": "当面归还",
+        "edge_writes": [
+          {
+            "edge_ref": "new:edge:return_completed",
+            "source_kind": "node",
+            "source_ref": "new:node:wallet_returned",
+            "result_key": "completed",
+            "action": "jump",
+            "target_kind": "node",
+            "target_ref": null
+          }
+        ],
+        "edge_removal_proposals": [],
+        "kind": "narrative",
+        "boundary": "chapter_end",
+        "scene_ref": null,
+        "synopsis": "玩家核对钱包特征后，直接交还失主。",
+        "body": "林安追到门口：“请问你在找什么？”旅客说出钱包的颜色和夹层里照片的样子。林安核对后递了过去。旅客松了口气，连声道谢。下一班列车进站，两人在雨棚下挥手告别。",
+        "event_writes": [],
+        "event_removal_proposals": [],
+        "interaction_writes": [],
+        "interaction_removal_proposals": []
+      },
+      {
+        "operation": "create",
+        "node_ref": "new:node:wallet_at_desk",
+        "title": "留下线索",
+        "edge_writes": [
+          {
+            "edge_ref": "new:edge:desk_completed",
+            "source_kind": "node",
+            "source_ref": "new:node:wallet_at_desk",
+            "result_key": "completed",
+            "action": "jump",
+            "target_kind": "node",
+            "target_ref": null
+          }
+        ],
+        "edge_removal_proposals": [],
+        "kind": "narrative",
+        "boundary": "chapter_end",
+        "scene_ref": null,
+        "synopsis": "玩家把钱包交给失物招领处，由工作人员核验归还。",
+        "body": "林安走到窗口，把钱包交给工作人员，并指了指门外寻找失物的旅客。工作人员出门招呼对方，核对信息后归还钱包。广播再次响起时，林安已沿着站台走向自己的车厢。",
+        "event_writes": [],
+        "event_removal_proposals": [],
+        "interaction_writes": [],
+        "interaction_removal_proposals": []
+      }
+    ],
+    "node_removal_proposals": [],
+    "shared_entity_proposals": {
+      "assets": [],
+      "scenes": [],
+      "variables": []
+    },
+    "chapter_relation_proposals": [
+      {
+        "relation_ref": "new:chapter_edge:rain_station_exit",
+        "kind": "exit",
+        "source_chapter_ref": "fixture:chapter:rain_station",
+        "target_chapter_ref": null,
+        "reason": "本章两个结束节点均以未连接的 completed 出口结束作品，需要该章的 exit 允许关系。"
+      }
+    ],
+    "resource_binding_proposals": []
+  },
+  "questions": [],
+  "evidence_refs": [
+    {
+      "record_id": "fixture:chapter_design:rain_station",
+      "version": "v1",
+      "item_id": null,
+      "json_pointer": null
+    }
+  ],
+  "notes": [
+    "此为虚构 fixture：输入上下文已登记目标章节、指向该章的 entry 关系，以及引用的章节设计 v1；不代表真实 Nexo 记录或导入结果。",
+    "选择组为未排期编辑草稿，无媒体 URL 或伪造时长；ready 仅表示模型提交了待校验载荷，不表示已经确认、发布或可以播放。",
+    "节点 completed 默认进入失物招领结局；未来制作选择组时间轴时，若未点击选项，节点完成后沿此出口继续。"
+  ]
+}

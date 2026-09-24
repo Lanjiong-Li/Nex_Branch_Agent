@@ -1,0 +1,1305 @@
+{
+  "type": "object",
+  "properties": {
+    "result_kind": {
+      "type": "string",
+      "enum": [
+        "ready",
+        "needs_input"
+      ]
+    },
+    "payload": {
+      "anyOf": [
+        {
+          "title": "NexoChapterCreativePayloadV1",
+          "type": "object",
+          "properties": {
+            "chapter_ref": {
+              "type": "string",
+              "description": "Target existing or program-reserved chapter logical identity."
+            },
+            "chapter_title": {
+              "type": "string"
+            },
+            "chapter_summary": {
+              "type": "string"
+            },
+            "node_removal_proposals": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/RemovalProposal"
+              }
+            },
+            "shared_entity_proposals": {
+              "$ref": "#/$defs/SharedEntityProposals"
+            },
+            "chapter_relation_proposals": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ChapterRelationProposal"
+              }
+            },
+            "resource_binding_proposals": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ResourceBindingProposal"
+              }
+            },
+            "node_changes": {
+              "type": "array",
+              "items": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/NarrativeNodeWrite"
+                  },
+                  {
+                    "$ref": "#/$defs/GameNodeWrite"
+                  },
+                  {
+                    "$ref": "#/$defs/ConditionNodeWrite"
+                  },
+                  {
+                    "$ref": "#/$defs/VariableNodeWrite"
+                  },
+                  {
+                    "$ref": "#/$defs/JumpNodeWrite"
+                  }
+                ]
+              }
+            }
+          },
+          "required": [
+            "chapter_ref",
+            "chapter_title",
+            "chapter_summary",
+            "node_changes",
+            "node_removal_proposals",
+            "shared_entity_proposals",
+            "chapter_relation_proposals",
+            "resource_binding_proposals"
+          ],
+          "additionalProperties": false,
+          "description": "Step10 model creative projection. Not a Nexo EditorPackage and not scope=chapter. Harness applies explicit writes against pinned dependencies, validates proposals, then assembles an EditorPackage format_version=4 scope=project. Unmentioned objects/media are preserved. All writes/removals create a new draft artifact version; they never delete prior persisted artifacts or directly mutate Nexo."
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "questions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Question"
+      }
+    },
+    "evidence_refs": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/EvidenceRef"
+      }
+    },
+    "notes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "result_kind",
+    "payload",
+    "questions",
+    "evidence_refs",
+    "notes"
+  ],
+  "additionalProperties": false,
+  "description": "模型输出合同：ready 表示有待验证产物；needs_input 返回具体缺项。此字段不决定保存、确认、完成或生效状态。",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "BranchAgent_chapter_graph_v1",
+  "$defs": {
+    "AssetProposal": {
+      "type": "object",
+      "properties": {
+        "asset_ref": {
+          "type": "string",
+          "description": "A new logical identity, not an existing object to overwrite."
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "character",
+            "location"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "overview": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "asset_ref",
+        "kind",
+        "name",
+        "overview",
+        "description"
+      ],
+      "additionalProperties": false,
+      "description": "Only proposes a new project-shared asset. Existing assets are referenced, never copied or overwritten. No media URL, voices or factual resource metadata are generated."
+    },
+    "BooleanVariableProposal": {
+      "type": "object",
+      "properties": {
+        "variable_ref": {
+          "type": "string"
+        },
+        "key": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "value_type": {
+          "type": "string",
+          "const": "boolean"
+        },
+        "initial_value": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "variable_ref",
+        "key",
+        "name",
+        "description",
+        "value_type",
+        "initial_value"
+      ],
+      "additionalProperties": false,
+      "description": "Only a new variable proposal. Existing stable key/type/initial state is never replaced; code checks key uniqueness, reserved words and references."
+    },
+    "BranchWrite": {
+      "type": "object",
+      "properties": {
+        "branch_ref": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "condition_dsl": {
+          "type": "string"
+        },
+        "dsl_version": {
+          "type": "integer",
+          "const": 1
+        },
+        "sort_order": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "branch_ref",
+        "name",
+        "condition_dsl",
+        "dsl_version",
+        "sort_order"
+      ],
+      "additionalProperties": false,
+      "description": "Conditions use stable variable keys; branch sorting is unique within the node. The target is stored in edges, not here."
+    },
+    "ChapterRelationProposal": {
+      "type": "object",
+      "properties": {
+        "relation_ref": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "entry",
+            "transition",
+            "exit"
+          ]
+        },
+        "source_chapter_ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "target_chapter_ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "relation_ref",
+        "kind",
+        "source_chapter_ref",
+        "target_chapter_ref",
+        "reason"
+      ],
+      "additionalProperties": false,
+      "description": "Additive proposal only. Code validates entry null->chapter, transition chapter->chapter, exit chapter->null, uniqueness and global consistency. It cannot silently replace a pre-existing chapter graph."
+    },
+    "ChoiceGroupWrite": {
+      "type": "object",
+      "properties": {
+        "operation": {
+          "type": "string",
+          "enum": [
+            "create",
+            "update"
+          ]
+        },
+        "element_ref": {
+          "type": "string"
+        },
+        "config_version": {
+          "type": "integer",
+          "const": 1
+        },
+        "schedule_action": {
+          "type": "string",
+          "enum": [
+            "preserve",
+            "set",
+            "unschedule"
+          ]
+        },
+        "schedule": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Schedule"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "kind": {
+          "type": "string",
+          "const": "choice_group"
+        },
+        "name": {
+          "type": "string"
+        },
+        "prompt_text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "choice_writes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ChoiceWrite"
+          }
+        },
+        "choice_removal_proposals": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RemovalProposal"
+          }
+        }
+      },
+      "required": [
+        "operation",
+        "element_ref",
+        "config_version",
+        "schedule_action",
+        "schedule",
+        "kind",
+        "name",
+        "prompt_text",
+        "choice_writes",
+        "choice_removal_proposals"
+      ],
+      "additionalProperties": false,
+      "description": "A narrative timeline element, never a new node kind. create cannot preserve a missing schedule. set requires Schedule; unschedule uses all-null scheduling. For update, prompt_text=null preserves existing optional presentation text."
+    },
+    "ChoiceWrite": {
+      "type": "object",
+      "properties": {
+        "choice_ref": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "sort_order": {
+          "type": "integer"
+        },
+        "condition_dsl": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "dsl_version": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "const": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "choice_ref",
+        "label",
+        "sort_order",
+        "condition_dsl",
+        "dsl_version"
+      ],
+      "additionalProperties": false,
+      "description": "Only creative fields are changed; preserve style_config and other existing presentation fields. Each choice needs its clicked outlet on the enclosing narrative node."
+    },
+    "ConditionNodeWrite": {
+      "type": "object",
+      "properties": {
+        "operation": {
+          "type": "string",
+          "enum": [
+            "create",
+            "update"
+          ]
+        },
+        "node_ref": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "edge_writes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EdgeWrite"
+          }
+        },
+        "edge_removal_proposals": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RemovalProposal"
+          }
+        },
+        "kind": {
+          "type": "string",
+          "const": "condition"
+        },
+        "boundary": {
+          "type": "string",
+          "const": "none"
+        },
+        "branch_writes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/BranchWrite"
+          }
+        },
+        "branch_removal_proposals": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RemovalProposal"
+          }
+        }
+      },
+      "required": [
+        "operation",
+        "node_ref",
+        "title",
+        "edge_writes",
+        "edge_removal_proposals",
+        "kind",
+        "boundary",
+        "branch_writes",
+        "branch_removal_proposals"
+      ],
+      "additionalProperties": false
+    },
+    "EdgeWrite": {
+      "type": "object",
+      "properties": {
+        "edge_ref": {
+          "type": "string"
+        },
+        "source_kind": {
+          "type": "string",
+          "enum": [
+            "node",
+            "condition_branch",
+            "choice",
+            "qte"
+          ]
+        },
+        "source_ref": {
+          "type": "string"
+        },
+        "result_key": {
+          "type": "string",
+          "enum": [
+            "completed",
+            "default",
+            "jumped",
+            "matched",
+            "clicked",
+            "success",
+            "failure"
+          ]
+        },
+        "action": {
+          "type": "string",
+          "enum": [
+            "jump",
+            "continue"
+          ]
+        },
+        "target_kind": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "node",
+                "chapter"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "target_ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "edge_ref",
+        "source_kind",
+        "source_ref",
+        "result_key",
+        "action",
+        "target_kind",
+        "target_ref"
+      ],
+      "additionalProperties": false,
+      "description": "Stable export edge identity is mapped from edge_ref. Business validation checks source/result/action and target combinations. A null target is an unconnected draft or valid terminal completed outlet, not an invented node."
+    },
+    "EventWrite": {
+      "type": "object",
+      "properties": {
+        "event_ref": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "sort_order": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "event_ref",
+        "title",
+        "description",
+        "prompt",
+        "sort_order"
+      ],
+      "additionalProperties": false,
+      "description": "Upsert only this named event. Preserve unmentioned events; removal uses explicit removal proposals."
+    },
+    "EvidenceRef": {
+      "type": "object",
+      "properties": {
+        "record_id": {
+          "type": "string",
+          "description": "真实来源记录或产物 ID；由 Harness 验证存在性与项目归属。"
+        },
+        "version": {
+          "anyOf": [
+            {
+              "type": "string",
+              "description": "版本化记录必须提供固定版本；普通消息可为 null。"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "item_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "description": "记录内部的稳定条目 ID。"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "json_pointer": {
+          "anyOf": [
+            {
+              "type": "string",
+              "description": "需要定位字段时使用 JSON Pointer。"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "record_id",
+        "version",
+        "item_id",
+        "json_pointer"
+      ],
+      "additionalProperties": false,
+      "description": "模型引用已存在记录，不由模型签发确认、版本或审计身份。"
+    },
+    "GameNodeWrite": {
+      "type": "object",
+      "properties": {
+        "operation": {
+          "type": "string",
+          "enum": [
+            "create",
+            "update"
+          ]
+        },
+        "node_ref": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "edge_writes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EdgeWrite"
+          }
+        },
+        "edge_removal_proposals": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RemovalProposal"
+          }
+        },
+        "kind": {
+          "type": "string",
+          "const": "game"
+        },
+        "boundary": {
+          "type": "string",
+          "enum": [
+            "none",
+            "chapter_start",
+            "chapter_end"
+          ]
+        },
+        "game_binding_action": {
+          "type": "string",
+          "enum": [
+            "preserve",
+            "bind",
+            "clear"
+          ]
+        },
+        "game_binding_ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "operation",
+        "node_ref",
+        "title",
+        "edge_writes",
+        "edge_removal_proposals",
+        "kind",
+        "boundary",
+        "game_binding_action",
+        "game_binding_ref"
+      ],
+      "additionalProperties": false,
+      "description": "Resolve a trusted existing game binding to game.url in code. Never invent a URL. A missing URL is an editable draft; preserve is only valid for an existing node, bind requires a known binding."
+    },
+    "JumpNodeWrite": {
+      "type": "object",
+      "properties": {
+        "operation": {
+          "type": "string",
+          "enum": [
+            "create",
+            "update"
+          ]
+        },
+        "node_ref": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "edge_writes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EdgeWrite"
+          }
+        },
+        "edge_removal_proposals": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RemovalProposal"
+          }
+        },
+        "kind": {
+          "type": "string",
+          "const": "jump"
+        },
+        "boundary": {
+          "type": "string",
+          "const": "none"
+        }
+      },
+      "required": [
+        "operation",
+        "node_ref",
+        "title",
+        "edge_writes",
+        "edge_removal_proposals",
+        "kind",
+        "boundary"
+      ],
+      "additionalProperties": false,
+      "description": "Jump targets are expressed in edges and must respect a direct allowed chapter relation."
+    },
+    "NarrativeNodeWrite": {
+      "type": "object",
+      "properties": {
+        "operation": {
+          "type": "string",
+          "enum": [
+            "create",
+            "update"
+          ]
+        },
+        "node_ref": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "edge_writes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EdgeWrite"
+          }
+        },
+        "edge_removal_proposals": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RemovalProposal"
+          }
+        },
+        "kind": {
+          "type": "string",
+          "const": "narrative"
+        },
+        "boundary": {
+          "type": "string",
+          "enum": [
+            "none",
+            "chapter_start",
+            "chapter_end"
+          ]
+        },
+        "scene_ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "synopsis": {
+          "type": "string"
+        },
+        "body": {
+          "type": "string"
+        },
+        "event_writes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EventWrite"
+          }
+        },
+        "event_removal_proposals": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RemovalProposal"
+          }
+        },
+        "interaction_writes": {
+          "type": "array",
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ChoiceGroupWrite"
+              },
+              {
+                "$ref": "#/$defs/QteWrite"
+              }
+            ]
+          }
+        },
+        "interaction_removal_proposals": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RemovalProposal"
+          }
+        }
+      },
+      "required": [
+        "operation",
+        "node_ref",
+        "title",
+        "edge_writes",
+        "edge_removal_proposals",
+        "kind",
+        "boundary",
+        "scene_ref",
+        "synopsis",
+        "body",
+        "event_writes",
+        "event_removal_proposals",
+        "interaction_writes",
+        "interaction_removal_proposals"
+      ],
+      "additionalProperties": false,
+      "description": "Writes the explicit narrative creative fields and named child objects only. Never replaces the whole timeline, media elements, tracks, favorites, layout or audit fields. For update, body/synopsis/scene_ref/boundary/title are explicit values, so null scene_ref intentionally detaches a scene."
+    },
+    "NumberVariableProposal": {
+      "type": "object",
+      "properties": {
+        "variable_ref": {
+          "type": "string"
+        },
+        "key": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "value_type": {
+          "type": "string",
+          "const": "number"
+        },
+        "initial_value": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "variable_ref",
+        "key",
+        "name",
+        "description",
+        "value_type",
+        "initial_value"
+      ],
+      "additionalProperties": false,
+      "description": "Only a new variable proposal. Existing stable key/type/initial state is never replaced; code checks key uniqueness, reserved words and references."
+    },
+    "QteWrite": {
+      "type": "object",
+      "properties": {
+        "operation": {
+          "type": "string",
+          "enum": [
+            "create",
+            "update"
+          ]
+        },
+        "element_ref": {
+          "type": "string"
+        },
+        "config_version": {
+          "type": "integer",
+          "const": 1
+        },
+        "schedule_action": {
+          "type": "string",
+          "enum": [
+            "preserve",
+            "set",
+            "unschedule"
+          ]
+        },
+        "schedule": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Schedule"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "kind": {
+          "type": "string",
+          "const": "qte"
+        },
+        "name": {
+          "type": "string"
+        },
+        "prompt_text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "gesture": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TapParameters"
+            },
+            {
+              "$ref": "#/$defs/SwipeParameters"
+            }
+          ]
+        },
+        "failure_enabled": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "operation",
+        "element_ref",
+        "config_version",
+        "schedule_action",
+        "schedule",
+        "kind",
+        "name",
+        "prompt_text",
+        "gesture",
+        "failure_enabled"
+      ],
+      "additionalProperties": false,
+      "description": "Map gesture to qte.kind and qte.parameters; retain success and failure stable exits even when failure is disabled. Existing presentation styles, animations and hit regions are preserved unless an explicit scheduling change makes them invalid; invalidation must be resolved before acceptance."
+    },
+    "Question": {
+      "type": "object",
+      "properties": {
+        "question_id": {
+          "type": "string"
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "target_field": {
+          "anyOf": [
+            {
+              "type": "string",
+              "description": "当前 payload 内的 JSON Pointer。"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "suggested_answers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "blocking_scope": {
+          "type": "string",
+          "description": "明确说明哪些工作依赖此回答。"
+        }
+      },
+      "required": [
+        "question_id",
+        "prompt",
+        "reason",
+        "target_field",
+        "suggested_answers",
+        "blocking_scope"
+      ],
+      "additionalProperties": false
+    },
+    "RemovalProposal": {
+      "type": "object",
+      "properties": {
+        "ref": {
+          "type": "string",
+          "description": "Existing stable logical reference; removal is a proposal until validated and authorized."
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "ref",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "ResourceBindingProposal": {
+      "type": "object",
+      "properties": {
+        "element_ref": {
+          "type": "string",
+          "description": "Existing media element logical identity, not an interaction."
+        },
+        "resource_key": {
+          "type": "string",
+          "description": "Must already exist in the trusted project resource catalog."
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "element_ref",
+        "resource_key",
+        "reason"
+      ],
+      "additionalProperties": false,
+      "description": "Optional explicit resource replacement proposal. No URLs, media facts, durations or new media elements are authored by this payload. Code validates resource type and existing trim/scheduling compatibility; otherwise reject rather than silently clearing or rescheduling."
+    },
+    "SceneProposal": {
+      "type": "object",
+      "properties": {
+        "scene_ref": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "character_refs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "location_refs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "scene_ref",
+        "name",
+        "summary",
+        "character_refs",
+        "location_refs"
+      ],
+      "additionalProperties": false,
+      "description": "New project-shared scene proposal; all listed references must resolve to existing or accepted proposed assets of the correct kind."
+    },
+    "Schedule": {
+      "type": "object",
+      "properties": {
+        "track_ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "start_ticks": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "end_ticks": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "active_start_ticks": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "active_end_ticks": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "track_ref",
+        "start_ticks",
+        "end_ticks",
+        "active_start_ticks",
+        "active_end_ticks"
+      ],
+      "additionalProperties": false,
+      "description": "Nexo uses 120000 ticks/second. track/start/end must be all non-null or all null. Active values form a pair. New unscheduled elements use all null; no hit regions are fabricated."
+    },
+    "SharedEntityProposals": {
+      "type": "object",
+      "properties": {
+        "assets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AssetProposal"
+          }
+        },
+        "scenes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SceneProposal"
+          }
+        },
+        "variables": {
+          "type": "array",
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/NumberVariableProposal"
+              },
+              {
+                "$ref": "#/$defs/StringVariableProposal"
+              },
+              {
+                "$ref": "#/$defs/BooleanVariableProposal"
+              }
+            ]
+          }
+        }
+      },
+      "required": [
+        "assets",
+        "scenes",
+        "variables"
+      ],
+      "additionalProperties": false,
+      "description": "Changes require project-level validation before commit; parallel chapters cannot independently redefine the same identity/key."
+    },
+    "StringVariableProposal": {
+      "type": "object",
+      "properties": {
+        "variable_ref": {
+          "type": "string"
+        },
+        "key": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "value_type": {
+          "type": "string",
+          "const": "string"
+        },
+        "initial_value": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "variable_ref",
+        "key",
+        "name",
+        "description",
+        "value_type",
+        "initial_value"
+      ],
+      "additionalProperties": false,
+      "description": "Only a new variable proposal. Existing stable key/type/initial state is never replaced; code checks key uniqueness, reserved words and references."
+    },
+    "SwipeParameters": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "swipe"
+        },
+        "direction": {
+          "type": "string",
+          "enum": [
+            "up",
+            "down",
+            "left",
+            "right"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "direction"
+      ],
+      "additionalProperties": false
+    },
+    "TapParameters": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "tap"
+        },
+        "required_taps": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "kind",
+        "required_taps"
+      ],
+      "additionalProperties": false,
+      "description": "Business validator enforces 1..1000 taps."
+    },
+    "VariableNodeWrite": {
+      "type": "object",
+      "properties": {
+        "operation": {
+          "type": "string",
+          "enum": [
+            "create",
+            "update"
+          ]
+        },
+        "node_ref": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "edge_writes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EdgeWrite"
+          }
+        },
+        "edge_removal_proposals": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RemovalProposal"
+          }
+        },
+        "kind": {
+          "type": "string",
+          "const": "variable"
+        },
+        "boundary": {
+          "type": "string",
+          "const": "none"
+        },
+        "script_dsl": {
+          "type": "string"
+        },
+        "dsl_version": {
+          "type": "integer",
+          "const": 1
+        }
+      },
+      "required": [
+        "operation",
+        "node_ref",
+        "title",
+        "edge_writes",
+        "edge_removal_proposals",
+        "kind",
+        "boundary",
+        "script_dsl",
+        "dsl_version"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

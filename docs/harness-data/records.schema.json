@@ -1,0 +1,3354 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "BranchHarnessStoredRecord_v1",
+  "description": "Harness 服务端记录契约；不作为 Agent.output_type，也不加入 nexo_graph。字段齐备、额外字段禁止；跨记录、权限和事务约束见 README/storage-and-api。",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/Project"
+    },
+    {
+      "$ref": "#/$defs/Conversation"
+    },
+    {
+      "$ref": "#/$defs/HistoryRecord"
+    },
+    {
+      "$ref": "#/$defs/WorkSession"
+    },
+    {
+      "$ref": "#/$defs/SessionItem"
+    },
+    {
+      "$ref": "#/$defs/Artifact"
+    },
+    {
+      "$ref": "#/$defs/ArtifactVersion"
+    },
+    {
+      "$ref": "#/$defs/ArtifactState"
+    },
+    {
+      "$ref": "#/$defs/Decision"
+    },
+    {
+      "$ref": "#/$defs/Confirmation"
+    },
+    {
+      "$ref": "#/$defs/Task"
+    },
+    {
+      "$ref": "#/$defs/Run"
+    },
+    {
+      "$ref": "#/$defs/QueuedRequest"
+    },
+    {
+      "$ref": "#/$defs/Checkpoint"
+    },
+    {
+      "$ref": "#/$defs/ConfigVersion"
+    },
+    {
+      "$ref": "#/$defs/ContextSnapshot"
+    },
+    {
+      "$ref": "#/$defs/ModelCall"
+    },
+    {
+      "$ref": "#/$defs/ToolCall"
+    },
+    {
+      "$ref": "#/$defs/Dependency"
+    },
+    {
+      "$ref": "#/$defs/Blob"
+    },
+    {
+      "$ref": "#/$defs/RuntimeEvent"
+    },
+    {
+      "$ref": "#/$defs/IdempotencyRecord"
+    }
+  ],
+  "$defs": {
+    "Money": {
+      "type": "object",
+      "properties": {
+        "amount": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]+)?$"
+        },
+        "currency": {
+          "type": "string",
+          "pattern": "^[A-Z]{3}$"
+        }
+      },
+      "required": [
+        "amount",
+        "currency"
+      ],
+      "additionalProperties": false,
+      "description": "非负十进制字符串；不同币种不可直接相加。"
+    },
+    "EvidenceRef": {
+      "type": "object",
+      "properties": {
+        "record_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "item_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "json_pointer": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^(?:/(?:[^~/]|~[01])*)*$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "record_id",
+        "version",
+        "item_id",
+        "json_pointer"
+      ],
+      "additionalProperties": false,
+      "description": "兼容既有 output_type。Harness 版本用十进制正整数字符串；普通不可变消息 version=null。record_id 指逻辑产物/决策 ID，不能用最新版本替换固定版本。"
+    },
+    "Selection": {
+      "type": "object",
+      "properties": {
+        "item_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "json_pointer": {
+          "type": "string",
+          "pattern": "^(?:/(?:[^~/]|~[01])*)*$"
+        }
+      },
+      "required": [
+        "item_id",
+        "json_pointer"
+      ],
+      "additionalProperties": false,
+      "description": "范围固定在 subject 版本；全对象用 item_id=null/json_pointer=\"\"。条目选择必须带稳定 item_id，路径仅用于定位字段。"
+    },
+    "Scope": {
+      "type": "object",
+      "properties": {
+        "stage": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 11
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "chapter_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 0
+        },
+        "branch_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 0
+        },
+        "target_refs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EvidenceRef"
+          },
+          "minItems": 0
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "stage",
+        "chapter_ids",
+        "branch_ids",
+        "target_refs",
+        "description"
+      ],
+      "additionalProperties": false
+    },
+    "Content": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "storage": {
+              "const": "inline_text"
+            },
+            "text": {
+              "type": "string",
+              "minLength": 0
+            }
+          },
+          "required": [
+            "storage",
+            "text"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "storage": {
+              "const": "inline_json"
+            },
+            "value": {
+              "description": "按所绑定的协议或业务 Schema 进一步验证的 JSON 值；不得包含密钥、认证头或不可序列化对象。"
+            }
+          },
+          "required": [
+            "storage",
+            "value"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "storage": {
+              "const": "blob"
+            },
+            "blob_id": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "required": [
+            "storage",
+            "blob_id"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "description": "小内容直接保存；大原作、Graph 和附件引用 Blob。业务内容仍按绑定 output_type 校验。"
+    },
+    "SchemaBinding": {
+      "type": "object",
+      "properties": {
+        "schema_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "required": [
+        "schema_id",
+        "version",
+        "sha256"
+      ],
+      "additionalProperties": false
+    },
+    "Error": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string",
+          "minLength": 1
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        },
+        "retryable": {
+          "type": "boolean"
+        },
+        "details": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "code",
+        "message",
+        "retryable",
+        "details"
+      ],
+      "additionalProperties": false
+    },
+    "Usage": {
+      "type": "object",
+      "properties": {
+        "input_tokens": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "output_tokens": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cached_input_tokens": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reasoning_tokens": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "active_ms": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "estimated_cost": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Money"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reported_cost": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Money"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "pricing_version": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "input_tokens",
+        "output_tokens",
+        "cached_input_tokens",
+        "reasoning_tokens",
+        "active_ms",
+        "estimated_cost",
+        "reported_cost",
+        "pricing_version"
+      ],
+      "additionalProperties": false,
+      "description": "null 表示未知。cached_input 是 input 子集，reasoning 是 output 子集，不重复累加。金额优先采用可核验 reported_cost，否则使用有版本依据的估算并显示估算状态。 active_ms=null 表示耗时计量不完整，不能作为0使用。"
+    },
+    "Budget": {
+      "type": "object",
+      "properties": {
+        "max_active_seconds": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "max_cost": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Money"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "disabled_limits": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "active_seconds",
+              "cost"
+            ]
+          },
+          "minItems": 0
+        }
+      },
+      "required": [
+        "max_active_seconds",
+        "max_cost",
+        "disabled_limits"
+      ],
+      "additionalProperties": false,
+      "description": "null 为未配置；只有 disabled_limits 显式包含该项才代表关闭相应上限。启用项必须在运行前解析为具体限额。"
+    },
+    "Cursor": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "dispatch_agent",
+            "before_model",
+            "after_tool",
+            "commit_artifact",
+            "await_user",
+            "stage_complete"
+          ]
+        },
+        "stage": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 11
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "chapter_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "batch_key": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "handler_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "state": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "handler_version=runtime.v1时，还须通过docs/runtime/checkpoint-state.schema.json；恢复前核验类型、项目引用、额度账本和当前控制状态。"
+        }
+      },
+      "required": [
+        "kind",
+        "stage",
+        "chapter_id",
+        "batch_key",
+        "handler_version",
+        "state"
+      ],
+      "additionalProperties": false,
+      "description": "可序列化的应用恢复位置，state 由指定 handler_version 的代码验证；不存进程句柄，不执行任意反序列化代码。"
+    },
+    "Project": {
+      "type": "object",
+      "properties": {
+        "record_type": {
+          "const": "project"
+        },
+        "schema_version": {
+          "const": "1.0.0"
+        },
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "project_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        },
+        "row_version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "owner_account_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "active",
+            "archived"
+          ]
+        },
+        "nexo_project_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "record_type",
+        "schema_version",
+        "id",
+        "project_id",
+        "created_at",
+        "updated_at",
+        "row_version",
+        "owner_account_id",
+        "title",
+        "state",
+        "nexo_project_id"
+      ],
+      "additionalProperties": false,
+      "description": "Harness 项目身份与 Graph Project.id 分离。project_id=id；平台账号 ID 来自可信认证。"
+    },
+    "Conversation": {
+      "type": "object",
+      "properties": {
+        "record_type": {
+          "const": "conversation"
+        },
+        "schema_version": {
+          "const": "1.0.0"
+        },
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "project_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        },
+        "row_version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "active",
+            "archived"
+          ]
+        },
+        "last_message_seq": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "record_type",
+        "schema_version",
+        "id",
+        "project_id",
+        "created_at",
+        "updated_at",
+        "row_version",
+        "title",
+        "state",
+        "last_message_seq"
+      ],
+      "additionalProperties": false
+    },
+    "HistoryRecord": {
+      "type": "object",
+      "properties": {
+        "record_type": {
+          "const": "history_record"
+        },
+        "schema_version": {
+          "const": "1.0.0"
+        },
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "project_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        },
+        "conversation_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "session_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "task_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "run_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "role": {
+          "type": "string",
+          "enum": [
+            "user",
+            "assistant",
+            "system",
+            "developer",
+            "tool"
+          ]
+        },
+        "visibility": {
+          "type": "string",
+          "enum": [
+            "conversation",
+            "internal"
+          ]
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "message",
+            "model_input",
+            "model_output",
+            "tool_call",
+            "tool_result",
+            "error"
+          ]
+        },
+        "content": {
+          "$ref": "#/$defs/Content"
+        },
+        "attachment_blob_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "minItems": 0
+        },
+        "source_message_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "operation_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "provider_item_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "record_type",
+        "schema_version",
+        "id",
+        "project_id",
+        "created_at",
+        "conversation_id",
+        "sequence",
+        "session_id",
+        "task_id",
+        "run_id",
+        "role",
+        "visibility",
+        "kind",
+        "content",
+        "attachment_blob_ids",
+        "source_message_id",
+        "operation_id",
+        "provider_item_id"
+      ],
+      "additionalProperties": false,
+      "description": "追加式原始归档。流式片段只作为 RuntimeEvent；SDK 工具调用和结果按 operation_id/provider_item_id 对应。"
+    },
+    "WorkSession": {
+      "type": "object",
+      "properties": {
+        "record_type": {
+          "const": "work_session"
+        },
+        "schema_version": {
+          "const": "1.0.0"
+        },
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "project_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        },
+        "row_version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "conversation_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "session_key": {
+          "type": "string",
+          "minLength": 1
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "active",
+            "archived"
+          ]
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "latest_summary_ref": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EvidenceRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "last_item_seq": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "lease_owner": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "lease_expires_at": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "Z$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fencing_token": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "record_type",
+        "schema_version",
+        "id",
+        "project_id",
+        "created_at",
+        "updated_at",
+        "row_version",
+        "conversation_id",
+        "session_key",
+        "scope",
+        "state",
+        "generation",
+        "latest_summary_ref",
+        "last_item_seq",
+        "lease_owner",
+        "lease_expires_at",
+        "fencing_token"
+      ],
+      "additionalProperties": false
+    },
+    "SessionItem": {
+      "type": "object",
+      "properties": {
+        "record_type": {
+          "const": "session_item"
+        },
+        "schema_version": {
+          "const": "1.0.0"
+        },
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "project_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        },
+        "session_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "sdk_item": {
+          "$ref": "#/$defs/Content"
+        },
+        "history_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "minItems": 0
+        },
+        "summary_ref": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EvidenceRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "record_type",
+        "schema_version",
+        "id",
+        "project_id",
+        "created_at",
+        "session_id",
+        "generation",
+        "sequence",
+        "sdk_item",
+        "history_ids",
+        "summary_ref"
+      ],
+      "additionalProperties": false,
+      "description": "可重建工作历史；原始调用另归档。压缩时切换 generation，保留摘要和 ContextSnapshot 依据。",
+      "allOf": [
+        {
+          "anyOf": [
+            {
+              "properties": {
+                "history_ids": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "minItems": 1
+                }
+              }
+            },
+            {
+              "properties": {
+                "summary_ref": {
+                  "$ref": "#/$defs/EvidenceRef"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "Artifact": {
+      "type": "object",
+      "properties": {
+        "record_type": {
+          "const": "artifact"
+        },
+        "schema_version": {
+          "const": "1.0.0"
+        },
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "project_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        },
+        "row_version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "artifact_kind": {
+          "type": "string",
+          "minLength": 1
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "latest_version": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "current_effective_version": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "record_type",
+        "schema_version",
+        "id",
+        "project_id",
+        "created_at",
+        "updated_at",
+        "row_version",
+        "artifact_kind",
+        "scope",
+        "latest_version",
+        "current_effective_version"
+      ],
+      "additionalProperties": false,
+      "description": "完整范围有效才更新 current_effective_version；部分确认通过 Confirmation 与 ArtifactState 查询，不伪装为全量有效。"
+    },
+    "ArtifactVersion": {
+      "type": "object",
+      "properties": {
+        "record_type": {
+          "const": "artifact_version"
+        },
+        "schema_version": {
+          "const": "1.0.0"
+        },
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "project_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        },
+        "artifact_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "parent_version": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "content": {
+          "$ref": "#/$defs/Content"
+        },
+        "content_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "output_schema": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SchemaBinding"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source_refs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EvidenceRef"
+          },
+          "minItems": 0
+        },
+        "dependency_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "minItems": 0
+        },
+        "producer_run_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "config_version_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "origin": {
+          "type": "string",
+          "enum": [
+            "model",
+            "user",
+            "program",
+            "import"
+          ]
+        }
+      },
+      "required": [
+        "record_type",
+        "schema_version",
+        "id",
+        "project_id",
+        "created_at",
+        "artifact_id",
+        "version",
+        "parent_version",
+        "content",
+        "content_sha256",
+        "output_schema",
+        "source_refs",
+        "dependency_ids",
+        "producer_run_id",
+        "config_version_id",
+        "origin"
+      ],
+      "additionalProperties": false,
+      "description": "不可变内容版本。纯文本 work_summary、source_text、source_global_analysis 与 source_character_analysis 可无 output_schema；历史 source_analysis 仍可读取；业务模型结构化输出必须绑定 Schema。"
+    },
+    "ArtifactState": {
+      "type": "object",
+      "properties": {
+        "record_type": {
+          "const": "artifact_state"
+        },
+        "schema_version": {
+          "const": "1.0.0"
+        },
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "project_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        },
+        "row_version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "artifact_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "artifact_version_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "confirmation_status": {
+          "type": "string",
+          "enum": [
+            "unconfirmed",
+            "partial",
+            "confirmed",
+            "not_required"
+          ]
+        },
+        "dependency_status": {
+          "type": "string",
+          "enum": [
+            "valid",
+            "review_required",
+            "invalid"
+          ]
+        },
+        "quality_status": {
+          "type": "string",
+          "enum": [
+            "unchecked",
+            "passed",
+            "failed",
+            "inconclusive"
+          ]
+        },
+        "effective_selections": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Selection"
+          },
+          "minItems": 0
+        },
+        "confirmation_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "minItems": 0
+        },
+        "check_record_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "minItems": 0
+        }
+      },
+      "required": [
+        "record_type",
+        "schema_version",
+        "id",
+        "project_id",
+        "created_at",
+        "updated_at",
+        "row_version",
+        "artifact_id",
+        "artifact_version_id",
+        "version",
+        "confirmation_status",
+        "dependency_status",
+        "quality_status",
+        "effective_selections",
+        "confirmation_ids",
+        "check_record_ids"
+      ],
+      "additionalProperties": false,
+      "description": "可变状态投影；每次变化有 RuntimeEvent。confirmed 不等于可交付，仍受依赖与质量状态约束。"
+    },
+    "Decision": {
+      "type": "object",
+      "properties": {
+        "record_type": {
+          "const": "decision"
+        },
+        "schema_version": {
+          "const": "1.0.0"
+        },
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "project_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        },
+        "decision_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "topic": {
+          "type": "string",
+          "minLength": 1
+        },
+        "value": {
+          "$ref": "#/$defs/Content"
+        },
+        "origin": {
+          "type": "string",
+          "enum": [
+            "user",
+            "agent",
+            "program"
+          ]
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "proposed",
+            "confirmed",
+            "rejected",
+            "superseded"
+          ]
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "source_refs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EvidenceRef"
+          },
+          "minItems": 1
+        },
+        "supersedes_ref": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EvidenceRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "record_type",
+        "schema_version",
+        "id",
+        "project_id",
+        "created_at",
+        "decision_id",
+        "version",
+        "topic",
+        "value",
+        "origin",
+        "status",
+        "reason",
+        "scope",
+        "source_refs",
+        "supersedes_ref"
+      ],
+      "additionalProperties": false,
+      "description": "decision_id 为稳定逻辑 ID，id 为本版记录 ID。status 由程序依据真实表态签发；改变决策写新版本。"
+    },
+    "Confirmation": {
+      "type": "object",
+      "properties": {
+        "record_type": {
+          "const": "confirmation"
+        },
+        "schema_version": {
+          "const": "1.0.0"
+        },
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "project_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        },
+        "subject": {
+          "$ref": "#/$defs/EvidenceRef"
+        },
+        "selections": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Selection"
+          },
+          "minItems": 1
+        },
+        "action": {
+          "type": "string",
+          "enum": [
+            "confirm",
+            "revoke"
+          ]
+        },
+        "basis": {
+          "type": "string",
+          "enum": [
+            "user_statement",
+            "unchanged_scope"
+          ]
+        },
+        "source_message_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "minItems": 1
+        },
+        "carried_from_confirmation_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "minItems": 0
+        },
+        "scope_mapping_ref": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EvidenceRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "revokes_confirmation_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "minItems": 0
+        },
+        "applied_run_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "record_type",
+        "schema_version",
+        "id",
+        "project_id",
+        "created_at",
+        "subject",
+        "selections",
+        "action",
+        "basis",
+        "source_message_ids",
+        "carried_from_confirmation_ids",
+        "scope_mapping_ref",
+        "revokes_confirmation_ids",
+        "applied_run_id"
+      ],
+      "additionalProperties": false,
+      "description": "只保存已校验的确认/撤回。unchanged_scope 需要旧确认及逐条范围映射证据，不冒充新的用户表态。",
+      "allOf": [
+        {
+          "properties": {
+            "subject": {
+              "properties": {
+                "version": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "basis": {
+                "const": "unchanged_scope"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "carried_from_confirmation_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "minItems": 1
+              },
+              "scope_mapping_ref": {
+                "$ref": "#/$defs/EvidenceRef"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "revoke"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "revokes_confirmation_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "minItems": 1
+              }
+            }
+          }
+        }
+      ]
+    },
+    "Task": {
+      "type": "object",
+      "properties": {
+        "record_type": {
+          "const": "task"
+        },
+        "schema_version": {
+          "const": "1.0.0"
+        },
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "project_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        },
+        "row_version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "conversation_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "parent_task_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "budget_root_task_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "requested_by_message_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "intent": {
+          "type": "string",
+          "enum": [
+            "query",
+            "generate",
+            "modify",
+            "confirm",
+            "continue",
+            "jump",
+            "impact_analysis",
+            "review",
+            "summarize"
+          ]
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "queued",
+            "running",
+            "waiting_user",
+            "paused",
+            "stopping",
+            "stopped",
+            "succeeded",
+            "failed"
+          ]
+        },
+        "pause_reason": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "budget": {
+          "$ref": "#/$defs/Budget"
+        },
+        "usage": {
+          "$ref": "#/$defs/Usage"
+        },
+        "repair_rounds_used": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "current_run_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "latest_checkpoint_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "record_type",
+        "schema_version",
+        "id",
+        "project_id",
+        "created_at",
+        "updated_at",
+        "row_version",
+        "conversation_id",
+        "parent_task_id",
+        "budget_root_task_id",
+        "requested_by_message_id",
+        "intent",
+        "scope",
+        "state",
+        "pause_reason",
+        "budget",
+        "usage",
+        "repair_rounds_used",
+        "current_run_id",
+        "latest_checkpoint_id"
+      ],
+      "additionalProperties": false,
+      "description": "业务任务跨 Runner 调用与恢复存在；父子预算由模型调用账本汇总，usage 是投影，不重复计费。"
+    },
+    "Run": {
+      "type": "object",
+      "properties": {
+        "record_type": {
+          "const": "run"
+        },
+        "schema_version": {
+          "const": "1.0.0"
+        },
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "project_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        },
+        "row_version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "task_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "agent_key": {
+          "type": "string",
+          "minLength": 1
+        },
+        "session_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "created",
+            "running",
+            "waiting_user",
+            "paused",
+            "stopping",
+            "stopped",
+            "succeeded",
+            "failed",
+            "interrupted"
+          ]
+        },
+        "config_version_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "input_refs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EvidenceRef"
+          },
+          "minItems": 0
+        },
+        "started_at": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "Z$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "finished_at": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "Z$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "max_turns": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "model_turns_used": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "latest_checkpoint_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Error"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "lease_owner": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "lease_expires_at": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "Z$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fencing_token": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "execution_kind": {
+          "type": "string",
+          "enum": [
+            "runner",
+            "recovery"
+          ]
+        }
+      },
+      "required": [
+        "record_type",
+        "schema_version",
+        "id",
+        "project_id",
+        "created_at",
+        "updated_at",
+        "row_version",
+        "task_id",
+        "agent_key",
+        "session_id",
+        "state",
+        "config_version_id",
+        "input_refs",
+        "started_at",
+        "finished_at",
+        "max_turns",
+        "model_turns_used",
+        "latest_checkpoint_id",
+        "error",
+        "lease_owner",
+        "lease_expires_at",
+        "fencing_token",
+        "execution_kind"
+      ],
+      "additionalProperties": false,
+      "description": "受控执行段。runner至多调用一次Runner；recovery只处理核对、已保存模型结果、工具或程序提交，禁止新模型请求。两者都需要有效租约。",
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "execution_kind": {
+                "const": "runner"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "max_turns": {
+                "minimum": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "execution_kind": {
+                "const": "recovery"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "max_turns": {
+                "const": 0
+              },
+              "model_turns_used": {
+                "const": 0
+              }
+            }
+          }
+        }
+      ]
+    },
+    "QueuedRequest": {
+      "type": "object",
+      "properties": {
+        "record_type": {
+          "const": "queued_request"
+        },
+        "schema_version": {
+          "const": "1.0.0"
+        },
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "project_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        },
+        "row_version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "conversation_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "source_message_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "steer",
+            "queue"
+          ]
+        },
+        "target_run_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "pending",
+            "applied",
+            "dispatched",
+            "cancelled",
+            "blocked"
+          ]
+        },
+        "adopted_run_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "adopted_context_snapshot_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "created_task_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resolved_at": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "Z$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "blocked_reason": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "record_type",
+        "schema_version",
+        "id",
+        "project_id",
+        "created_at",
+        "updated_at",
+        "row_version",
+        "conversation_id",
+        "source_message_id",
+        "mode",
+        "target_run_id",
+        "sequence",
+        "scope",
+        "state",
+        "adopted_run_id",
+        "adopted_context_snapshot_id",
+        "created_task_id",
+        "resolved_at",
+        "blocked_reason"
+      ],
+      "additionalProperties": false,
+      "description": "保存提交时用户选择。Steer 纳入与 Queue 调度分别有实际回执，不以消息收到冒充已执行。",
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "steer"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "target_run_id": {
+                "type": "string",
+                "format": "uuid"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "Checkpoint": {
+      "type": "object",
+      "properties": {
+        "record_type": {
+          "const": "checkpoint"
+        },
+        "schema_version": {
+          "const": "1.0.0"
+        },
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "project_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        },
+        "task_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "run_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "cursor": {
+          "$ref": "#/$defs/Cursor"
+        },
+        "session_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "session_generation": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "config_version_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "input_refs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EvidenceRef"
+          },
+          "minItems": 0
+        },
+        "adopted_message_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "minItems": 0
+        },
+        "completed_operation_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "minItems": 0
+        },
+        "unresolved_operation_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "minItems": 0
+        },
+        "usage": {
+          "$ref": "#/$defs/Usage"
+        },
+        "repair_rounds_used": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "pause_reason": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "record_type",
+        "schema_version",
+        "id",
+        "project_id",
+        "created_at",
+        "task_id",
+        "run_id",
+        "cursor",
+        "session_id",
+        "session_generation",
+        "config_version_id",
+        "input_refs",
+        "adopted_message_ids",
+        "completed_operation_ids",
+        "unresolved_operation_ids",
+        "usage",
+        "repair_rounds_used",
+        "pause_reason"
+      ],
+      "additionalProperties": false,
+      "description": "不可变应用检查点。恢复时重新核对当前计数、依赖和操作账本，不能将旧快照计数覆盖回零。"
+    },
+    "ConfigVersion": {
+      "type": "object",
+      "properties": {
+        "record_type": {
+          "const": "config_version"
+        },
+        "schema_version": {
+          "const": "1.0.0"
+        },
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "project_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        },
+        "row_version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "owner_account_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "config_key": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "scope_kind": {
+          "type": "string",
+          "enum": [
+            "global",
+            "project",
+            "agent",
+            "stage",
+            "auxiliary",
+            "run_snapshot"
+          ]
+        },
+        "scope_key": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "draft",
+            "published",
+            "retired",
+            "snapshot"
+          ]
+        },
+        "parent_config_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resolved_from_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "minItems": 0
+        },
+        "values": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "published_at": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "Z$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "record_type",
+        "schema_version",
+        "id",
+        "project_id",
+        "created_at",
+        "updated_at",
+        "row_version",
+        "config_key",
+        "version",
+        "scope_kind",
+        "scope_key",
+        "state",
+        "parent_config_id",
+        "resolved_from_ids",
+        "values",
+        "sha256",
+        "published_at"
+      ],
+      "additionalProperties": false,
+      "description": "values 遵守主文档第3节配置键及能力校验。已保存内容不可原地改；新编辑另存版本，仅发布状态可变。run_snapshot 为完整解析值，创建后不可变。"
+    },
+    "MaterialSelection": {
+      "type": "object",
+      "properties": {
+        "source_ref": {
+          "$ref": "#/$defs/EvidenceRef"
+        },
+        "selection": {
+          "$ref": "#/$defs/Selection"
+        },
+        "inclusion": {
+          "type": "string",
+          "enum": [
+            "included",
+            "omitted"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "estimated_tokens": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "source_ref",
+        "selection",
+        "inclusion",
+        "reason",
+        "estimated_tokens"
+      ],
+      "additionalProperties": false
+    },
+    "ContextSnapshot": {
+      "type": "object",
+      "properties": {
+        "record_type": {
+          "const": "context_snapshot"
+        },
+        "schema_version": {
+          "const": "1.0.0"
+        },
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "project_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        },
+        "task_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "run_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "session_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "config_version_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reasoning_effort": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "output_schema": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SchemaBinding"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "instructions": {
+          "$ref": "#/$defs/Content"
+        },
+        "input_items": {
+          "$ref": "#/$defs/Content"
+        },
+        "tool_definitions": {
+          "$ref": "#/$defs/Content"
+        },
+        "materials": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MaterialSelection"
+          },
+          "minItems": 0
+        },
+        "history_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "minItems": 0
+        },
+        "summary_ref": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EvidenceRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "input_token_estimate": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "input_token_budget": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "content_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "required": [
+        "record_type",
+        "schema_version",
+        "id",
+        "project_id",
+        "created_at",
+        "task_id",
+        "run_id",
+        "session_id",
+        "config_version_id",
+        "model",
+        "reasoning_effort",
+        "output_schema",
+        "instructions",
+        "input_items",
+        "tool_definitions",
+        "materials",
+        "history_ids",
+        "summary_ref",
+        "input_token_estimate",
+        "input_token_budget",
+        "content_sha256"
+      ],
+      "additionalProperties": false,
+      "description": "实际送出前冻结的完整模型输入，含动态 instructions、历史、工具定义与材料选择；不是事后重组的预览。公开投影移除凭证，敏感内容仍受项目权限控制。"
+    },
+    "ModelCall": {
+      "type": "object",
+      "properties": {
+        "record_type": {
+          "const": "model_call"
+        },
+        "schema_version": {
+          "const": "1.0.0"
+        },
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "project_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        },
+        "row_version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "task_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "run_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "operation_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "turn_index": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "context_snapshot_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "provider_response_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "pending",
+            "running",
+            "succeeded",
+            "failed",
+            "unknown"
+          ]
+        },
+        "started_at": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "Z$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "finished_at": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "Z$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "response_history_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "minItems": 0
+        },
+        "usage": {
+          "$ref": "#/$defs/Usage"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Error"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "record_type",
+        "schema_version",
+        "id",
+        "project_id",
+        "created_at",
+        "updated_at",
+        "row_version",
+        "task_id",
+        "run_id",
+        "operation_id",
+        "attempt",
+        "turn_index",
+        "context_snapshot_id",
+        "provider_response_id",
+        "state",
+        "started_at",
+        "finished_at",
+        "response_history_ids",
+        "usage",
+        "error"
+      ],
+      "additionalProperties": false,
+      "description": "一次真实供应商请求尝试；同 operation_id 汇总重试，上游 SDK 自动重试也记 attempt。未知用量标 null，不当成免费。"
+    },
+    "ToolCall": {
+      "type": "object",
+      "properties": {
+        "record_type": {
+          "const": "tool_call"
+        },
+        "schema_version": {
+          "const": "1.0.0"
+        },
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "project_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        },
+        "row_version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "task_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "run_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "operation_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "provider_tool_call_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tool_name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "arguments": {
+          "$ref": "#/$defs/Content"
+        },
+        "result": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Content"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "pending",
+            "running",
+            "succeeded",
+            "failed",
+            "unknown"
+          ]
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "started_at": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "Z$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "finished_at": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "Z$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "history_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "minItems": 0
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Error"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "model_call_id": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "required": [
+        "record_type",
+        "schema_version",
+        "id",
+        "project_id",
+        "created_at",
+        "updated_at",
+        "row_version",
+        "task_id",
+        "run_id",
+        "operation_id",
+        "provider_tool_call_id",
+        "tool_name",
+        "arguments",
+        "result",
+        "state",
+        "attempt",
+        "started_at",
+        "finished_at",
+        "history_ids",
+        "error",
+        "model_call_id"
+      ],
+      "additionalProperties": false,
+      "description": "run_id为实际工具执行段；model_call_id保留发起请求的真实模型调用。同Task跨Run仅允许验证通过的故障/显式恢复链，禁止复制旧模型调用伪造新请求。"
+    },
+    "Dependency": {
+      "type": "object",
+      "properties": {
+        "record_type": {
+          "const": "dependency"
+        },
+        "schema_version": {
+          "const": "1.0.0"
+        },
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "project_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        },
+        "row_version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "consumer_ref": {
+          "$ref": "#/$defs/EvidenceRef"
+        },
+        "producer_ref": {
+          "$ref": "#/$defs/EvidenceRef"
+        },
+        "relation": {
+          "type": "string",
+          "enum": [
+            "source",
+            "material",
+            "constraint",
+            "confirmation",
+            "assembly",
+            "configuration"
+          ]
+        },
+        "consumer_selections": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Selection"
+          },
+          "minItems": 1
+        },
+        "producer_selections": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Selection"
+          },
+          "minItems": 1
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "valid",
+            "review_required",
+            "invalid"
+          ]
+        },
+        "assessment_ref": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EvidenceRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "record_type",
+        "schema_version",
+        "id",
+        "project_id",
+        "created_at",
+        "updated_at",
+        "row_version",
+        "consumer_ref",
+        "producer_ref",
+        "relation",
+        "consumer_selections",
+        "producer_selections",
+        "state",
+        "assessment_ref"
+      ],
+      "additionalProperties": false,
+      "description": "输入/输出版本与范围创建后固定；状态变化单独留事件。语义影响不明标 review_required，不凭版本号变化全量失效。"
+    },
+    "Blob": {
+      "type": "object",
+      "properties": {
+        "record_type": {
+          "const": "blob"
+        },
+        "schema_version": {
+          "const": "1.0.0"
+        },
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "project_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        },
+        "row_version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "filename": {
+          "type": "string",
+          "minLength": 1
+        },
+        "media_type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "byte_size": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "storage_key": {
+          "type": "string",
+          "minLength": 1
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "pending",
+            "ready",
+            "failed"
+          ]
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Error"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "record_type",
+        "schema_version",
+        "id",
+        "project_id",
+        "created_at",
+        "updated_at",
+        "row_version",
+        "filename",
+        "media_type",
+        "byte_size",
+        "sha256",
+        "storage_key",
+        "state",
+        "error"
+      ],
+      "additionalProperties": false,
+      "description": "storage_key 仅服务端可读；不是任意本地文件路径或外部URL。普通页面按 blob ID 经授权读取内容。"
+    },
+    "RuntimeEvent": {
+      "type": "object",
+      "properties": {
+        "record_type": {
+          "const": "runtime_event"
+        },
+        "schema_version": {
+          "const": "1.0.0"
+        },
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "project_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "conversation_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "task_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "run_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "event_name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "subject_ref": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EvidenceRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "actor_kind": {
+          "type": "string",
+          "enum": [
+            "user",
+            "program"
+          ]
+        },
+        "actor_account_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "payload": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "causation_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "record_type",
+        "schema_version",
+        "id",
+        "project_id",
+        "created_at",
+        "sequence",
+        "conversation_id",
+        "task_id",
+        "run_id",
+        "event_name",
+        "subject_ref",
+        "actor_kind",
+        "actor_account_id",
+        "payload",
+        "causation_id"
+      ],
+      "additionalProperties": false,
+      "description": "追加式已提交事实事件，project 内 sequence 唯一；兼做 SSE outbox 和状态变化审计，不作为原始对话替代物。event_name/payload 由接口文档登记，模型不能自由签发。"
+    },
+    "IdempotencyRecord": {
+      "type": "object",
+      "properties": {
+        "record_type": {
+          "const": "idempotency_record"
+        },
+        "schema_version": {
+          "const": "1.0.0"
+        },
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "project_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        },
+        "row_version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "account_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "operation": {
+          "type": "string",
+          "minLength": 1
+        },
+        "key": {
+          "type": "string",
+          "minLength": 1
+        },
+        "request_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "in_progress",
+            "succeeded",
+            "failed",
+            "unknown"
+          ]
+        },
+        "result": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Content"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Error"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resource_refs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EvidenceRef"
+          },
+          "minItems": 0
+        }
+      },
+      "required": [
+        "record_type",
+        "schema_version",
+        "id",
+        "project_id",
+        "created_at",
+        "updated_at",
+        "row_version",
+        "account_id",
+        "operation",
+        "key",
+        "request_sha256",
+        "state",
+        "result",
+        "error",
+        "resource_refs"
+      ],
+      "additionalProperties": false,
+      "description": "同账号/项目/operation/key 唯一。相同键不同请求冲突，结果未明先核对；不得因重试重新执行已完成写入。"
+    }
+  }
+}

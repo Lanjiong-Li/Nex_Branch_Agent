@@ -1,0 +1,51 @@
+{
+  "contract_version": "1.2.0",
+  "status": "design_default_not_runtime_implementation",
+  "model": {
+    "name": "gpt-5.6-sol",
+    "reasoning_effort": "medium",
+    "max_output_tokens": 8000
+  },
+  "adaptation": {
+    "default_strategy": "依据已确认的玩家身份和原作保留要求，从关键事件中的动机冲突设计有后果的选择；保持人物与因果连续性，按叙事需要安排分支及汇合。分支和结局先形成方案并遵守阶段确认，互动服务剧情，避免无后果的填充选择。未确定的玩家身份、保留要求与禁止事项按流程询问，不自行假设已确认。"
+  },
+  "context": {
+    "input_token_cap": 1050000,
+    "safety_margin_tokens": 2000,
+    "batching": {
+      "target_tokens": 6000,
+      "hard_max_tokens": 8000,
+      "boundary_order": [
+        "chapter",
+        "scene",
+        "paragraph",
+        "sentence"
+      ],
+      "neighbor_tokens_each_side": 400,
+      "carryover_token_cap": 800,
+      "max_items": 40,
+      "output_headroom_ratio": 0.2
+    },
+    "version_mapping": {
+      "field_mappings": [],
+      "dependency_scope": "selected_with_guards",
+      "extra_guard_paths": [],
+      "transforms": []
+    },
+    "step1_source": {
+      "mode": "full_text",
+      "max_source_tokens": 200000,
+      "overflow_behavior": "reject"
+    }
+  },
+  "stage_overrides": {
+    "step1": {
+      "context": {
+        "input_token_cap": 1050000
+      },
+      "model": {
+        "max_output_tokens": 32000
+      }
+    }
+  }
+}

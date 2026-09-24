@@ -1,0 +1,178 @@
+{
+  "catalog_version": "1.0.0",
+  "status": "design_draft_not_runtime_implementation",
+  "schemas": [
+    {
+      "schema_id": "coordinator_response",
+      "version": "1.0.0",
+      "file": "coordinator_response.schema.json",
+      "status": "design_draft",
+      "root_output": "model_result",
+      "ui_editable": true,
+      "sha256": "5233a2909528bf4bac2944f7e9c4b82cf52fc5f3793c80ed05c6063db5f816b4"
+    },
+    {
+      "schema_id": "source_views",
+      "version": "1.0.0",
+      "file": "source_views.schema.json",
+      "status": "design_draft",
+      "root_output": "model_result",
+      "ui_editable": true,
+      "sha256": "92deb8c4b83b9020c2784a7ae92f22590f626ba298af65be50bd1a6b33f6d161"
+    },
+    {
+      "schema_id": "source_analysis",
+      "version": "1.0.0",
+      "file": "source_analysis.schema.json",
+      "status": "design_draft",
+      "root_output": "model_result",
+      "ui_editable": true,
+      "sha256": "8457557a64e11638fccbb2b26e62c9119b4a07441e75c2df2026d277dbd38967"
+    },
+    {
+      "schema_id": "adaptation_strategy",
+      "version": "1.0.0",
+      "file": "adaptation_strategy.schema.json",
+      "status": "design_draft",
+      "root_output": "model_result",
+      "ui_editable": true,
+      "sha256": "b1fdccbdf8355a8e981af70824466407208e2139b3e9215b0095a068179c9182"
+    },
+    {
+      "schema_id": "adaptation_plan",
+      "version": "1.0.0",
+      "file": "adaptation_plan.schema.json",
+      "status": "design_draft",
+      "root_output": "model_result",
+      "ui_editable": true,
+      "sha256": "137e6e1764ead13ea4add8b98f51f5d57a73531ecc63fae3e96d085b48f61f4b"
+    },
+    {
+      "schema_id": "game_event_view",
+      "version": "1.0.0",
+      "file": "game_event_view.schema.json",
+      "status": "design_draft",
+      "root_output": "model_result",
+      "ui_editable": true,
+      "sha256": "8c24738431dd228e2151635f335c2a692d6e426739cab1a75b19b1fee97922a7"
+    },
+    {
+      "schema_id": "event_function_map",
+      "version": "1.0.0",
+      "file": "event_function_map.schema.json",
+      "status": "design_draft",
+      "root_output": "model_result",
+      "ui_editable": true,
+      "sha256": "099926e00807851091dfe70ebee09b73c5cea179d9bae096733bc73abc97e818"
+    },
+    {
+      "schema_id": "ending_routes",
+      "version": "1.0.0",
+      "file": "ending_routes.schema.json",
+      "status": "design_draft",
+      "root_output": "model_result",
+      "ui_editable": true,
+      "sha256": "7b59dfd0daf43cd61d88f75378819a6e6f1e8ecfd067449edbcf783134b9770e"
+    },
+    {
+      "schema_id": "player_profiles",
+      "version": "1.0.0",
+      "file": "player_profiles.schema.json",
+      "status": "design_draft",
+      "root_output": "model_result",
+      "ui_editable": true,
+      "sha256": "61bd12c7d6efee51da4260ca47f4db7edbe4c757103611b213cb94feec93dbb2"
+    },
+    {
+      "schema_id": "chapter_design",
+      "version": "1.0.0",
+      "file": "chapter_design.schema.json",
+      "status": "design_draft",
+      "root_output": "model_result",
+      "ui_editable": true,
+      "sha256": "de6dda9e3555ca02f38eeb9a62b65d0c6e6f70ea8472ef91e8c47b688bbc87c1"
+    },
+    {
+      "schema_id": "review_report",
+      "version": "1.0.0",
+      "file": "review_report.schema.json",
+      "status": "design_draft",
+      "root_output": "model_result",
+      "ui_editable": true,
+      "sha256": "18b86f8c8b6a57dea99dde443f9bc33c2a8eaa99f5655b17ec2a8675be01ecff"
+    },
+    {
+      "schema_id": "work_summary",
+      "version": "1.0.0",
+      "file": "work_summary.schema.json",
+      "status": "design_draft",
+      "root_output": "model_result",
+      "ui_editable": true,
+      "sha256": "c6371c7814c3aab9b4e96fe3e2b2fe5c2f3439991a9dd62462032dd89428cec2"
+    },
+    {
+      "schema_id": "subtask_result",
+      "version": "1.0.0",
+      "file": "subtask_result.schema.json",
+      "status": "design_draft",
+      "root_output": "model_result",
+      "ui_editable": true,
+      "sha256": "d59020e7957c24872bf921c2a75fa5fb7a5cfc45495a8fc0bf1ce7002775322b"
+    },
+    {
+      "schema_id": "chapter_graph",
+      "version": "1.0.0",
+      "file": "chapter_graph.schema.json",
+      "status": "design_draft",
+      "root_output": "model_result",
+      "ui_editable": true,
+      "sha256": "191d27b2f12d3b2b7cdbde6e689a6db965eb329d086f3cdfb5e22b28049bdd24"
+    },
+    {
+      "schema_id": "nexo_editor_package",
+      "version": "format4-20260914",
+      "file": "nexo-editor-package.format4.schema.json",
+      "status": "provided_contract_snapshot",
+      "root_output": "assembled_export",
+      "ui_editable": true,
+      "compatibility_target": "Nexo format 4; changes require matching consumer/adapter support",
+      "source_path": "/Users/llj/Nexquence/分支Agent/script-data/script.schema.json",
+      "sha256": "7238a20a6862c7411e91de9fcb9227acef2e5c225fd85043c21703cad2ef1f22"
+    }
+  ],
+  "bindings": {
+    "conversation_coordinator": "coordinator_response",
+    "step1": "source_views",
+    "step2": "source_analysis",
+    "step3": "adaptation_strategy",
+    "step4": "adaptation_plan",
+    "step5": "game_event_view",
+    "step6": "event_function_map",
+    "step7": "ending_routes",
+    "step8": "player_profiles",
+    "step9": "chapter_design",
+    "step10": "chapter_graph",
+    "step11": "review_report",
+    "aux.summary": "work_summary",
+    "aux.history_answer": "coordinator_response",
+    "aux.subtask": "subtask_result",
+    "export.nexo": "nexo_editor_package"
+  },
+  "publication_checks": [
+    "json_schema_valid",
+    "model_schema_supported",
+    "references_resolved",
+    "consumer_dependencies_compatible",
+    "confirmation_paths_resolved",
+    "export_mapping_compatible",
+    "migration_and_examples_valid"
+  ],
+  "pinned_per_run": [
+    "schema_version",
+    "schema_hash",
+    "prompt_version",
+    "mapping_version",
+    "validator_version"
+  ],
+  "source_contract_sha256": "7238a20a6862c7411e91de9fcb9227acef2e5c225fd85043c21703cad2ef1f22"
+}

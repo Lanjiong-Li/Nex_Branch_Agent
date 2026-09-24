@@ -1,0 +1,705 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "BranchHarnessCheckpointState_v1",
+  "description": "Checkpoint.cursor.handler_version=runtime.v1 时的闭合恢复载荷。写入同时验证外层记录与本Schema；跨字段计数、同项目引用及恢复规则见运行状态机。",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "workflow_root_task_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "work_key": {
+      "type": "string",
+      "minLength": 1
+    },
+    "next_action": {
+      "type": "string",
+      "enum": [
+        "dispatch_agent",
+        "process_model_result",
+        "execute_tools",
+        "commit_artifact",
+        "await_user",
+        "advance_work",
+        "deliver",
+        "reconcile_operations",
+        "resolve_usage",
+        "stop",
+        "none"
+      ]
+    },
+    "continuation": {
+      "type": "object",
+      "properties": {
+        "root_run_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "previous_run_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "recovery_attempts_used": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "max_auto_recoveries": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "last_recovery_event_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "next_retry_at": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "Z$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "root_run_id",
+        "previous_run_id",
+        "recovery_attempts_used",
+        "max_auto_recoveries",
+        "last_recovery_event_id",
+        "next_retry_at"
+      ],
+      "additionalProperties": false
+    },
+    "turn_allowance": {
+      "type": "object",
+      "properties": {
+        "allowance_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "used": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "reserved_operation_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "minItems": 0
+        },
+        "source_event_id": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "required": [
+        "allowance_id",
+        "limit",
+        "used",
+        "reserved_operation_ids",
+        "source_event_id"
+      ],
+      "additionalProperties": false
+    },
+    "retry_limits": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "operation_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "max_retries": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "operation_id",
+          "max_retries"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 0
+    },
+    "repair_round_limit": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "pending_control_request_ids": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "minItems": 0
+    },
+    "pending_user_items": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/PendingUserItem"
+      },
+      "minItems": 0
+    },
+    "queue_gate": {
+      "type": "object",
+      "properties": {
+        "conversation_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "row_version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "holds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/QueueHold"
+          },
+          "minItems": 0
+        }
+      },
+      "required": [
+        "conversation_id",
+        "row_version",
+        "holds"
+      ],
+      "additionalProperties": false
+    },
+    "stop": {
+      "type": "object",
+      "properties": {
+        "requested": {
+          "type": "boolean"
+        },
+        "requested_event_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "deadline_at": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "Z$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "task_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "minItems": 0
+        }
+      },
+      "required": [
+        "requested",
+        "requested_event_id",
+        "deadline_at",
+        "task_ids"
+      ],
+      "additionalProperties": false
+    },
+    "operation_reconciliation": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Reconciliation"
+      },
+      "minItems": 0
+    },
+    "last_applied_event_seq": {
+      "type": "integer",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "schema_version",
+    "workflow_root_task_id",
+    "work_key",
+    "next_action",
+    "continuation",
+    "turn_allowance",
+    "retry_limits",
+    "repair_round_limit",
+    "pending_control_request_ids",
+    "pending_user_items",
+    "queue_gate",
+    "stop",
+    "operation_reconciliation",
+    "last_applied_event_seq"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "EvidenceRef": {
+      "type": "object",
+      "properties": {
+        "record_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "item_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "json_pointer": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^(?:/(?:[^~/]|~[01])*)*$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "record_id",
+        "version",
+        "item_id",
+        "json_pointer"
+      ],
+      "additionalProperties": false,
+      "description": "兼容既有 output_type。Harness 版本用十进制正整数字符串；普通不可变消息 version=null。record_id 指逻辑产物/决策 ID，不能用最新版本替换固定版本。"
+    },
+    "Selection": {
+      "type": "object",
+      "properties": {
+        "item_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "json_pointer": {
+          "type": "string",
+          "pattern": "^(?:/(?:[^~/]|~[01])*)*$"
+        }
+      },
+      "required": [
+        "item_id",
+        "json_pointer"
+      ],
+      "additionalProperties": false,
+      "description": "范围固定在 subject 版本；全对象用 item_id=null/json_pointer=\"\"。条目选择必须带稳定 item_id，路径仅用于定位字段。"
+    },
+    "WaitTarget": {
+      "type": "object",
+      "properties": {
+        "subject": {
+          "$ref": "#/$defs/EvidenceRef"
+        },
+        "selections": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Selection"
+          },
+          "minItems": 1
+        }
+      },
+      "required": [
+        "subject",
+        "selections"
+      ],
+      "additionalProperties": false
+    },
+    "PendingUserItem": {
+      "type": "object",
+      "properties": {
+        "suggested_answers": {"type": "array", "items": {"type": "string"}},
+        "reason": {"type": "string"},
+        "target_field": {"type": ["string", "null"]},
+        "blocking_scope": {"type": "string"},
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "task_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "confirmation",
+            "question",
+            "decision"
+          ]
+        },
+        "question_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "presented_message_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "minItems": 1
+        },
+        "targets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WaitTarget"
+          },
+          "minItems": 0
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "open",
+            "resolved",
+            "cancelled"
+          ]
+        },
+        "answer_message_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "minItems": 0
+        },
+        "replaced_by_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "task_id",
+        "kind",
+        "question_id",
+        "description",
+        "presented_message_ids",
+        "targets",
+        "state",
+        "answer_message_ids",
+        "replaced_by_id"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "confirmation"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "targets": {
+                "type": "array",
+                "items": {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/WaitTarget"
+                    },
+                    {
+                      "properties": {
+                        "subject": {
+                          "properties": {
+                            "version": {
+                              "type": "string",
+                              "minLength": 1
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                "minItems": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "resolved"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "answer_message_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "minItems": 1
+              }
+            }
+          }
+        }
+      ]
+    },
+    "QueueHold": {
+      "type": "object",
+      "properties": {
+        "task_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "reason_code": {
+          "type": "string",
+          "enum": [
+            "user_stop",
+            "budget_limit",
+            "retry_limit",
+            "repair_limit",
+            "configuration_error",
+            "operation_uncertain",
+            "usage_uncertain",
+            "dependency_changed",
+            "recovery_exhausted",
+            "checkpoint_invalid",
+            "child_blocked",
+            "task_failed"
+          ]
+        },
+        "basis_event_id": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "required": [
+        "task_id",
+        "reason_code",
+        "basis_event_id"
+      ],
+      "additionalProperties": false
+    },
+    "Reconciliation": {
+      "type": "object",
+      "properties": {
+        "operation_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "unresolved",
+            "succeeded",
+            "failed",
+            "not_sent",
+            "retried_readonly"
+          ]
+        },
+        "evidence_refs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EvidenceRef"
+          },
+          "minItems": 0
+        },
+        "checked_at": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "Z$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "operation_id",
+        "state",
+        "evidence_refs",
+        "checked_at"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "not": {
+                  "const": "unresolved"
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "evidence_refs": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/EvidenceRef"
+                },
+                "minItems": 1
+              },
+              "checked_at": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "Z$"
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "stop": {
+            "properties": {
+              "requested": {
+                "const": true
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "stop": {
+            "properties": {
+              "requested_event_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "deadline_at": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "Z$"
+              },
+              "task_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "minItems": 1
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "stop": {
+            "properties": {
+              "requested": {
+                "const": false
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "stop": {
+            "properties": {
+              "requested_event_id": {
+                "type": "null"
+              },
+              "deadline_at": {
+                "type": "null"
+              },
+              "task_ids": {
+                "maxItems": 0
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

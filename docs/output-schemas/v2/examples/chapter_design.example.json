@@ -1,0 +1,280 @@
+{
+  "result_kind": "ready",
+  "payload": {
+    "chapter_id": "demo:chapter:station",
+    "title": "雨夜候车室",
+    "summary": "林安决定是否帮乔乔找钥匙。",
+    "plan_ref": {
+      "record_id": "demo:adaptation_plan",
+      "version": "v2",
+      "item_id": null,
+      "json_pointer": null
+    },
+    "game_event_refs": [
+      {
+        "record_id": "demo:game_event_view",
+        "version": "v1",
+        "item_id": "game_event_station",
+        "json_pointer": null
+      }
+    ],
+    "linear_body": {
+      "segments": [
+        {
+          "segment_id": "segment_arrival",
+          "text": "雨水沿着窗框落下。乔乔蹲在长椅旁，抬头问林安：“能帮我看看钥匙掉在哪里吗？”林安停在灯下。",
+          "character_refs": [
+            {
+              "record_id": "demo:adaptation_plan",
+              "version": "v2",
+              "item_id": "demo:character:lin",
+              "json_pointer": null
+            },
+            {
+              "record_id": "demo:adaptation_plan",
+              "version": "v2",
+              "item_id": "demo:character:qiao",
+              "json_pointer": null
+            }
+          ],
+          "location_refs": [
+            {
+              "record_id": "demo:adaptation_plan",
+              "version": "v2",
+              "item_id": "demo:location:station",
+              "json_pointer": null
+            }
+          ],
+          "game_event_refs": [
+            {
+              "record_id": "demo:game_event_view",
+              "version": "v1",
+              "item_id": "game_event_station",
+              "json_pointer": null
+            }
+          ]
+        },
+        {
+          "segment_id": "segment_help",
+          "text": "林安挪开长椅，钥匙从椅脚后滚了出来。乔乔接过钥匙，轻声道谢。他替她拉开出口那扇沉重的门。",
+          "character_refs": [
+            {
+              "record_id": "demo:adaptation_plan",
+              "version": "v2",
+              "item_id": "demo:character:lin",
+              "json_pointer": null
+            },
+            {
+              "record_id": "demo:adaptation_plan",
+              "version": "v2",
+              "item_id": "demo:character:qiao",
+              "json_pointer": null
+            }
+          ],
+          "location_refs": [
+            {
+              "record_id": "demo:adaptation_plan",
+              "version": "v2",
+              "item_id": "demo:location:station",
+              "json_pointer": null
+            }
+          ],
+          "game_event_refs": [
+            {
+              "record_id": "demo:game_event_view",
+              "version": "v1",
+              "item_id": "game_event_station",
+              "json_pointer": null
+            }
+          ]
+        },
+        {
+          "segment_id": "segment_leave",
+          "text": "旧钟敲响。林安走上站台，身后的候车室仍亮着灯。雨已经小了。",
+          "character_refs": [
+            {
+              "record_id": "demo:adaptation_plan",
+              "version": "v2",
+              "item_id": "demo:character:lin",
+              "json_pointer": null
+            },
+            {
+              "record_id": "demo:adaptation_plan",
+              "version": "v2",
+              "item_id": "demo:character:qiao",
+              "json_pointer": null
+            }
+          ],
+          "location_refs": [
+            {
+              "record_id": "demo:adaptation_plan",
+              "version": "v2",
+              "item_id": "demo:location:station",
+              "json_pointer": null
+            }
+          ],
+          "game_event_refs": [
+            {
+              "record_id": "demo:game_event_view",
+              "version": "v1",
+              "item_id": "game_event_station",
+              "json_pointer": null
+            }
+          ]
+        }
+      ]
+    },
+    "interactions": [
+      {
+        "interaction_id": "interaction_help",
+        "anchor_segment_id": "segment_arrival",
+        "placement": "after",
+        "kind": "choice",
+        "prompt": "是否留下帮忙？",
+        "player_intent": "在帮助陌生人和按时离开之间选择。",
+        "options": [
+          {
+            "option_id": "option_help",
+            "label": "留下找钥匙",
+            "availability_requirements": [],
+            "outcome": {
+              "outcome_id": "outcome_help",
+              "result": "clicked",
+              "consequence": "帮助乔乔找到钥匙，再前往站台。",
+              "condition_requirements": [],
+              "state_effect_requirements": []
+            }
+          },
+          {
+            "option_id": "option_leave",
+            "label": "先去站台",
+            "availability_requirements": [],
+            "outcome": {
+              "outcome_id": "outcome_leave",
+              "result": "clicked",
+              "consequence": "直接离开，不发生找回钥匙的情节。",
+              "condition_requirements": [],
+              "state_effect_requirements": []
+            }
+          }
+        ],
+        "action_requirement": null,
+        "outcomes": []
+      }
+    ],
+    "flow_links": [
+      {
+        "from_segment_id": "segment_arrival",
+        "interaction_id": "interaction_help",
+        "outcome_id": "outcome_help",
+        "target": {
+          "kind": "segment",
+          "segment_id": "segment_help",
+          "chapter_id": null
+        },
+        "condition_requirement": null
+      },
+      {
+        "from_segment_id": "segment_arrival",
+        "interaction_id": "interaction_help",
+        "outcome_id": "outcome_leave",
+        "target": {
+          "kind": "segment",
+          "segment_id": "segment_leave",
+          "chapter_id": null
+        },
+        "condition_requirement": null
+      },
+      {
+        "from_segment_id": "segment_help",
+        "interaction_id": null,
+        "outcome_id": null,
+        "target": {
+          "kind": "segment",
+          "segment_id": "segment_leave",
+          "chapter_id": null
+        },
+        "condition_requirement": null
+      },
+      {
+        "from_segment_id": "segment_leave",
+        "interaction_id": null,
+        "outcome_id": null,
+        "target": {
+          "kind": "story_end",
+          "segment_id": null,
+          "chapter_id": null
+        },
+        "condition_requirement": null
+      }
+    ],
+    "entry_exit_contracts": [
+      {
+        "contract_id": "entry_station",
+        "kind": "entry",
+        "segment_id": "segment_arrival",
+        "other_chapter_id": null,
+        "required_state": [],
+        "resulting_state": [],
+        "rationale": "作品从候车室相遇开始。"
+      },
+      {
+        "contract_id": "exit_station",
+        "kind": "exit",
+        "segment_id": "segment_leave",
+        "other_chapter_id": null,
+        "required_state": [],
+        "resulting_state": [],
+        "rationale": "从站台离开，短篇结束。"
+      }
+    ],
+    "global_entity_refs": [
+      {
+        "record_id": "demo:adaptation_plan",
+        "version": "v2",
+        "item_id": "demo:character:lin",
+        "json_pointer": null
+      },
+      {
+        "record_id": "demo:adaptation_plan",
+        "version": "v2",
+        "item_id": "demo:character:qiao",
+        "json_pointer": null
+      },
+      {
+        "record_id": "demo:adaptation_plan",
+        "version": "v2",
+        "item_id": "demo:location:station",
+        "json_pointer": null
+      }
+    ],
+    "state_requirements": [],
+    "graph_compatibility": {
+      "status": "compatible",
+      "lowering_notes": [
+        "arrival 正文上的两个选项分别以 jump 路由进入 help 或 leave；含 choiceGroups 的 arrival 不生成 next 边。",
+        "help 以 next 路由进入 leave；leave 标记章结束。完整正文按原段落分别保存为三个 story 节点的 body。"
+      ],
+      "conflicts": []
+    },
+    "chapter_source_anchors": []
+  },
+  "questions": [],
+  "evidence_refs": [
+    {
+      "record_id": "demo:adaptation_plan",
+      "version": "v2",
+      "item_id": null,
+      "json_pointer": null
+    },
+    {
+      "record_id": "demo:game_event_view",
+      "version": "v1",
+      "item_id": "game_event_station",
+      "json_pointer": null
+    }
+  ],
+  "notes": [
+    "结构说明样例；引用是虚构 fixture，ready 不代表已获得用户确认或完成导入。"
+  ]
+}

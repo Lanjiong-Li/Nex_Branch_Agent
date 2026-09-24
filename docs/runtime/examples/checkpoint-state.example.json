@@ -1,0 +1,44 @@
+{
+  "schema_version": "1.0.0",
+  "workflow_root_task_id": "62210f25-dfd7-57dd-8cf0-d6f35bd29e5b",
+  "work_key": "source:1:read:revision1",
+  "next_action": "resolve_usage",
+  "continuation": {
+    "root_run_id": "3e28e237-12b5-5e1b-be18-b660c426e8b0",
+    "previous_run_id": null,
+    "recovery_attempts_used": 0,
+    "max_auto_recoveries": 3,
+    "last_recovery_event_id": null,
+    "next_retry_at": null
+  },
+  "turn_allowance": {
+    "allowance_id": "9f050c91-2082-50d1-aff4-aebea2c1895d",
+    "limit": 10,
+    "used": 1,
+    "reserved_operation_ids": [],
+    "source_event_id": "db9b2474-81b6-565c-95de-e9f58051effe"
+  },
+  "retry_limits": [],
+  "repair_round_limit": 2,
+  "pending_control_request_ids": [],
+  "pending_user_items": [],
+  "queue_gate": {
+    "conversation_id": "2ab5a995-b241-530b-8180-d564516ed48f",
+    "row_version": 1,
+    "holds": [
+      {
+        "task_id": "62210f25-dfd7-57dd-8cf0-d6f35bd29e5b",
+        "reason_code": "usage_uncertain",
+        "basis_event_id": "db9b2474-81b6-565c-95de-e9f58051effe"
+      }
+    ]
+  },
+  "stop": {
+    "requested": false,
+    "requested_event_id": null,
+    "deadline_at": null,
+    "task_ids": []
+  },
+  "operation_reconciliation": [],
+  "last_applied_event_seq": 1
+}

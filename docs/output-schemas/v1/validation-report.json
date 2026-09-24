@@ -1,0 +1,39 @@
+{
+  "verification_date": "2026-09-20",
+  "status": "offline_checks_passed",
+  "schemas_valid": 15,
+  "local_sdk_strict_schema_checks": 14,
+  "all_registry_hashes_match": true,
+  "all_bindings_resolve": true,
+  "resolved_local_refs": 189,
+  "provided_contract_snapshot_identical": true,
+  "provided_nexo_example_valid": true,
+  "design_examples_valid": [
+    "adaptation_plan",
+    "chapter_design",
+    "chapter_graph"
+  ],
+  "invalid_structures_rejected": [
+    "undeclared_business_field",
+    "wrong_reference_version_type",
+    "missing_complete_linear_body_field",
+    "unsupported_choice_node_kind",
+    "model_authored_audit_field"
+  ],
+  "artifact_markdown_file_links_exist": true,
+  "not_verified": [
+    "live_model_api_support",
+    "runtime_schema_loader",
+    "schema_to_sdk_adapter_implementation",
+    "Nexo_assembly_implementation",
+    "business_reference_and_coverage_validators",
+    "DSL_compilation",
+    "Nexo_import_or_publish",
+    "playback",
+    "HTML_editor_implementation"
+  ],
+  "notes": [
+    "设计文件与离线验证结果，不代表Harness已经实现。",
+    "业务确认、来源真实性和图关系须由运行时校验器落实。"
+  ]
+}

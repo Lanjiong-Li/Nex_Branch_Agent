@@ -1,0 +1,755 @@
+{
+  "type": "object",
+  "properties": {
+    "result_kind": {
+      "type": "string",
+      "enum": [
+        "ready",
+        "needs_input"
+      ]
+    },
+    "payload": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "chapter_id": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "summary": {
+              "type": "string"
+            },
+            "plan_ref": {
+              "$ref": "#/$defs/EvidenceRef"
+            },
+            "game_event_refs": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/EvidenceRef"
+              }
+            },
+            "linear_body": {
+              "type": "object",
+              "properties": {
+                "segments": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "segment_id": {
+                        "type": "string"
+                      },
+                      "text": {
+                        "type": "string",
+                        "description": "完整正文，不是梗概。"
+                      },
+                      "character_refs": {
+                        "type": "array",
+                        "items": {
+                          "$ref": "#/$defs/EvidenceRef"
+                        }
+                      },
+                      "location_refs": {
+                        "type": "array",
+                        "items": {
+                          "$ref": "#/$defs/EvidenceRef"
+                        }
+                      },
+                      "game_event_refs": {
+                        "type": "array",
+                        "items": {
+                          "$ref": "#/$defs/EvidenceRef"
+                        }
+                      }
+                    },
+                    "required": [
+                      "segment_id",
+                      "text",
+                      "character_refs",
+                      "location_refs",
+                      "game_event_refs"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": [
+                "segments"
+              ],
+              "additionalProperties": false,
+              "description": "有序完整正文段是本设计唯一正文来源，不另存独立可编辑全文。Step10 按段落拆分/合并为 story 节点完整 body 字符串，保留字面正文及来源覆盖；不得替换成摘要、数组或媒体时间轴。"
+            },
+            "interactions": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "interaction_id": {
+                    "type": "string"
+                  },
+                  "anchor_segment_id": {
+                    "type": "string"
+                  },
+                  "placement": {
+                    "type": "string",
+                    "enum": [
+                      "before",
+                      "after"
+                    ],
+                    "description": "相对完整正文段的叙事位置；choice/QTE 落图时换算为 body 中 scriptInline.afterLine/order（version=1），不是毫秒时间点。"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "choice",
+                      "qte",
+                      "game"
+                    ]
+                  },
+                  "prompt": {
+                    "type": "string"
+                  },
+                  "player_intent": {
+                    "type": "string"
+                  },
+                  "options": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "option_id": {
+                          "type": "string"
+                        },
+                        "label": {
+                          "type": "string"
+                        },
+                        "availability_requirements": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          },
+                          "description": "选项可用性设计需求；最终 Choice 无可用条件字段。需在前置 condition 节点分流至相应 story/choiceGroups 并保持意图，不能直接把条件挂在选项或连线上；无法等价表达时登记冲突。"
+                        },
+                        "outcome": {
+                          "$ref": "#/$defs/DesignOutcome"
+                        }
+                      },
+                      "required": [
+                        "option_id",
+                        "label",
+                        "availability_requirements",
+                        "outcome"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "action_requirement": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "description": "QTE/小游戏的叙事操作要求；选择组可为 null。此处不证明 Project 已支持该具体操作或结果接口；依赖外部能力时登记未解决约束。"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "outcomes": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/$defs/DesignOutcome"
+                    },
+                    "description": "choice 的结果在 options[].outcome 内；QTE 只支持 success 与可选 failure，未开启失败不能生成失败边。game 当前仅有 next；若设计依赖自定义小游戏返回值/多结果端口，必须标为冲突或未解决，不能伪造端口。"
+                  }
+                },
+                "required": [
+                  "interaction_id",
+                  "anchor_segment_id",
+                  "placement",
+                  "kind",
+                  "prompt",
+                  "player_intent",
+                  "options",
+                  "action_requirement",
+                  "outcomes"
+                ],
+                "additionalProperties": false,
+                "description": "叙事互动需求。choice 映射 ChoiceGroup，qte 映射 Qte；两者位于 story 节点，game 映射独立 game 节点而非内联媒体互动。当前模型不表达时长、热区等媒体参数。"
+              }
+            },
+            "flow_links": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "from_segment_id": {
+                    "type": "string"
+                  },
+                  "interaction_id": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "outcome_id": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "target": {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "segment",
+                          "continue",
+                          "chapter",
+                          "chapter_end",
+                          "story_end",
+                          "unresolved"
+                        ]
+                      },
+                      "segment_id": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "chapter_id": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "segment_id",
+                      "chapter_id"
+                    ],
+                    "additionalProperties": false,
+                    "description": "segment 指明确正文目标；continue 只在当前 story 正文内继续，不能等同 next 边或任意下一段。chapter 目标只能是项目顺序中的紧接下一章，须由同章 jump 节点表达；chapter_end/story_end 需显式满足章节边界，不能当作普通虚拟节点 ID。"
+                  },
+                  "condition_requirement": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "自然语言条件需求，非最终边字段。非空时必须在 Step10 显式加入 condition 节点并覆盖默认分支，不能静默丢弃条件。"
+                  }
+                },
+                "required": [
+                  "from_segment_id",
+                  "interaction_id",
+                  "outcome_id",
+                  "target",
+                  "condition_requirement"
+                ],
+                "additionalProperties": false,
+                "description": "叙事流转需求，后续转换为明确节点/端口/跳转目标。不能假设每段都有默认边：story 含 choiceGroups 或 qtes 时没有 next 完成出口；所有 continue 分支都没有画布出边。"
+              }
+            },
+            "entry_exit_contracts": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "contract_id": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "entry",
+                      "transition",
+                      "exit"
+                    ]
+                  },
+                  "segment_id": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "other_chapter_id": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "required_state": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "resulting_state": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "rationale": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "contract_id",
+                  "kind",
+                  "segment_id",
+                  "other_chapter_id",
+                  "required_state",
+                  "resulting_state",
+                  "rationale"
+                ],
+                "additionalProperties": false
+              },
+              "description": "入口/出口/章际状态与剧情连续性契约；章开始无入线且与章结束互斥，章结束有效出线只到同章 jump 节点。跨章只能紧接下一章；多节点章内循环可保留，但无隐式 retry/reset 状态恢复。"
+            },
+            "global_entity_refs": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/EvidenceRef"
+              },
+              "description": "引用改编方案角色/地点设计，供正文和共享场次追溯；不是 Project 资产实体或资源绑定列表。"
+            },
+            "state_requirements": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/StateRequirement"
+              }
+            },
+            "graph_compatibility": {
+              "$ref": "#/$defs/GraphCompatibility"
+            },
+            "chapter_source_anchors": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/SourceAnchor"
+              },
+              "description": "模型填写空数组；Harness 根据本章 game_event_refs 所选游戏事件的已验证原文锚点，合并并写入固定原作的 UTF-16 半开区间。纯新增章节保持空数组。"
+            }
+          },
+          "required": [
+            "chapter_id",
+            "title",
+            "summary",
+            "plan_ref",
+            "game_event_refs",
+            "linear_body",
+            "interactions",
+            "flow_links",
+            "entry_exit_contracts",
+            "global_entity_refs",
+            "state_requirements",
+            "graph_compatibility",
+            "chapter_source_anchors"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "questions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Question"
+      }
+    },
+    "evidence_refs": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/EvidenceRef"
+      }
+    },
+    "notes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "result_kind",
+    "payload",
+    "questions",
+    "evidence_refs",
+    "notes"
+  ],
+  "additionalProperties": false,
+  "description": "模型输出合同：ready 表示有待验证产物；needs_input 返回具体缺项。此字段不决定保存、确认、完成或生效状态。",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "BranchAgent_chapter_design_v2_1",
+  "$defs": {
+    "DesignOutcome": {
+      "type": "object",
+      "properties": {
+        "outcome_id": {
+          "type": "string"
+        },
+        "result": {
+          "type": "string",
+          "description": "叙事结果标识；choice 使用 clicked（必选，无超时/失败），QTE 使用 success/failure；game 仅能映射 next，其他所需返回语义必须记录兼容性冲突。"
+        },
+        "consequence": {
+          "type": "string"
+        },
+        "condition_requirements": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "结果条件需求须显式映射 condition 节点的 conditionDsl，不支持互动/通用边内嵌条件。"
+        },
+        "state_effect_requirements": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "状态效果须显式映射 variable 节点的 scriptDsl，并保存先后顺序；不能嵌入 choice/QTE/边，也不能把循环当作自动重置。"
+        }
+      },
+      "required": [
+        "outcome_id",
+        "result",
+        "consequence",
+        "condition_requirements",
+        "state_effect_requirements"
+      ],
+      "additionalProperties": false,
+      "description": "设计层只定义条件与后果；走向唯一由 flow_links 指定，进入 Step10 时映射为合法节点、出口与 DSL。"
+    },
+    "EvidenceRef": {
+      "type": "object",
+      "properties": {
+        "record_id": {
+          "type": "string",
+          "description": "真实来源记录或产物 ID；由 Harness 验证存在性与项目归属。"
+        },
+        "version": {
+          "anyOf": [
+            {
+              "type": "string",
+              "description": "版本化记录必须提供固定版本；普通消息可为 null。"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "item_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "description": "记录内部的稳定条目 ID。"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "json_pointer": {
+          "anyOf": [
+            {
+              "type": "string",
+              "description": "需要定位字段时使用 JSON Pointer。"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "record_id",
+        "version",
+        "item_id",
+        "json_pointer"
+      ],
+      "additionalProperties": false,
+      "description": "模型引用已存在记录，不由模型签发确认、版本或审计身份。"
+    },
+    "Question": {
+      "type": "object",
+      "properties": {
+        "question_id": {
+          "type": "string"
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "target_field": {
+          "anyOf": [
+            {
+              "type": "string",
+              "description": "当前 payload 内的 JSON Pointer。"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "suggested_answers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "blocking_scope": {
+          "type": "string",
+          "description": "明确说明哪些工作依赖此回答。"
+        }
+      },
+      "required": [
+        "question_id",
+        "prompt",
+        "reason",
+        "target_field",
+        "suggested_answers",
+        "blocking_scope"
+      ],
+      "additionalProperties": false
+    },
+    "StateRequirement": {
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string",
+          "description": "建议的稳定英文变量 key；在全局变量登记中检查冲突。"
+        },
+        "name": {
+          "type": "string"
+        },
+        "value_type": {
+          "type": "string",
+          "enum": [
+            "number",
+            "string",
+            "boolean"
+          ]
+        },
+        "initial_value": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
+        },
+        "purpose": {
+          "type": "string"
+        },
+        "used_by_refs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EvidenceRef"
+          }
+        },
+        "used_by_item_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "引用本次 payload 内的路线／互动 ID，不能编造未来的持久产物版本。"
+        }
+      },
+      "required": [
+        "key",
+        "name",
+        "value_type",
+        "initial_value",
+        "purpose",
+        "used_by_refs",
+        "used_by_item_ids"
+      ],
+      "additionalProperties": false,
+      "description": "设计提案，不自动新增或修改生效变量；初始 JSON 类型必须匹配 value_type。 Step10 转为 Variable.value 字符串；number/boolean 必须有有效字符串表示，string 内容原样保留。"
+    },
+    "GraphCompatibility": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "compatible",
+            "requires_lowering",
+            "blocked",
+            "unresolved"
+          ],
+          "description": "仅为模型提出的兼容性判断，不签发可实现、验证通过或用户确认状态。"
+        },
+        "lowering_notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "说明保持叙事/交互意图的显式落图方式；条件转 condition 节点、状态效果转 variable 节点，必要时拆分正文节点。"
+        },
+        "conflicts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "conflict_id": {
+                "type": "string"
+              },
+              "subject_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "当前设计内的路线、段落、互动、选项、结果或契约 ID；不得编造未来节点 ID。"
+              },
+              "requirement": {
+                "type": "string",
+                "description": "保留原始需求的明确表述。"
+              },
+              "reason": {
+                "type": "string",
+                "description": "指出与当前已配置目标版本冲突的能力或约束。"
+              },
+              "proposed_resolution": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "description": "候选处理，不改写已确认设计；改变用户意图须走原有决策流程。"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "conflict_id",
+              "subject_ids",
+              "requirement",
+              "reason",
+              "proposed_resolution"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "status",
+        "lowering_notes",
+        "conflicts"
+      ],
+      "additionalProperties": false,
+      "description": "按 nexo-studio feature/v2.1.0 / 006296f 的 Project 编辑文档评估。章内分支、汇流与多节点循环可以设计；跨章只能进入 chapters 数组中的紧接下一章。无隐式 retry/reset 状态恢复、通用边条件或互动内状态效果。未解决冲突阻止最终组装放行；需要用户决策的缺项使用 questions。兼容性仍由程序验证，未来目标能力通过版本配置变更。"
+    },
+    "SourceAnchor": {
+      "type": "object",
+      "properties": {
+        "source_ref": {
+          "$ref": "#/$defs/EvidenceRef"
+        },
+        "start_utf16": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "end_utf16": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "exact_quote": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "原样短摘录；若使用程序提供的可信UTF-16索引区间，可为null，且start_utf16/end_utf16均须为合法整数。不需要为声明全本覆盖重复输出完整原文。"
+        },
+        "prefix": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "suffix": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "source_ref",
+        "start_utf16",
+        "end_utf16",
+        "exact_quote",
+        "prefix",
+        "suffix"
+      ],
+      "additionalProperties": false,
+      "description": "UTF-16 code units半开区间[start,end)。可直接引用程序给定原文索引并将exact_quote设为null；无法确定索引时提供原样短摘录，将两端设为null由程序唯一定位。禁止三者同时为null；重复摘录不能猜位置。"
+    }
+  }
+}

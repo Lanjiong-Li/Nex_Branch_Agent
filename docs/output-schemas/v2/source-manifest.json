@@ -1,0 +1,45 @@
+{
+  "repository": "git@codeup.aliyun.com:69a93229cf8993734af34da8/backend/nexo-studio.git",
+  "branch": "feature/v2.1.0",
+  "commit": "006296ff0d43685792961292fb32dd9a8bd58b21",
+  "source_file": "/Users/llj/Nexquence/nexo-studio/src/domain/model.ts",
+  "source_sha256": "8f9c042f5dbc69a1b4a47ead91a6005bda970bb0a29218d607b6145e8bb4432d",
+  "contract_kind": "normalized_editor_domain_profile",
+  "interface_definitions": {
+    "Project": "$",
+    "Chapter": "#/$defs/Chapter",
+    "Scene": "#/$defs/Scene",
+    "Variable": "#/$defs/Variable",
+    "StoryNode": [
+      "#/$defs/StoryNode",
+      "#/$defs/VariableNode",
+      "#/$defs/ConditionNode",
+      "#/$defs/GameNode",
+      "#/$defs/JumpNode"
+    ],
+    "Edge": "#/$defs/Edge",
+    "ChapterEdge": "#/$defs/ChapterEdge",
+    "Choice": "#/$defs/Choice",
+    "ChoiceGroup": "#/$defs/ChoiceGroup",
+    "Qte": "#/$defs/Qte",
+    "ScriptInlinePlacement": "#/$defs/ScriptInlinePlacement",
+    "Branch": "#/$defs/Branch",
+    "Condition": "#/$defs/Condition",
+    "Operation": "#/$defs/Operation"
+  },
+  "excluded_optional_fields": {
+    "Project": {
+      "chapterCanvas": "视图布局缓存；不是剧本语义。现有值在编辑器中保留。"
+    },
+    "StoryNode": {
+      "revision": "后端节点写入版本由持久层保留。",
+      "completionPort": "兼容旧草稿；有效端口从互动推导。",
+      "copySourceId": "复制临时状态。",
+      "copyIds": "复制临时身份映射。",
+      "subtitles": "制作字幕。",
+      "events": "节点内制作拆分事件，不是原作/游戏事件。"
+    }
+  },
+  "normalization": "含已选可选字段时使用原 TypeScript 非空类型，并显式必填；未选可选字段省略。不得为了模型严格 Schema 把值统一改成 null。kind 联合收窄，operations/conditions 不维护第二份 DSL。",
+  "runtime_status": "设计合同与离线校验；未实现加载、写入、迁移、HTML 或真实 API 验收。"
+}

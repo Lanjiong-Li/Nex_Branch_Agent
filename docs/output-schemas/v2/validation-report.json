@@ -1,0 +1,62 @@
+{
+  "status": "passed",
+  "scope": "离线合同/样例检查；无外部调用",
+  "schema_count": 13,
+  "schemas_checked": [
+    "coordinator_response.schema.json",
+    "source_views.schema.json",
+    "adaptation_strategy.schema.json",
+    "adaptation_plan.schema.json",
+    "game_event_view.schema.json",
+    "game_event_narrative_patch.schema.json",
+    "ending_routes.schema.json",
+    "player_profiles.schema.json",
+    "chapter_design.schema.json",
+    "review_report.schema.json",
+    "subtask_result.schema.json",
+    "chapter_graph.schema.json",
+    "nexo_graph.schema.json"
+  ],
+  "local_sdk_strict_checks": 13,
+  "local_refs_resolved": 160,
+  "source_interface_profiles_checked": 18,
+  "source_check_limit": "检查字段归属与源接口必填项，并人工核对类型；未执行 TypeScript 编译。",
+  "examples_checked": [
+    "nexo_graph.example.json",
+    "adaptation_plan.example.json",
+    "chapter_graph.example.json",
+    "chapter_design.example.json"
+  ],
+  "graph_checks": "唯一身份、引用、入口、端口、选择/QTE双写一致、文字插入位置、顺序章节、变量字符串、基础可达性、终止、完整章节删除差分",
+  "positive_regression": "禁用 QTE 失败允许保留合法草稿目标，不产生可视连线",
+  "negative_cases_rejected": [
+    "禁止时间轴字段",
+    "禁止 API narrative 节点名",
+    "Variable.value 必须是领域模型字符串",
+    "最终根禁止结果信封",
+    "正文不可换成外部索引",
+    "互动位置不能是 null",
+    "重复节点 ID",
+    "悬空边",
+    "互动出口不一致",
+    "正文行号越界",
+    "非法变量字符串",
+    "章节边跳过顺序约束",
+    "continue 不能保留跳转",
+    "jump 不能指向功能节点",
+    "jump 不能指向章开始节点",
+    "jump 不能指向自己",
+    "单章遗漏节点不能成为隐式删除"
+  ],
+  "not_verified": [
+    "真实模型 API",
+    "TypeScript 编译及浏览器渲染",
+    "完整 DSL 编译/执行/条件可满足性",
+    "项目权限、用户确认与历史版本",
+    "资产目录实际存在性",
+    "Harness SDK适配器/组装器/迁移器",
+    "Nexo API导入保存",
+    "发布与播放",
+    "HTML配置页面"
+  ]
+}

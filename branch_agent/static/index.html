@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light"><title>分支 · 故事工作室</title><link rel="stylesheet" href="/static/styles.css?v=20260924-1"></head>
+<body>
+<div id="app" class="workspace">
+  <aside class="sidebar" id="chat-sidebar" aria-label="项目与会话">
+    <a href="/" class="brand"><span class="brand-mark">⌘</span><span>分支<span class="brand-sub">STORY WORKSPACE</span></span></a>
+    <button class="button primary new-project" data-action="new-project"><span>＋</span> 新建改编项目</button>
+    <div class="rail-heading">我的项目 <button class="icon-button" data-action="refresh-projects" title="刷新项目" aria-label="刷新项目">↻</button></div>
+    <nav id="projects" class="project-list"><p class="muted small">登录后加载项目</p></nav>
+    <div class="rail-heading">当前项目会话 <button class="icon-button" data-action="new-conversation" title="新建会话" aria-label="新建会话">＋</button></div>
+    <nav id="conversations" class="conversation-list"></nav>
+    <div class="sidebar-footer"><span class="avatar">分</span><div><strong id="account-name">本地开发环境</strong><div class="muted small">内容随账号持久保存</div></div></div>
+  </aside>
+  <main class="main" id="chat-main">
+    <header class="topbar"><div><div class="eyebrow">让每一个选择，都有故事</div><h1 id="project-title">故事工作室</h1></div><div class="top-actions"><span id="connection" class="connection">尚未连接</span><button class="button subtle" data-action="toggle-panel" aria-expanded="false" id="panel-toggle">配置与运行数据 <span>◫</span></button></div></header>
+    <div id="run-status" class="run-strip"><span class="status-dot"></span><span>准备开始新的故事</span></div>
+    <div id="thread" class="thread" aria-live="polite" aria-label="会话历史">
+      <section class="welcome"><div class="welcome-symbol">⌘</div><div class="eyebrow">从一条故事线，到无数种可能</div><h2>让故事，长出分支。</h2><p>放入你的小说或剧本，一起梳理人物、设计选择，<br>逐步完成可交付的互动剧本。</p><div class="welcome-cards"><button data-action="new-project"><span>01</span><strong>创建改编项目</strong><small>为一部作品建立独立工作空间</small></button><button data-action="source"><span>02</span><strong>导入原作</strong><small>粘贴全文，或选择原作文件</small></button></div><p class="welcome-note">创作决策、修改和阶段确认，都在对话中完成。</p></section>
+    </div>
+    <section id="action-cards" class="action-cards" aria-label="待你处理" tabindex="-1" hidden></section>
+    <section id="artifact-shelf" class="artifact-shelf" aria-label="阶段产物" hidden></section>
+    <section id="composer-wrap" class="composer-wrap"><form id="message-form" class="composer"><textarea id="message-input" rows="3" placeholder="粘贴完整原作，或说说你的改编想法…" aria-label="对话内容"></textarea><div class="composer-bottom"><div class="composer-tools"><button type="button" class="button subtle" data-action="source">＋ 导入原作</button><label id="mode-wrap" hidden><span class="small">运行中消息</span><select id="message-mode" aria-label="运行中消息处理方式"><option value="">选择处理方式</option><option value="steer">调整当前任务 · Steer</option><option value="queue">排队处理 · Queue</option></select></label></div><button type="submit" id="send-button" class="button primary">发送 <span>↑</span></button></div></form><div class="composer-note"><span>Enter 发送 · Shift + Enter 换行</span><span>阶段结果会保存为可追溯版本</span></div></section>
+  </main>
+  <section id="tools-page" class="tools-page" aria-label="配置与运行数据" hidden><header class="tools-head"><button class="button subtle" data-action="toggle-panel" aria-label="返回聊天工作区">← 返回聊天工作区</button><div><span class="eyebrow">ACCOUNT TOOLS</span><h2>配置与运行数据</h2></div></header><div class="panel-tabs" role="tablist"><button role="tab" aria-selected="true" data-action="panel-tab" data-tab="config">配置</button><button role="tab" aria-selected="false" data-action="panel-tab" data-tab="data">运行数据</button></div><div id="panel-content" class="panel-content"></div></section>
+</div>
+<dialog id="modal"><div class="modal-head"><h2 id="modal-title"></h2><button class="icon-button" data-action="close-modal" aria-label="关闭">×</button></div><div id="modal-body"></div></dialog>
+<dialog id="update-modal" aria-labelledby="update-title"><div class="modal-head"><h2 id="update-title">新版本可用</h2></div><p>服务已更新，刷新页面后即可使用新版本。</p><div id="update-notes"></div><div class="modal-footer"><button class="button" id="update-later" type="button">稍后刷新</button><button class="button primary" id="update-now" type="button">立即刷新</button></div></dialog>
+<div id="toast" class="toast" role="status" hidden></div>
+<div id="fatal" class="fatal" role="alert" hidden></div>
+<script type="module" src="/static/app.js?v=20260924-5"></script>
+</body></html>

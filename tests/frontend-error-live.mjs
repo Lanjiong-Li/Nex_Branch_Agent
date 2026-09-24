@@ -1,0 +1,60 @@
+/** Read-only inspection of an explicitly selected existing paused task. Run only after deployment/correction approval. */
+import assert from 'node:assert/strict';
+import {readFile,writeFile} from 'node:fs/promises';
+import {createRequire} from 'node:module';
+import {fileURLToPath} from 'node:url';
+import path from 'node:path';
+const {chromium}=createRequire(import.meta.url)(process.env.PLAYWRIGHT_MODULE||'playwright');
+const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
+const base=process.env.FRONTEND_BASE_URL||'http://127.0.0.1:8767';
+const project='926aed68-d15f-5576-8990-1a1d9488fc5d';
+const taskId='c3d345fa-de71-4e5b-9d47-d34c5dbe0ba4';
+const runId='1d216750-dc46-474c-b3e1-bb7f70ff1755';
+const credentials=await readFile(path.join(process.env.FRONTEND_AUTH_DIR||path.join(root,'.data'),'local-login.txt'),'utf8');
+const browser=await chromium.launch({headless:true,channel:process.env.BROWSER_CHANNEL||'chrome'});
+try{
+  const page=await browser.newPage({viewport:{width:1440,height:1000}}),errors=[],httpErrors=[],blockedWrites=[];
+  page.on('pageerror',error=>errors.push(error.message));
+  page.on('response',response=>{if(response.status()>=400&&!response.url().endsWith('/auth/me'))httpErrors.push({status:response.status(),path:new URL(response.url()).pathname});});
+  await page.route('**/api/**',route=>{const req=route.request();if(!['GET','HEAD'].includes(req.method())&&!(req.method()==='POST'&&req.url().endsWith('/auth/login'))){blockedWrites.push(new URL(req.url()).pathname);return route.abort();}return route.continue();});
+  const get=async suffix=>{const response=await page.request.get(base+'/api/branch-agent/v1'+suffix);assert.equal(response.status(),200);return response.json();};
+  await page.goto(base);
+  await page.locator('#login-form [name=username]').fill(credentials.match(/用户名：(.*)/)[1]);
+  await page.locator('#login-form [name=password]').fill(credentials.match(/密码：(.*)/)[1]);
+  await page.getByRole('button',{name:'登录工作区'}).click();
+  await page.locator('#modal').waitFor({state:'hidden'});
+  await page.locator(`.project-link[data-id="${project}"]`).click();
+  const before=await get(`/projects/${project}/status`);
+  const task=before.tasks.find(row=>row.id===taskId),run=before.runs.find(row=>row.id===runId);
+  assert.ok(task);assert.ok(run);assert.equal(task.pause_reason,'output_limit_exceeded');assert.equal(run.error.code,'output_limit_exceeded');
+  assert.equal(run.error.details.max_output_tokens,8000);assert.equal(run.error.details.terminal_status,'incomplete');
+  await page.locator(`.conversation-link[data-id="${task.conversation_id}"]`).click();
+  const history=await get(`/projects/${project}/conversations/${task.conversation_id}/history?tail=true&limit=100`);
+  const correction=history.items.filter(row=>row.visibility!=='internal').map(row=>({id:row.id,text:row.content?.storage==='inline_text'?row.content.text:JSON.stringify(row.content?.value??row.content)})).find(row=>/更正|修正|纠正/.test(row.text)&&/output_limit_exceeded|输出.+上限/.test(row.text));
+  assert.ok(correction,'A saved correction must explain the output-limit cause in chat.');
+  await page.getByText(correction.text.slice(0,60),{exact:false}).first().waitFor();
+  const strip=page.locator('#run-status');
+  await strip.locator('[data-error-code="output_limit_exceeded"]').waitFor();
+  assert.match(await strip.innerText(),/模型输出达到本次上限/);
+  assert.equal(await strip.getByRole('button',{name:'错误详情'}).getAttribute('data-id'),runId);
+  const preserved=[];
+  for(const kind of ['source_text','source_views']){
+    const artifact=before.artifacts.find(row=>row.artifact_kind===kind&&row.latest_version>0);
+    assert.ok(artifact,`${kind} must remain stored.`);
+    const fixed=await get(`/projects/${project}/artifacts/${artifact.id}/versions/${artifact.latest_version}`);
+    assert.ok(fixed.content!=null);assert.ok(fixed.version.content_sha256);
+    preserved.push({artifact_kind:kind,artifact_id:artifact.id,version:artifact.latest_version,artifact_version_id:fixed.version.id,content_sha256:fixed.version.content_sha256});
+  }
+  await strip.getByRole('button',{name:'错误详情'}).click();
+  await page.locator('#panel-content [data-error-code="output_limit_exceeded"]').waitFor();
+  assert.ok((await page.locator('#panel-content').innerText()).includes(runId));
+  const screenshot=path.join(root,'tests/frontend-error-live.png');await page.screenshot({path:screenshot,fullPage:true});
+  const after=await get(`/projects/${project}/status`);
+  const afterTask=after.tasks.find(row=>row.id===taskId),afterRun=after.runs.find(row=>row.id===runId);
+  assert.equal(afterTask.row_version,task.row_version);assert.equal(afterTask.state,task.state);
+  assert.equal(afterRun.row_version,run.row_version);assert.equal(afterRun.state,run.state);
+  assert.deepEqual(errors,[]);assert.deepEqual(httpErrors,[]);assert.deepEqual(blockedWrites,[]);
+  const result={observed_at:new Date().toISOString(),origin:'Existing main service, browser read-only verification after deployment and correction',project_id:project,task_id:taskId,run_id:runId,pause_reason:task.pause_reason,run_error_code:run.error.code,max_output_tokens:run.error.details.max_output_tokens,terminal_status:run.error.details.terminal_status,correction_history_id:correction.id,task_state:task.state,run_state:run.state,preserved_artifacts:preserved,screenshot,console_errors:errors,http_errors:httpErrors,blocked_business_write_attempts:blockedWrites};
+  await writeFile(path.join(root,'tests/frontend-error-live-results.json'),JSON.stringify(result,null,2)+'\n');
+  console.log(JSON.stringify({status:'passed',project_id:project,task_id:taskId,run_id:runId,pause_reason:task.pause_reason,preserved_artifacts:preserved.map(row=>({kind:row.artifact_kind,version:row.version})),console_errors:errors,http_errors:httpErrors,blocked_business_write_attempts:blockedWrites}));
+}finally{await browser.close();}
