@@ -349,6 +349,7 @@ class Store:
                 connection.execute('DELETE FROM config_links WHERE consumer_project_id=%s OR config_version_id IN (SELECT id FROM config_versions WHERE project_id=%s)',(project_id,project_id))
                 connection.execute('DELETE FROM record_links WHERE project_id=%s',(project_id,))
                 connection.execute('DELETE FROM runtime_projections WHERE project_id=%s',(project_id,))
+                connection.execute('DELETE FROM sdk_trace_spans WHERE project_id=%s',(project_id,))
                 connection.execute('DELETE FROM logical_objects WHERE project_id=%s',(project_id,))
                 for table in dict.fromkeys(TABLES.values()):
                     if table!='projects':

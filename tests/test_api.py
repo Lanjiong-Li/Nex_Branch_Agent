@@ -92,12 +92,22 @@ def test_run_debug_shows_actual_input_and_model_output(api):
     listing=client.get(BASE+f'/projects/{pid}/run-debug')
     assert listing.status_code==200,listing.text
     assert listing.json()['items'][0]['run']['id']==run['id']
+    assert listing.json()['items'][0]['agent_name']==config['values']['prompts']['agent_names']['source_parser']
     assert listing.json()['items'][0]['model']=='gpt-5.6-luna'
     detail=client.get(BASE+f'/projects/{pid}/run-debug/{run["id"]}')
     assert detail.status_code==200,detail.text
+    assert detail.json()['agent_name']==config['values']['prompts']['agent_names']['source_parser']
     assert detail.json()['snapshots'][0]['input_items']['value'][0]['content']=='原作正文'
     assert detail.json()['outputs'][0]['history']['content']['value']['output'][0]['content'][0]['text']=='切片完成'
     assert detail.json()['calls'][0]['id']==call['id']
+    assert detail.json()['trace_spans']==[]
+    store._connection().execute('''INSERT INTO sdk_trace_spans
+        (project_id,run_id,trace_id,span_id,kind,name,started_at,metadata)
+        VALUES (%s,%s,%s,%s,%s,%s,clock_timestamp(),%s)''',
+        (pid,run['id'],'trace_test','span_test','function','get_artifact',Jsonb({})))
+    traced=client.get(BASE+f'/projects/{pid}/run-debug/{run["id"]}')
+    assert traced.status_code==200
+    assert traced.json()['trace_spans'][0]['name']=='get_artifact'
 
 
 def test_config_publication_and_old_snapshot_are_independent(api):
@@ -110,7 +120,7 @@ def test_config_publication_and_old_snapshot_are_independent(api):
     published=client.post(BASE+f'/projects/{pid}/config/{draft.json()["id"]}/publish',json={});assert published.status_code==200,published.text
     new=service.resolve(pid,'step1')
     assert new['values']['model']['reasoning_effort']=='low'
-    assert old['values']['model']['reasoning_effort']=='medium'
+    assert old['values']['model']['reasoning_effort']=='high'
     assert new['values']['context']['input_token_cap']==1050000
     assert old['id']!=new['id']
     assert store.get(old['id'],pid)['values']==old['values']
@@ -127,7 +137,7 @@ def test_account_config_endpoints_apply_to_all_owned_projects(api):
     assert view.status_code==200,view.text
     draft=client.post(BASE+'/account/config',json={
         'values':{'model':{'reasoning_effort':'low'},
-                  'context':{'step1_source':{'max_source_tokens':250000}}},
+                  'context':{'step1_source':{'trigger_tokens':250000,'window_tokens':120000}}},
         'scope_kind':'project'
     })
     assert draft.status_code==200,draft.text
@@ -138,8 +148,8 @@ def test_account_config_endpoints_apply_to_all_owned_projects(api):
     service=client.app.state.config
     assert service.resolve(first,'step1')['values']['model']['reasoning_effort']=='low'
     assert service.resolve(second,'step1')['values']['model']['reasoning_effort']=='low'
-    assert service.resolve(first,'step1')['values']['context']['step1_source']['max_source_tokens']==250000
-    assert service.resolve(second,'step1')['values']['context']['step1_source']['max_source_tokens']==250000
+    assert service.resolve(first,'step1')['values']['context']['step1_source']['trigger_tokens']==250000
+    assert service.resolve(second,'step1')['values']['context']['step1_source']['window_tokens']==120000
 
     client.headers['Idempotency-Key']=str(uuid.uuid4())
     created=client.post(BASE+f'/projects/{first}/conversations',json={'title':'导入配置验证'})
@@ -149,7 +159,9 @@ def test_account_config_endpoints_apply_to_all_owned_projects(api):
         'conversation_id':created.json()['id'],'text':'用于验证全局原作上限的简短原文。'
     })
     assert imported.status_code==200,imported.text
-    assert imported.json()['source_limit']==250000
+    assert imported.json()['source_window_threshold']==250000
+    assert imported.json()['source_window_tokens']==120000
+    assert imported.json()['source_mode']=='full_text'
 
 
 def test_account_config_schema_validation_is_read_only_and_reports_strict_errors(api):
@@ -177,6 +189,63 @@ def test_account_config_schema_validation_is_read_only_and_reports_strict_errors
     })
     assert rejected.status_code==400
     assert 'additionalProperties=false' in rejected.json()['error']['message']
+
+
+def test_unsaved_instruction_layers_have_server_preview_without_publication(api):
+    client, store, _ = api
+    values = client.get(BASE+'/account/config?stage=step5').json()['values']
+    values['prompts']['base'] = '未发布的创作指令'
+    values['prompts']['harness']['stages']['step5'] = '未发布的阶段协议'
+    result = client.post(BASE+'/account/config/instructions-preview', json={
+        'stage':'step5', 'values':values})
+    assert result.status_code == 200, result.text
+    shown = result.json()
+    assert shown['parts']['creative_base'] == '未发布的创作指令'
+    assert shown['parts']['harness_stage'] == '未发布的阶段协议'
+    assert shown['final'].endswith(values['prompts']['harness']['ask_user'])
+    assert not store.list(None,'config_version',limit=10)
+
+
+def test_account_editor_autosave_keeps_incomplete_schema_without_publishing(api):
+    client,store,identity=api
+    original=client.get(BASE+'/account/config?stage=step5').json()
+    before=client.get(BASE+'/account/config/editor?scope_kind=stage&scope_key=step5')
+    assert before.status_code==200 and before.json()['revision']==0
+    working={'values':original['values'],'base_values':original['values'],
+             'schemas':original['schemas'],'schema_texts':{'game_event_view':'{"type":'},
+             'raw_fields':{'model.max_output_tokens':''}}
+    saved=client.put(BASE+'/account/config/editor',json={'scope_kind':'stage','scope_key':'step5',
+      'expected_revision':0,'payload':working})
+    assert saved.status_code==200,saved.text
+    revision=saved.json()['revision']
+    restored=client.get(BASE+'/account/config/editor?scope_kind=stage&scope_key=step5')
+    assert restored.status_code==200
+    assert restored.json()['payload']['schema_texts']['game_event_view']=='{"type":'
+    assert restored.json()['payload']['raw_fields']['model.max_output_tokens']==''
+    assert client.get(BASE+'/account/config?stage=step5').json()['schemas']==original['schemas']
+    assert not store.list(None,'config_version',limit=10)
+    conflict=client.put(BASE+'/account/config/editor',json={'scope_kind':'stage','scope_key':'step5',
+      'expected_revision':0,'payload':working})
+    assert conflict.status_code==409
+    cleared=client.request('DELETE',BASE+'/account/config/editor',json={
+      'scope_kind':'stage','scope_key':'step5','expected_revision':revision})
+    assert cleared.status_code==200
+    assert client.get(BASE+'/account/config/editor?scope_kind=stage&scope_key=step5').json()['payload'] is None
+
+
+def test_invalid_publication_keeps_previous_published_config(api):
+    client,store,_=api
+    original=client.get(BASE+'/account/config?stage=step1').json()
+    client.headers['Idempotency-Key']=str(uuid.uuid4())
+    draft=client.post(BASE+'/account/config',json={
+      'scope_kind':'project','values':{'model':{'max_output_tokens':999999999}}})
+    assert draft.status_code==200,draft.text
+    client.headers['Idempotency-Key']=str(uuid.uuid4())
+    refused=client.post(BASE+f'/account/config/{draft.json()["id"]}/publish',json={})
+    assert refused.status_code==400
+    current=client.get(BASE+'/account/config?stage=step1').json()
+    assert current['values']['model']['max_output_tokens']==original['values']['model']['max_output_tokens']
+    assert not [version for version in current['versions'] if version['state']=='published']
 
 
 def test_permanent_project_delete_requires_confirmation_and_is_idempotent(api):

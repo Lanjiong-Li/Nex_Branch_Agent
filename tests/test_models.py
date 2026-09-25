@@ -133,10 +133,10 @@ def test_default_stage_budgets_use_full_model_window():
     base,stages=initial_values();step1=merge(base,stages['step1'])
     assert base['context']['input_token_cap']==1050000
     assert step1['context']['input_token_cap']==1050000
-    assert input_budget(base)==1040000
-    assert input_budget(step1)==1016000
+    assert input_budget(base)==990000
+    assert input_budget(step1)==966000
     assert step1['model']['max_output_tokens']==32000
-    assert validate_values(step1,SchemaCatalog().schemas)==1016000
+    assert validate_values(step1,SchemaCatalog().schemas)==966000
 
 
 def test_luna_matches_sol_runtime_capabilities_and_has_pricing():

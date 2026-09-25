@@ -27,7 +27,7 @@ def read_case(tmp_path):
     pid = project['id']
     conversation = store.put(new_record('conversation', pid, title='History'))
     config = {'model': {'name': 'gpt-5.6-sol'}, 'retrieval': {'top_k': 8, 'snippet_tokens': 24, 'neighbor_messages': 0},
-              'tools': {'read_token_cap': 4000, 'enabled': ['search_records', 'read_record']}}
+              'tools': {'read_token_cap': 4000, 'enabled': ['list_records', 'read_record']}}
     def history(sequence, content, *, conversation_id=None, project_id=None):
         return store.put(new_record('history_record', project_id or pid,
             conversation_id=conversation_id or conversation['id'], sequence=sequence,
@@ -40,7 +40,7 @@ def read_case(tmp_path):
             connection.execute(sql.SQL('DROP SCHEMA {} CASCADE').format(sql.Identifier(namespace)))
 
 
-async def invoke(reader, name='search_records', **arguments):
+async def invoke(reader, name='list_records', **arguments):
     tool = next(tool for tool in reader.functions() if tool.name == name)
     raw = json.dumps(arguments)
     context = ToolContext(context=None, tool_name=name, tool_call_id='test-read-call', tool_arguments=raw)
@@ -56,7 +56,7 @@ async def test_history_snippet_uses_configured_tokens_and_exact_source_range(rea
     result = json.loads(await invoke(reader, query='灯塔回信', record_type='history_record'))
     item = result['items'][0]
     assert '灯塔回信' in item['snippet']
-    assert tokens(item['snippet']) <= 24
+    assert tokens(item['snippet'], config['model']['name']) <= 24
     assert item['record_ref']['record_id'] == row['id']
     assert item['truncated'] is True
     assert item['range']['unit'] == 'unicode_codepoints'
@@ -64,7 +64,7 @@ async def test_history_snippet_uses_configured_tokens_and_exact_source_range(rea
     config['retrieval']['snippet_tokens'] = 80
     longer = json.loads(await invoke(reader, query='灯塔回信', record_type='history_record'))['items'][0]
     assert len(longer['snippet']) > len(item['snippet'])
-    assert tokens(longer['snippet']) <= 80
+    assert tokens(longer['snippet'], config['model']['name']) <= 80
 
 
 @pytest.mark.asyncio
@@ -148,7 +148,7 @@ async def test_budget_pagination_preserves_hits_and_neighbors_without_duplicates
     cursors = set()
     for _ in range(20):
         raw = await invoke(reader, query='检索命中', record_type='history_record', cursor=cursor)
-        assert tokens(raw) <= 600
+        assert tokens(raw, config['model']['name']) <= 600
         result = json.loads(raw)
         assert result['items']
         assert sum(item['match'] for item in result['items']) <= 1
@@ -179,9 +179,9 @@ async def test_invalid_search_cursor_is_rejected_instead_of_slicing_records(read
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('selection_count', [1, 120])
-async def test_get_artifact_bounds_large_state_without_upgrading_partial_confirmation(read_case, selection_count):
+async def test_read_record_bounds_large_artifact_state_without_upgrading_partial_confirmation(read_case, selection_count):
     store, pid, _, config, _ = read_case
-    config['tools'].update(read_token_cap=600, enabled=['get_artifact', 'read_record'])
+    config['tools'].update(read_token_cap=600, enabled=['list_records', 'read_record'])
     artifact = store.put(new_record('artifact', pid, artifact_kind='large_state_test'))
     content = '正文含有引号"、反斜杠\\和换行\n🌍。' * 90
     version = store.put(new_record('artifact_version', pid, artifact_id=artifact['id'], origin='program',
@@ -195,9 +195,9 @@ async def test_get_artifact_bounds_large_state_without_upgrading_partial_confirm
     reader = ReadTools(store, pid, config)
     chunks = [];cursor = None
     for _ in range(30):
-        raw = await invoke(reader, 'get_artifact', artifact_kind='large_state_test', artifact_id=artifact['id'],
+        raw = await invoke(reader, 'read_record', record_id=artifact['id'],
                            version='1', cursor=cursor)
-        assert tokens(raw) <= 600
+        assert tokens(raw, config['model']['name']) <= 600
         result = json.loads(raw)
         actual = result['state']
         assert actual['confirmation_status'] == 'partial'
@@ -220,12 +220,51 @@ async def test_get_artifact_bounds_large_state_without_upgrading_partial_confirm
     parts = [];cursor = None
     for _ in range(40):
         raw = await invoke(reader, 'read_record', record_id=state['id'], json_pointer='/effective_selections', cursor=cursor)
-        assert tokens(raw) <= 600
+        assert tokens(raw, config['model']['name']) <= 600
         page = json.loads(raw);parts.append(page['data']);cursor = page['next_cursor']
         if cursor is None:break
     else:pytest.fail('state scope cursor did not finish')
     assert json.loads(''.join(parts)) == selections
     assert reader.resolve(result['state_ref'])[1]['check_record_ids'] == [row['id'] for row in checks]
-    state_hit = reader.search('partial', 'artifact_state')['items'][0]
+    state_hit = json.loads(await invoke(reader, query='partial', record_type='artifact_state'))['items'][0]
     assert state_hit['record_ref']['record_id'] == state['id']
     assert reader.resolve(state_hit['record_ref'])[0]['record_type'] == 'artifact_state'
+
+
+@pytest.mark.asyncio
+async def test_list_records_discovers_artifacts_and_read_record_resolves_effective_or_draft(read_case):
+    store,pid,_,config,history=read_case
+    artifact=store.put(new_record('artifact',pid,artifact_kind='adaptation_plan',
+                                  scope={'stage':4,'chapter_ids':[],'branch_ids':[],'target_refs':[],'description':'方案'}))
+    old=store.put(new_record('artifact_version',pid,artifact_id=artifact['id'],version=1,origin='program',
+                             content={'storage':'inline_text','text':'已确认方案'}))
+    draft_version=store.put(new_record('artifact_version',pid,artifact_id=artifact['id'],version=2,parent_version=1,origin='program',
+                                       content={'storage':'inline_text','text':'未确认新稿'}))
+    state=store.put(new_record('artifact_state',pid,artifact_id=artifact['id'],artifact_version_id=old['id'],
+                               confirmation_status='confirmed',dependency_status='valid',quality_status='passed'))
+    store.put(new_record('artifact_state',pid,artifact_id=artifact['id'],artifact_version_id=draft_version['id'],version=2,
+                         confirmation_status='unconfirmed',dependency_status='valid',quality_status='unchecked'))
+    artifact=store.update({**artifact,'latest_version':2,'current_effective_version':1},artifact['row_version'])
+    reader=ReadTools(store,pid,config)
+    listing=json.loads(await invoke(reader))
+    assert len(listing['items'])==1
+    item=listing['items'][0]
+    assert item['artifact_kind']=='adaptation_plan'
+    assert item['record_ref']['record_id']==artifact['id']
+    assert item['latest_version']==2 and item['current_effective_version']==1
+    assert item['confirmation_status']=='unconfirmed'
+    assert item['scope']['stage']==4
+    assert '未确认新稿' not in json.dumps(listing,ensure_ascii=False)
+    assert json.loads(await invoke(reader,stage=5))['status']=='no_matches'
+    effective=json.loads(await invoke(reader,'read_record',artifact_kind='adaptation_plan'))
+    assert effective['data']=='已确认方案' and effective['source_ref']['version']=='1'
+    assert effective['state_ref']['record_id']==state['id']
+    draft=json.loads(await invoke(reader,'read_record',record_id=artifact['id'],version='latest_draft'))
+    assert draft['data']=='未确认新稿' and draft['source_ref']['version']=='2'
+    assert draft['state']['confirmation_status']=='unconfirmed'
+
+
+def test_legacy_snapshot_tool_names_map_to_new_read_tools(read_case):
+    store,pid,_,config,_=read_case
+    config['tools']['enabled']=['get_artifact','search_records','read_record']
+    assert {tool.name for tool in ReadTools(store,pid,config).functions()}=={'list_records','read_record'}

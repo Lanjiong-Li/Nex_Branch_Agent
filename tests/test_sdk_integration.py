@@ -8,7 +8,7 @@ from openai import AsyncOpenAI
 from branch_agent.storage import Store
 from branch_agent.records import new_record
 from branch_agent.configuration import ConfigService
-from branch_agent.model_service import ModelService, append_history
+from branch_agent.model_service import ModelService, ModelRunError, append_history
 from branch_agent.workflow import Workflow, ref
 
 
@@ -31,7 +31,7 @@ def runtime(tmp_path):
 def provider_response():
     value={'result_kind':'ready','payload':{'reply':'你好，请提交原作。','source_message_kind':'request',
         'task_requests':[]},'questions':[],'evidence_refs':[],'notes':[]}
-    return {'id':'resp_test_'+uuid.uuid4().hex,'object':'response','created_at':1,'status':'completed','model':'gpt-5.6-sol',
+    return {'id':'resp_test_'+uuid.uuid4().hex,'object':'response','created_at':1,'status':'completed','model':'deepseek-flash',
       'output':[{'id':'msg_test','type':'message','role':'assistant','status':'completed','content':[{'type':'output_text','text':json.dumps(value,ensure_ascii=False),'annotations':[]}]}],
       'parallel_tool_calls':False,'usage':{'input_tokens':100,'output_tokens':40,'total_tokens':140,
       'input_tokens_details':{'cached_tokens':0},'output_tokens_details':{'reasoning_tokens':0}}}
@@ -48,8 +48,9 @@ async def test_real_sdk_audits_input_output_usage_and_session(runtime):
     store,task,run,session,values=runtime;requests=[]
     def handler(request):
         data=json.loads(request.content);requests.append(data)
-        assert data['model']=='gpt-5.6-sol'
+        assert data['model']=='deepseek-flash'
         assert data['text']['format']['type']=='json_schema'
+        assert data['text']['format']['strict'] is False
         return httpx.Response(200,json=provider_response())
     client=AsyncOpenAI(api_key='local-mock-not-real',http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),max_retries=0)
     result=await ModelService(store,client).run('coordinator',task,run,session,values,[],'你好')
@@ -60,7 +61,28 @@ async def test_real_sdk_audits_input_output_usage_and_session(runtime):
     assert snapshots[0]['output_schema']['schema_id']=='coordinator_response'
     assert store.list(pid,'session_item') and store.list(pid,'history_record')
     assert store.get(run['id'],pid)['model_turns_used']==1
+    spans=store._connection().execute(
+        'SELECT kind,name,metadata FROM sdk_trace_spans WHERE project_id=%s AND run_id=%s',
+        (pid,run['id'])).fetchall()
+    assert any(span['kind']=='agent' for span in spans)
+    assert any(span['kind']=='response' for span in spans)
+    assert '你好' not in str(spans)  # Prompt text stays in the existing audited records.
     await client.close()
+
+
+@pytest.mark.asyncio
+async def test_provider_routing_uses_isolated_clients_and_keeps_openai_available(monkeypatch):
+    monkeypatch.setenv('DEEPSEEK_API_KEY','mock-deepseek-key')
+    monkeypatch.setenv('OPENAI_API_KEY','mock-openai-key')
+    service=ModelService(None)
+    deepseek=service._client_for('deepseek-flash')
+    assert service._client_for('deepseek-v4-pro') is deepseek
+    openai=service._client_for('gpt-5.6-sol')
+    assert openai is not deepseek
+    assert str(deepseek.base_url).rstrip('/')=='https://api.deepseek.com'
+    assert str(openai.base_url)=='https://api.openai.com/v1/'
+    await deepseek.close()
+    await openai.close()
 
 
 @pytest.mark.asyncio
@@ -113,7 +135,7 @@ async def test_disabling_stage_output_type_changes_real_sdk_request(runtime):
         assert data['reasoning']['effort']=='high'
         assert data['max_output_tokens']==32000
         assert data.get('text',{}).get('format',{}).get('type')!='json_schema'
-        assert [tool['name'] for tool in data['tools']]==['read_record']
+        assert [tool['name'] for tool in data['tools']]==['read_record','ask_user']
         return httpx.Response(200,json=plain_provider_response('原始文本调试输出'))
     client=AsyncOpenAI(api_key='local-mock-not-real',http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),max_retries=0)
     result=await ModelService(store,client).run('step1',task,run,session,config['values'],workflow.materials(pid,1),'切片')
@@ -158,6 +180,31 @@ async def test_tool_execution_is_archived_and_second_turn_receives_result(runtim
     assert calls[0]['state']=='succeeded' and calls[0]['history_ids']
     assert len(store.list(task['project_id'],'model_call'))==2
     assert store.get(run['id'],task['project_id'])['model_turns_used']==2
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_sdk_turn_limit_reports_the_actual_cause(runtime):
+    store, task, run, session, values = runtime
+    run = store.put(new_record('run', task['project_id'], task_id=task['id'],
+        agent_key='conversation_coordinator', session_id=session['id'],
+        config_version_id=run['config_version_id'], state='running', max_turns=1))
+
+    def handler(_request):
+        response = provider_response()
+        response['output'] = [{'id': 'fc_read', 'type': 'function_call',
+            'call_id': 'call_read', 'name': 'read_record',
+            'arguments': json.dumps({'record_id': task['requested_by_message_id'],
+                                     'version': None, 'cursor': None}), 'status': 'completed'}]
+        return httpx.Response(200, json=response)
+
+    client = AsyncOpenAI(api_key='local-mock', http_client=httpx.AsyncClient(
+        transport=httpx.MockTransport(handler)), max_retries=0)
+    with pytest.raises(ModelRunError) as caught:
+        await ModelService(store, client).run('coordinator', task, run, session, values, [], '查看记录')
+    assert caught.value.code == 'turn_limit'
+    assert '模型轮次上限' in str(caught.value)
+    assert '凭据' not in str(caught.value)
     await client.close()
 
 

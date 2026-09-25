@@ -14,7 +14,7 @@ from uuid import uuid4
 from .records import new_record, scope, usage, budget, canonical_bytes
 from .workflow import (Workflow, WorkflowBlocked, STAGES, STAGE_OUTPUTS, WHOLE, all_records,
                        body, ref, update, session_key, locate_source_anchors)
-from .prompts import stage_agent, agent_instructions
+from .prompts import stage_agent, agent_instructions, harness_prompts
 from .graph import (assemble_project, merge_chapter, quality_checks, GraphError,
                     GraphValidationError, validate_output, project_profile)
 from .graph_contract import load_graph_contract
@@ -152,7 +152,8 @@ class Engine:
             subject_ref=None, actor_kind="program", actor_account_id=None,
             payload=payload, causation_id=source))
 
-    def _message(self, project, conversation, text, role="assistant", task=None, run=None):
+    def _message(self, project, conversation, text, role="assistant", task=None, run=None,
+                 visibility="conversation"):
         self.store.advisory_lock("history:" + conversation)
         conv = self.store.get(conversation, project_id=project)
         if not conv or conv["record_type"] != "conversation":
@@ -161,7 +162,7 @@ class Engine:
         update(self.store, conv, last_message_seq=sequence)
         message = self.store.put(new_record("history_record", project, conversation_id=conversation,
             sequence=sequence, session_id=None, task_id=task, run_id=run, role=role,
-            visibility="conversation", content={"storage": "inline_text", "text": text},
+            visibility=visibility, content={"storage": "inline_text", "text": text},
             attachment_blob_ids=[], source_message_id=None, operation_id=None, provider_item_id=None))
         self._event(project, "message.created", {"message_id": message["id"]}, conversation=conversation,
                     task=task, run=run, source=message["id"])
@@ -359,6 +360,13 @@ class Engine:
                 data.pop("next_retry_at", None)
                 previous_run = data.get("current_run_id")
                 saved = self._saved_output(task, previous_run)
+                if data.get("source_window_state"):
+                    # A deliberate continuation may adopt newly published
+                    # window/model settings. Completed windows retain their
+                    # original Run snapshots and absolute UTF-16 boundaries.
+                    data.pop("config_version_id", None)
+                    data.pop("resume_saved_result", None)
+                    saved = None
                 if data.get("resume_saved_result") and self._output_rejected(task, data["resume_saved_result"]["source_run_id"]):
                     data.pop("resume_saved_result")
                 saved_result_kind = saved.get("result_kind") if isinstance(saved, dict) else "ready" if isinstance(saved, str) and saved.strip() else None
@@ -554,7 +562,8 @@ class Engine:
                 else:
                     # Root workflows waiting for child completion may advance without a model call.
                     for root in [t for t in tasks if self._task_data(t).get("is_workflow") and t["state"] in ("queued", "running", "waiting_user")]:
-                        self._advance_root(root)
+                        if not self._task_data(root).get("manager_controlled"):
+                            self._advance_root(root)
                     requests = sorted(all_records(self.store, project, "queued_request", conversation_id=cid), key=lambda q: q["sequence"])
                     gate = self._control(project, cid)
                     hold_times = [self.store.get(h["basis_event_id"], project_id=project)["created_at"] for h in self._effective_holds(project, gate)]
@@ -774,10 +783,10 @@ class Engine:
                     raise WorkflowBlocked('dependency_changed', {'authorized_source_ref': data['source_ref'], 'current_source_ref': ref(source)})
             current = self.store.get(current['parent_task_id'], project_id=task['project_id']) if current['parent_task_id'] else None
 
-    def _session(self, task, stage, values=None):
+    def _session(self, task, stage, values=None, key_override=None):
         sharing = (values or {}).get("context", {}).get("session_sharing", {})
-        key = f"aux:{task['id']}:{stage}" if isinstance(stage, str) and stage.startswith("aux.") else session_key(
-            stage, self._task_data(task).get("chapter_id"), sharing)
+        key = key_override or (f"aux:{task['id']}:{stage}" if isinstance(stage, str) and stage.startswith("aux.") else session_key(
+            stage, self._task_data(task).get("chapter_id"), sharing))
         sessions = all_records(self.store, task["project_id"], "work_session", conversation_id=task["conversation_id"], session_key=key)
         if sessions:
             return max(sessions, key=lambda s: s["generation"])
@@ -785,8 +794,14 @@ class Engine:
             session_key=key, scope=task["scope"], state="active", generation=1, latest_summary_ref=None,
             last_item_seq=0, lease_owner=None, lease_expires_at=None, fencing_token=0))
 
-    def _start_run(self, task, stage, materials, *, recovery=False):
+    def _start_run(self, task, stage, materials, *, recovery=False, session_key_override=None,
+                   fresh_allowance=False):
         data = self._task_data(task)
+        if fresh_allowance:
+            data.pop("remaining_turns", None)
+            data.pop("allowance", None)
+            data.pop("root_run_id", None)
+            data.pop("recovery_run_ids", None)
         config = self.store.get(data["config_version_id"], project_id=task["project_id"]) if data.get("config_version_id") else self.config_service.resolve(task["project_id"], stage if isinstance(stage, str) else f"step{stage}")
         values = config["values"]
         if (isinstance(stage, int) and not recovery and materials
@@ -801,7 +816,7 @@ class Engine:
                 configured.extend(m for m in extras if (m.get("ref", {}).get("record_id"),
                                                         m.get("ref", {}).get("version")) not in identities)
                 materials[:] = configured
-        session = self._session(task, stage, values)
+        session = self._session(task, stage, values, key_override=session_key_override)
         now = self.store.now()
         if session["lease_owner"] and session["lease_expires_at"] and session["lease_expires_at"] > now:
             raise WorkflowBlocked("session_leased")
@@ -998,7 +1013,8 @@ class Engine:
                 materials.append({"ref": source, "schema_id": fixed["record_type"], "content": fixed, "required": False})
         return materials
 
-    async def _invoke(self, stage, task, run, session, config, materials, message, token):
+    async def _invoke(self, stage, task, run, session, config, materials, message, token,
+                      *, extra_tools=None, instructions_override=None, step1_window=None):
         async def control():
             with self.store.transaction():
                 self.store.advisory_lock(f"{task['project_id']}:conversation:{task['conversation_id']}")
@@ -1011,7 +1027,14 @@ class Engine:
                 queued = [q for q in all_records(self.store, task["project_id"], "queued_request")
                           if q["state"] == "pending" and q["target_run_id"] in targets]
                 return {"stop": False, "steer_messages": [self.store.get(q["source_message_id"], project_id=task["project_id"]) for q in queued], "reason": None}
-        model = asyncio.create_task(self.model_service.run(stage if isinstance(stage, str) else f"step{stage}", task, run, session, config, materials, message, control=control))
+        kwargs = {}
+        if extra_tools is not None:
+            kwargs["extra_tools"] = extra_tools
+        if instructions_override is not None:
+            kwargs["instructions_override"] = instructions_override
+        if step1_window is not None:
+            kwargs["step1_window"] = step1_window
+        model = asyncio.create_task(self.model_service.run(stage if isinstance(stage, str) else f"step{stage}", task, run, session, config, materials, message, control=control, **kwargs))
         self._calls[run["id"]] = model
         forced = asyncio.get_running_loop().create_future()
         self._forced_stops[run["id"]] = forced
@@ -1061,6 +1084,27 @@ class Engine:
             self._fail_execution(task, None, "checkpoint_invalid")
             return
         stage, chapter = data["stage"], data.get("chapter_id")
+        if stage == 1:
+            from .context import tokens
+            try:
+                source_version = self.workflow.resolve(project, "source_text")
+                source_text = body(self.store, source_version)
+                config_version = (self.store.get(data["config_version_id"], project_id=project)
+                                  if data.get("config_version_id") else self.config_service.resolve(project, "step1"))
+                if not data.get("config_version_id"):
+                    with self.store.transaction():
+                        data["config_version_id"] = config_version["id"]
+                        self._save_task_data(task, data)
+                source_config = config_version["values"]["context"]["step1_source"]
+                windowed = (data.get("source_window_state") or
+                            tokens(source_text, config_version["values"]["model"]["name"]) > source_config["trigger_tokens"])
+            except Exception as error:
+                reason = getattr(error, "reason", None) or getattr(error, "code", None) or "configuration_error"
+                self._fail_execution(task, None, reason, str(error), getattr(error, "details", None))
+                return
+            if windowed:
+                await self._drive_step1_windows(task, token, source_version, source_text)
+                return
         if data.get("batch_manifest_ref") and not data.get("batch_coverage_ready"):
             await self._drive_batch(task, token)
             return
@@ -1096,7 +1140,8 @@ class Engine:
                     if stage == 11:
                         candidate = self._assemble(task)
                         fixed = self.store.get(self._task_data(task)["config_version_id"], project_id=project)
-                        if not agent_instructions("step11",fixed["values"]).strip():
+                        if not fixed["values"]["prompts"].get("validation_enabled",
+                                bool(agent_instructions("step11",fixed["values"]).strip())):
                             self._deliver_script_validated(task, candidate, fixed)
                             return
                         materials = self._review_materials(task)
@@ -1142,7 +1187,7 @@ class Engine:
             self._fail_execution(task, run, "user_stop")
         except Exception as error:
             reason = getattr(error, "reason", None) or getattr(error, "code", None) or ("active_time_limit" if isinstance(error, asyncio.TimeoutError) else "configuration_error")
-            repairable = isinstance(error, GraphError) or type(error).__name__ == "ValidationError" or reason in ("ModelBehaviorError", "source_anchor_invalid", "source_reference_mismatch", "source_coverage_incomplete", "incomplete_ready_result", "output_schema_invalid", "evidence_pointer_not_concrete", "evidence_pointer_missing", "evidence_item_ambiguous_or_missing", "evidence_reference_invalid", "review_scope_format_invalid", "step2_questions_forbidden", "step2_sections_missing")
+            repairable = isinstance(error, GraphError) or type(error).__name__ == "ValidationError" or reason in ("ModelBehaviorError", "source_anchor_invalid", "source_reference_mismatch", "source_coverage_incomplete", "incomplete_ready_result", "output_schema_invalid", "evidence_pointer_not_concrete", "evidence_pointer_missing", "evidence_item_ambiguous_or_missing", "evidence_reference_invalid", "review_scope_format_invalid", "step2_questions_forbidden", "step2_sections_missing", "ask_user_tool_required")
             if isinstance(error, GraphValidationError) and run:
                 self._message(project, cid, str(error), task=task["id"], run=run["id"])
             if reason == "input_budget_exceeded" and stage in range(2, 9) and run and not self._task_data(task).get("batch_manifest_ref"):
@@ -1153,6 +1198,135 @@ class Engine:
                 message = (f"旧版 {error.details.get('kind', '阶段')} 产物缺少独立原文索引，需从该阶段重新生成并确认"
                            if reason == "source_index_migration_required" else str(error))
                 self._fail_execution(task, run, reason, message, getattr(error, "details", None))
+
+    async def _drive_step1_windows(self, task, token, source_version, source_text):
+        """Run global and character extraction in separate, resumable windows."""
+        from .context import utf16_length
+        from .prompts import instructions
+        from .source_windows import source_window, validate_window, combine_windows
+
+        project, cid = task["project_id"], task["conversation_id"]
+        source_ref = ref(source_version)
+        source_length = utf16_length(source_text)
+        run = None
+        try:
+            while True:
+                with self.store.transaction():
+                    self.store.advisory_lock(f"{project}:materials")
+                    self.store.advisory_lock(f"{project}:conversation:{cid}")
+                    task = self.store.get(task["id"], project_id=project)
+                    self._assert_authorized_source(task)
+                    self._budget_check(task)
+                    data = self._task_data(task)
+                    state = data.get("source_window_state")
+                    if state is None:
+                        state = {"source_ref": source_ref, "pass": "global", "global_cursor": 0,
+                                 "character_cursor": 0, "windows": []}
+                        data["source_window_state"] = state
+                        self._save_task_data(task, data)
+                    if state["source_ref"] != source_ref:
+                        raise WorkflowBlocked("dependency_changed", {"kind": "source_text"})
+                    view = state["pass"]
+                    cursor = state[f"{view}_cursor"]
+                    materials = self.workflow.materials(project, 1, None)
+                    resume = data.get("resume_saved_result")
+                    if resume and (not isinstance(resume.get("output"), dict) or
+                                   self._output_rejected(task, resume["source_run_id"])):
+                        data.pop("resume_saved_result", None)
+                        self._save_task_data(task, data)
+                        resume = None
+                    task, run, session, config = self._start_run(
+                        task, 1, materials, recovery=bool(resume), fresh_allowance=not resume,
+                        session_key_override=f"step1-window:{task['id']}:{view}:{cursor}")
+                    values = config
+                    if values.get("output", {}).get("structured", {}).get("step1", True) is False:
+                        raise WorkflowBlocked("source_window_output_type_required")
+                    limit = values["context"]["step1_source"]["window_tokens"]
+                    window = source_window(source_text, cursor, limit, values["model"]["name"])
+                    window["view"] = view
+                    known = []
+                    global_boundaries = []
+                    if view == "character":
+                        for item in state["windows"]:
+                            if item["pass"] == "global":
+                                saved = self._projection(project, "source_window_output", item["run_id"])["output"]
+                                for event in saved["payload"]["global_events"]:
+                                    if any(anchor["end_utf16"] > cursor and
+                                           anchor["start_utf16"] < window["end_utf16"]
+                                           for anchor in event["source_anchors"]):
+                                        known.extend(event["character_ids"])
+                                    global_boundaries.append(max(anchor["end_utf16"] for anchor in event["source_anchors"]))
+                    data = self._task_data(task)
+                    data["model_dispatched"] = not bool(resume)
+                    self._save_task_data(task, data)
+                prompt = (instructions("step1", values) + "\n\n" + harness_prompts(values)['window'] +
+                    f"\n本窗口绝对 UTF-16 范围 [{cursor},{window['end_utf16']})；"
+                    f"本次只生成{('全局事件' if view == 'global' else '主要人物事件')}视图，另一视图必须为空数组。")
+                if known:
+                    prompt += "\n已识别人物 ID（请沿用，不要另起同名 ID）：" + "、".join(dict.fromkeys(known))
+                available_boundaries = sorted(set(boundary for boundary in global_boundaries
+                                                  if cursor < boundary <= window["end_utf16"]))
+                if view == "character" and available_boundaries:
+                    prompt += ("\n若当前范围确实没有主要人物事件，可以返回空 character_views，但覆盖终点必须选一个"
+                               "已完成全局事件边界；这只用于证明扫描范围，不把全局事件当作人物事件。"
+                               "可用终点：" + "、".join(map(str, available_boundaries)))
+                result = resume["output"] if resume else await self._invoke(
+                    1, task, run, session, config, materials,
+                    data.get("request", "切分原作") + f"\n当前视图：{view}", token,
+                    instructions_override=prompt, step1_window=window)
+                with self.store.transaction():
+                    self.store.advisory_lock(f"{project}:conversation:{cid}")
+                    self._assert_run(task, run, token)
+                    self._save_projection(project, "run_result", run["id"],
+                                          {"output": result, **({"source_run_id": resume["source_run_id"]} if resume else {})})
+                    self._checkpoint(task, run, "process_model_result")
+                await self._consume_steers(task, run, token)
+                with self.store.transaction():
+                    self.store.advisory_lock(f"{project}:materials")
+                    self.store.advisory_lock(f"{project}:conversation:{cid}")
+                    task = self._assert_run(task, run, token)
+                    bound = self._bind_program_provenance(1, run, result, materials)
+                    validated, commit = validate_window(bound, source_text, source_ref, view,
+                                                         cursor, window["end_utf16"], available_boundaries)
+                    self._save_projection(project, "source_window_output", run["id"],
+                                          {"output": validated, "source_ref": source_ref})
+                    data = self._task_data(task)
+                    data.pop("resume_saved_result", None)
+                    state = data["source_window_state"]
+                    state["windows"].append({"pass": view, "start_utf16": cursor,
+                                             "commit_utf16": commit, "run_id": run["id"]})
+                    state[f"{view}_cursor"] = commit
+                    if view == "global" and commit == source_length:
+                        state["pass"] = "character"
+                    self._save_task_data(task, data)
+                    self._event(project, "source.window_completed",
+                                {"view": view, "start_utf16": cursor, "end_utf16": window["end_utf16"],
+                                 "commit_utf16": commit, "source_ref": source_ref},
+                                conversation=cid, task=task["id"], run=run["id"])
+                    if state["character_cursor"] == source_length:
+                        windows = [{**item, "output": self._projection(
+                            project, "source_window_output", item["run_id"])["output"]}
+                                   for item in state["windows"]]
+                        combined = combine_windows(windows, source_ref, source_length)
+                        self._apply_stage(task, run, combined, materials)
+                        return
+                    self._checkpoint(task, run, "advance_work")
+                    self._close_run(task, run, "succeeded")
+                    run = None
+        except asyncio.CancelledError:
+            if self._closing:
+                return
+            self._fail_execution(task, run, "user_stop")
+        except Exception as error:
+            reason = getattr(error, "reason", None) or getattr(error, "code", None) or "configuration_error"
+            explanation = {
+                "source_window_no_complete_event": "当前窗口没有可确认的完整事件；游标未推进。请调大窗口 token 数后重新运行",
+                "source_window_budget": "窗口 token 数太小，无法读取原文；游标未推进",
+                "input_budget_exceeded": "当前窗口加上 instructions 和输出合同后超过模型输入预算；游标未推进。请调小窗口或调整模型配置",
+                "output_limit_exceeded": "窗口输出达到模型上限，未记为完成；请调整输出上限或缩小窗口",
+                "source_window_output_type_required": "滑动窗口模式需要启用 Step1 output_type，才能验证事件边界和全篇覆盖",
+            }.get(reason, str(error))
+            self._fail_execution(task, run, reason, explanation, getattr(error, "details", None))
 
     def _auxiliary_config(self, project, parent_config_id, stage):
         fixed = self.store.get(parent_config_id, project_id=project)
@@ -1377,7 +1551,7 @@ class Engine:
                     data = self._task_data(current)
                     saved_ready = ((data.get("stage") == 2 and isinstance(saved, str) and bool(saved.strip()))
                         or (data.get("stage") != 2 and isinstance(saved, dict) and saved.get("result_kind") == "ready"))
-                    if saved_ready and data.get("stage") in STAGES and data.get("stage") != 6 and not data.get("batch_owned") \
+                    if saved_ready and not data.get("source_window_state") and data.get("stage") in STAGES and data.get("stage") != 6 and not data.get("batch_owned") \
                             and not data.get("result_ref") and not data.get("result_refs"):
                         if data["stage"] == 2:
                             versions = {}
@@ -1415,12 +1589,47 @@ class Engine:
     def _await_user_questions(self, task, run, questions):
         data = self._task_data(task)
         message = self._message(task["project_id"], task["conversation_id"], "\n".join(q["prompt"] for q in questions) or "当前阶段需要补充信息。", task=task["id"], run=run["id"])
-        data["pending_user_items"] = [{**self._wait_item(task, "question", message, q["prompt"], question_id=q["question_id"]),
-            **{key: deepcopy(q[key]) for key in ('suggested_answers', 'reason', 'target_field', 'blocking_scope') if key in q}} for q in questions]
+        data["pending_user_items"] = [{**self._wait_item(task, "question", message, q["prompt"], question_id=q.get("question_id") or f"ask-user-{index + 1}"),
+            **{key: deepcopy(q[key]) for key in ('suggested_answers', 'reason', 'target_field', 'blocking_scope') if key in q}} for index, q in enumerate(questions)]
         self._save_task_data(task, data)
         self._checkpoint(task, run, "await_user")
         self._close_run(task, run, "waiting_user")
         self._transition(self.store.get(task["id"], project_id=task["project_id"]), "waiting_user")
+
+    def _request_agent_confirmation(self, coordinator, run, question):
+        """Turn a manager ask_user call into one fixed-version confirmation card."""
+        project, conversation = coordinator["project_id"], coordinator["conversation_id"]
+        child = self.store.get(question["confirmation_task_id"], project_id=project)
+        if not child or child["conversation_id"] != conversation or child["state"] != "waiting_user":
+            raise WorkflowBlocked("confirmation_candidate_missing")
+        parent = self.store.get(child["parent_task_id"], project_id=project) if child["parent_task_id"] else None
+        if (not parent or parent["state"] not in ("queued", "running", "waiting_user")
+                or not self._task_data(parent).get("manager_controlled")):
+            raise WorkflowBlocked("confirmation_candidate_missing")
+        data = self._task_data(child)
+        if (data.get("stage") not in range(2, 11) or data.get("superseded_by_task_id")
+                or any(item["state"] == "open" for item in data.get("pending_user_items", []))):
+            raise WorkflowBlocked("confirmation_candidate_missing")
+        refs = list(data.get("result_refs", {}).values()) if data.get("stage") == 2 else [data.get("result_ref")]
+        if not refs or any(not isinstance(value, dict) for value in refs):
+            raise WorkflowBlocked("confirmation_candidate_missing")
+        targets = []
+        for saved_ref in refs:
+            version = self.workflow.fixed_version(project, saved_ref)
+            state = self.workflow.state(version)
+            artifact = self.store.get(version["artifact_id"], project_id=project)
+            if (state["dependency_status"] != "valid" or state["confirmation_status"] == "confirmed"
+                    or artifact["latest_version"] != version["version"]):
+                raise WorkflowBlocked("confirmation_candidate_changed")
+            targets.append({"subject": ref(version), "selections": [WHOLE]})
+        message = self._message(project, conversation, question["prompt"], task=child["id"], run=run["id"])
+        data["pending_user_items"] = [{**self._wait_item(child, "confirmation", message, question["prompt"], targets),
+                                       "agent_requested": True}]
+        self._save_task_data(child, data)
+        self._event(project, "confirmation.requested_by_agent", {
+            "coordinator_task_id": coordinator["id"], "candidate_task_id": child["id"],
+            "artifact_refs": [target["subject"] for target in targets],
+        }, conversation=conversation, task=child["id"], run=run["id"])
 
     @staticmethod
     def _frozen_material_ref(run, materials, kind):
@@ -1714,13 +1923,18 @@ class Engine:
             "source_character_analysis": "Step 2B · 主要人物事件分析",
         }
         pending = []
+        agent_confirmation = bool(getattr(self.model_service, "supports_manager", False)
+                                  and data.get("parent_owned"))
         presentations = self._projection(task["project_id"], "presentations", task["conversation_id"], targets=[])
         for kind in ("source_global_analysis", "source_character_analysis"):
             version = versions[kind]
-            text = f"{titles[kind]}（v{version['version']}）\n\n{parts[kind]}\n\n请确认以上结果，或直接提出需要修改的内容。"
+            text = f"{titles[kind]}（v{version['version']}）\n\n{parts[kind]}"
+            if not agent_confirmation:
+                text += "\n\n请确认以上结果，或直接提出需要修改的内容。"
             message = self._message(task["project_id"], task["conversation_id"], text, task=task["id"], run=run["id"])
             targets = [{"subject": ref(version), "selections": [WHOLE]}]
-            pending.append(self._wait_item(task, "confirmation", message, text, targets))
+            if not agent_confirmation:
+                pending.append(self._wait_item(task, "confirmation", message, text, targets))
             presentations["targets"].append({**targets[0], "message_id": message["id"], "task_id": task["id"]})
             self._event(task["project_id"], "artifact.presented", {
                 "artifact_ref": ref(version), "message_id": message["id"], "selections": [WHOLE],
@@ -1736,6 +1950,9 @@ class Engine:
     def _apply_stage(self, task, run, result, materials):
         data = self._task_data(task)
         stage = data["stage"]
+        if isinstance(result, dict) and "__ask_user__" in result:
+            self._await_user_questions(task, run, result["__ask_user__"])
+            return
         fixed_config = self.store.get(run["config_version_id"], project_id=task["project_id"])
         structured = fixed_config["values"].get("output", {}).get("structured", {}).get(
             f"step{stage}", stage != 2)
@@ -1762,6 +1979,8 @@ class Engine:
             except ValueError as error:
                 raise WorkflowBlocked("output_schema_invalid", {"validation_error": str(error)}) from error
             if result["result_kind"] == "needs_input":
+                if getattr(self.model_service, "supports_ask_user", False):
+                    raise WorkflowBlocked("ask_user_tool_required")
                 self._await_user_questions(task, run, result["questions"])
                 return
             if result["payload"] is None or result["questions"]:
@@ -1982,12 +2201,15 @@ class Engine:
             self._close_run(task, run, "succeeded")
             self._transition(self.store.get(task["id"], project_id=task["project_id"]), "succeeded")
             return
+        agent_confirmation = bool(getattr(self.model_service, "supports_manager", False)
+                                  and data.get("parent_owned"))
         text = stage_result_text(stage, display_result if stage == 6 else result,
-                                 version=version["version"], confirmation=True)
+                                 version=version["version"], confirmation=not agent_confirmation)
         message = self._message(task["project_id"], task["conversation_id"], text, task=task["id"], run=run["id"])
         targets = [{"subject": ref(version), "selections": [WHOLE]}]
         data = self._task_data(task)
-        data["pending_user_items"] = [self._wait_item(task, "confirmation", message, text, targets)]
+        data["pending_user_items"] = ([] if agent_confirmation else
+                                      [self._wait_item(task, "confirmation", message, text, targets)])
         self._save_task_data(task, data)
         presentations = self._projection(task["project_id"], "presentations", task["conversation_id"], targets=[])
         presentations["targets"].append({**targets[0], "message_id": message["id"], "task_id": task["id"]})
@@ -2057,8 +2279,13 @@ class Engine:
             with self.store.transaction():
                 self.store.advisory_lock(f"{task['project_id']}:conversation:{task['conversation_id']}")
                 self._assert_run(task, run, token)
+                if isinstance(result, dict) and "__ask_user__" in result:
+                    self._await_user_questions(task, run, result["__ask_user__"])
+                    return
                 validate_output("coordinator_response", result, config.get("schemas"))
                 if result['result_kind'] == 'needs_input':
+                    if getattr(self.model_service, "supports_ask_user", False):
+                        raise WorkflowBlocked("ask_user_tool_required")
                     self._await_user_questions(task, run, result['questions'])
                     return
                 if result["result_kind"] != "ready" or not result["payload"]:
@@ -2081,6 +2308,7 @@ class Engine:
 
     async def _coordinate(self, queued, token, steered_task=None):
         project, cid = queued["project_id"], queued["conversation_id"]
+        manager_mode = bool(getattr(self.model_service, "supports_manager", False)) and steered_task is None
         run = None
         with self.store.transaction():
             self.store.advisory_lock(f"{project}:conversation:{cid}")
@@ -2095,6 +2323,8 @@ class Engine:
             request_text = body(self.store, message)
             if data.get('clarification_context'):
                 request_text += '\n前序原始请求与逐题答复（仅本轮用户消息可签发新操作）：\n' + data['clarification_context']
+            if data.get('manager_resume'):
+                request_text = '本轮用户操作已经由 Harness 应用。请读取最新项目状态，继续尚未完成的授权流程；不要重复执行这条消息中的确认、答复或修改。'
             continuation_parent = self.store.get(data['continuation_parent_task_id'], project_id=project) if data.get('continuation_parent_task_id') else None
             if continuation_parent and (continuation_parent['conversation_id'] != cid or not self._task_data(continuation_parent).get('coordinator')):
                 raise WorkflowBlocked('checkpoint_invalid')
@@ -2110,6 +2340,7 @@ class Engine:
             task, run, session, config = self._start_run(task, "coordinator", materials, recovery=data.get("recovered_output") is not None)
         try:
             text = request_text
+            manager_before = None
             try:
                 current_source = self.workflow.resolve(project, "source_text")
                 source_status = ("\n当前项目已有可用原作固定版本："
@@ -2118,26 +2349,97 @@ class Engine:
             except WorkflowBlocked:
                 source_status = ("\n当前项目尚无可用原作。若当前真实用户消息全文本身就是完整线性小说或剧本，"
                                  "将source_message_kind设为complete_source_text并发起完整改编；Harness会逐字保存该消息。")
-            instruction = (f"当前真实用户消息ID：{message['id']}。仅此消息可以作为本轮确认依据。\n"
-                           "任务请求不是已执行状态；确认必须指向提交时已展示的固定版本与JSON Pointer。"
-                           "若用户希望系统划分章节，提出完整有序章节列表并给出多条stage9请求作为待确认建议。"
-                           "不要把普通查询变成创作修改；resume/继续必须指定原Task或等待点。"
-                           + source_status + "\n" + text)
+            if manager_mode:
+                from .manager import build_manager_tools, manager_instructions, manager_state
+                manager_before = manager_state(self, project, cid)
+                tool_message = message
+                if data.get("manager_resume"):
+                    roots = [candidate for candidate in all_records(self.store, project, "task", conversation_id=cid)
+                             if self._task_data(candidate).get("manager_controlled")
+                             and candidate["state"] in ("queued", "running", "waiting_user")]
+                    if roots:
+                        tool_message = self.store.get(roots[-1]["requested_by_message_id"], project_id=project)
+                extra_tools = build_manager_tools(self, task, run, tool_message, data["presented"], token,
+                                                  continuation=bool(data.get("manager_resume")))
+                effective_instructions = manager_instructions(config, manager_state(self, project, cid))
+                instruction = f"本轮真实用户消息 ID：{message['id']}。仅按用户本轮明确要求操作。\n用户消息：\n{text}"
+            else:
+                extra_tools = None
+                effective_instructions = None
+                instruction = (f"当前真实用户消息ID：{message['id']}。仅此消息可以作为本轮确认依据。\n"
+                               "任务请求不是已执行状态；确认必须指向提交时已展示的固定版本与JSON Pointer。"
+                               "若用户希望系统划分章节，提出完整有序章节列表并给出多条stage9请求作为待确认建议。"
+                               "不要把普通查询变成创作修改；resume/继续必须指定原Task或等待点。"
+                               + source_status + "\n" + text)
             result = data.get("recovered_output")
             if result is None:
-                result = await self._invoke("coordinator", task, run, session, config, materials, instruction, token)
-            validate_output("coordinator_response", result, config.get("schemas"))
+                result = await self._invoke("coordinator", task, run, session, config, materials, instruction, token,
+                                            extra_tools=extra_tools, instructions_override=effective_instructions)
+            tool_questions = result.get("__ask_user__") if isinstance(result, dict) else None
+            manager_halt = result.get("__manager_halt__") if isinstance(result, dict) else None
+            if manager_halt:
+                interpreted = {"result_kind": "ready", "payload": {"reply": "",
+                    "source_message_kind": "request", "task_requests": []},
+                    "questions": [], "evidence_refs": [], "notes": []}
+            elif tool_questions:
+                interpreted = {"result_kind": "ready", "payload": {"reply": "",
+                    "source_message_kind": "request", "task_requests": []},
+                    "questions": [], "evidence_refs": [], "notes": []}
+            elif manager_mode and isinstance(result, str):
+                if not result.strip():
+                    raise WorkflowBlocked("coordinator_output_empty")
+                interpreted = {"result_kind": "ready", "payload": {"reply": result,
+                    "source_message_kind": "request", "task_requests": []},
+                    "questions": [], "evidence_refs": [], "notes": []}
+            else:
+                validate_output("coordinator_response", result, config.get("schemas"))
+                interpreted = result
             with self.store.transaction():
                 self.store.advisory_lock(f"{project}:materials")
                 self.store.advisory_lock(f"{project}:conversation:{cid}")
                 self._assert_run(task, run, token)
                 self._save_projection(project, "run_result", run["id"], {"output": result})
                 self._checkpoint(task, run, "process_model_result")
-                requests = result["payload"]["task_requests"] if result["payload"] else []
-                reply = result["payload"]["reply"] if result["payload"] else "\n".join(q["prompt"] for q in result["questions"])
+                if tool_questions:
+                    open_items = [item for candidate in all_records(self.store, project, "task", conversation_id=cid)
+                        if candidate["id"] != task["id"] and candidate["state"] == "waiting_user"
+                        for item in self._task_data(candidate).get("pending_user_items", [])
+                        if item["state"] == "open"]
+                    confirmation_questions = [q for q in tool_questions if q.get("confirmation_task_id")]
+                    if confirmation_questions:
+                        if open_items:
+                            self._event(project, "ask_user.suppressed", {"reason": "existing_pending_user_item",
+                                "pending_item_ids": [item["id"] for item in open_items]}, conversation=cid, task=task["id"])
+                        else:
+                            if not manager_mode or len(tool_questions) != 1:
+                                raise WorkflowBlocked("confirmation_candidate_ambiguous")
+                            self._request_agent_confirmation(task, run, confirmation_questions[0])
+                    elif not open_items:
+                        self._await_user_questions(task, run, tool_questions)
+                        update(self.store, self.store.get(queued['id'], project_id=project), state='blocked',
+                               blocked_reason='intent_ambiguous', created_task_id=task['id'])
+                        return
+                    else:
+                        self._event(project, "ask_user.suppressed", {"reason": "existing_pending_user_item",
+                            "pending_item_ids": [item["id"] for item in open_items]}, conversation=cid, task=task["id"])
+                requests = interpreted["payload"]["task_requests"] if interpreted["payload"] else []
+                if manager_mode and requests:
+                    raise WorkflowBlocked("manager_tool_required", {"reason": "manager 模式必须通过工具执行，不能提交旧版 task_requests"})
+                reply = interpreted["payload"]["reply"] if interpreted["payload"] else "\n".join(q["prompt"] for q in interpreted["questions"])
                 receipts, blocked = [], None
-                if result["result_kind"] == "needs_input":
-                    self._await_user_questions(task, run, result['questions'])
+                if manager_halt:
+                    self._event(project, "manager.dispatch_halted", manager_halt,
+                                conversation=cid, task=task["id"], run=run["id"])
+                    if manager_halt.get("status") == "prerequisite_pending":
+                        roots = [candidate for candidate in all_records(self.store, project, "task", conversation_id=cid)
+                                 if self._task_data(candidate).get("manager_controlled")
+                                 and candidate["state"] in ("queued", "running", "waiting_user")]
+                        if roots:
+                            self._transition(roots[-1], "paused", "manager_prerequisite_pending")
+                if interpreted["result_kind"] == "needs_input":
+                    if getattr(self.model_service, "supports_ask_user", False):
+                        raise WorkflowBlocked("ask_user_tool_required")
+                    self._await_user_questions(task, run, interpreted['questions'])
                     update(self.store, self.store.get(queued['id'], project_id=project), state='blocked',
                            blocked_reason='intent_ambiguous', created_task_id=task['id'])
                     return
@@ -2145,7 +2447,7 @@ class Engine:
                     # Older persisted coordinator results predate this field and
                     # are replayed as ordinary requests; immutable recovery data
                     # is never reinterpreted as source text.
-                    if result["payload"].get("source_message_kind", "request") == "complete_source_text":
+                    if not manager_mode and interpreted["payload"].get("source_message_kind", "request") == "complete_source_text":
                         full_requests = [r for r in requests if r["intent"] == "generate" and r["stage"] is None
                                          and r["chapter_id"] is None]
                         if len(full_requests) != 1:
@@ -2171,6 +2473,20 @@ class Engine:
                 self._checkpoint(task, run, "await_user" if blocked else "none")
                 self._close_run(task, run, "succeeded")
                 self._transition(self.store.get(task["id"], project_id=project), "succeeded")
+                if manager_mode:
+                    progressed = manager_state(self, project, cid) != manager_before
+                    roots = [candidate for candidate in all_records(self.store, project, "task", conversation_id=cid)
+                             if self._task_data(candidate).get("manager_controlled")
+                             and candidate["state"] in ("queued", "running", "waiting_user")]
+                    for root in roots:
+                        members = [root] + all_records(self.store, project, "task", parent_task_id=root["id"])
+                        if not any(item["state"] == "open" for member in members
+                                   for item in self._task_data(member).get("pending_user_items", [])):
+                            if progressed:
+                                self._queue_manager_resume(root, message)
+                            elif data.get("manager_resume"):
+                                self._transition(root, "paused", "manager_no_progress")
+                                self._message(project, cid, "任务已暂停：对话协调 Agent 本轮没有推进已授权流程。可在运行数据中查看该 Run 后继续任务。", task=root["id"])
                 if "recovered_output" in data:
                     data.pop("recovered_output")
                     self._save_projection(project, "queue_context", queued["id"], data)
@@ -2354,6 +2670,42 @@ class Engine:
             if queued["state"] == "blocked" and queued["blocked_reason"] in reasons:
                 update(self.store, queued, state="pending", blocked_reason=None)
 
+    def _queue_manager_resume(self, root, message):
+        """Queue one idempotent manager continuation for an applied user message."""
+        # The caller may have just transitioned this Task (e.g. chapter-plan
+        # confirmation). Always inspect the current row before a second state
+        # change; the passed snapshot may carry an obsolete row_version.
+        root = self.store.get(root["id"], project_id=root["project_id"])
+        if not self._task_data(root).get("manager_controlled"):
+            return None
+        project, conversation = root["project_id"], root["conversation_id"]
+        key = f"{project}:manager_resume:{message['id']}"
+        saved = self.store.projection_get(key)
+        if saved:
+            return self.store.get(saved["queue_id"], project_id=project)
+        if root["state"] == "waiting_user":
+            self._transition(root, "queued", source=message["id"])
+        # A user message already owns its queue sequence. A manager turn that
+        # ends before the authorized workflow is done needs a new, explicitly
+        # program-owned continuation rather than a second queue entry for it.
+        existing = [item for item in all_records(self.store, project, "queued_request", conversation_id=conversation)
+                    if item["sequence"] == message["sequence"]]
+        queue_message = (self._message(project, conversation, "系统继续已授权的改编任务", role="assistant", visibility="internal")
+                         if existing else message)
+        queued = self.store.put(new_record("queued_request", project,
+            conversation_id=conversation, source_message_id=queue_message["id"], mode="queue",
+            target_run_id=None, sequence=queue_message["sequence"],
+            scope=scope(description="确认后继续由对话协调 Agent 调度"), state="pending",
+            adopted_run_id=None, adopted_context_snapshot_id=None, created_task_id=None,
+            resolved_at=None, blocked_reason=None))
+        presented = self._projection(project, "presentations", conversation, targets=[])
+        self._save_projection(project, "queue_context", queued["id"], {
+            "presented": deepcopy(presented["targets"]),
+            "request_hash": hashlib.sha256(canonical_bytes([root["id"], message["id"], "manager_resume"])).hexdigest(),
+            "manager_resume": True, "origin_message_id": message["id"]})
+        self.store.projection_put(key, {"project_id": project, "queue_id": queued["id"]})
+        return queued
+
     def _pause_dependents(self, project, previous, excluding):
         for task in all_records(self.store, project, "task"):
             if task["id"] == excluding or task["state"] not in ("queued", "running", "waiting_user"):
@@ -2414,6 +2766,8 @@ class Engine:
         self._save_task_data(root, data)
         self._transition(root, "queued", source=message["id"])
         self._event(root["project_id"], "chapters.confirmed", {"chapter_ids": plan["chapter_ids"], "confirmation_id": confirmation["id"], "source_ref": plan["source_ref"], "decision_ref": ref(approved)}, conversation=root["conversation_id"], task=root["id"], source=message["id"])
+        if run is None:
+            self._queue_manager_resume(root, message)
         return {"status": "confirmed", "task_id": root["id"]}
 
     async def _consume_steers(self, task, run, token):

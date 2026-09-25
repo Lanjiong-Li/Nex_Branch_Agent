@@ -152,7 +152,7 @@ async def compact_session(service, persistent, stage, config, instructions, tool
     store=service.store;pid=persistent.task['project_id'];model=config['model']['name']
     items=await persistent.get_items()
     if not items:return
-    plan=compaction_layout(items,config,instructions,tool_defs,output.json_schema(),request)
+    plan=compaction_layout(items,config,instructions,tool_defs,output.json_schema() if output else None,request)
     total=plan['total'];cap=plan['input_budget'];history_size=plan['history_tokens']
     # A large fixed prompt cannot be reduced by summarizing an already small
     # history. Soft ratios are targets; the complete input hard cap is separate.
@@ -299,7 +299,7 @@ async def compact_session(service, persistent, stage, config, instructions, tool
         if tokens([replacement]+tail,model)>=history_size:
             raise BudgetExceeded('summary_not_smaller','摘要未缩小工作历史，保留原工作历史')
         final_input=tokens({'instructions':instructions,'input':[replacement]+tail+[{'role':'user','content':request}],
-            'tools':tool_defs,'output_schema':output.json_schema()},config['model']['name'])
+            'tools':tool_defs,'output_schema':output.json_schema() if output else None},config['model']['name'])
         if final_input>cap:
             raise BudgetExceeded('summary_not_fitting','实际摘要与必需输入仍超预算，原工作历史保持不变',
                 {'input_tokens':final_input,'input_budget':cap})

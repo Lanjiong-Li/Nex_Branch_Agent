@@ -171,7 +171,7 @@
             "remaining_source_anchors"
           ],
           "additionalProperties": false,
-          "description": "Step1 在同一模型上下文取得固定版本完整原文后生成独立的全局事件与人物事件双视图，两套事件各自直接锚定原文。"
+          "description": "Step1 从固定原作生成独立的全局事件与人物事件双视图；长原作可按完整事件边界逐窗扫描并由 Harness 合并，两套事件各自直接锚定原文。"
         },
         {
           "type": "null"

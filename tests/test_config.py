@@ -2,8 +2,10 @@ from test_sdk_integration import runtime
 from copy import deepcopy
 import pytest
 
-from branch_agent.configuration import ConfigService, SESSION_SHARING_DEFAULTS, initial_values
-from branch_agent.prompts import instructions, instruction_parts, stage_agent
+from branch_agent.configuration import ConfigService, READ_TOOL_NAMES, SESSION_SHARING_DEFAULTS, initial_values
+from branch_agent.model_service import ReadTools
+from branch_agent.prompts import (instructions, instruction_parts, instructions_preview,
+                                  legacy_prompt_overrides, stage_agent)
 from branch_agent.records import new_record
 from branch_agent.workflow import session_key
 
@@ -19,7 +21,7 @@ def test_auxiliary_overrides_are_frozen_with_parent_snapshot(runtime):
         scope_kind='auxiliary',scope_key='aux.summary')
     service.publish(pid,draft['id'])
     fresh=service.resolve(pid,'coordinator')
-    assert old['auxiliary_configs']['aux.summary']['model']['name']=='gpt-5.6-sol'
+    assert old['auxiliary_configs']['aux.summary']['model']['name']=='deepseek-flash'
     configured=fresh['values']['auxiliary_configs']['aux.summary']
     assert configured['model']['name']=='gpt-5-nano' and configured['context']['input_token_cap']==16000
     assert configured['prompts']['summary']=='保留真实来源的特殊摘要指令'
@@ -53,8 +55,8 @@ def test_account_configuration_applies_to_all_projects_but_not_other_accounts(ru
 
     assert service.resolve(first['id'],'step1')['values']['model']['reasoning_effort']=='low'
     assert service.resolve(second['id'],'step1')['values']['model']['reasoning_effort']=='low'
-    assert service.resolve(other['id'],'step1')['values']['model']['reasoning_effort']=='medium'
-    assert store.get(frozen['id'],first['id'])['values']['model']['reasoning_effort']=='medium'
+    assert service.resolve(other['id'],'step1')['values']['model']['reasoning_effort']=='high'
+    assert store.get(frozen['id'],first['id'])['values']['model']['reasoning_effort']=='high'
 
 
 def test_agent_debugger_fields_reach_the_frozen_harness_snapshot(runtime):
@@ -68,7 +70,7 @@ def test_agent_debugger_fields_reach_the_frozen_harness_snapshot(runtime):
         'run': {'max_turns': 7},
         'retry': {'max_retries': 1},
         'repair': {'max_rounds': 4},
-        'tools': {'enabled': ['read_record']},
+        'tools': {'enabled': ['read_record'], 'ask_user_enabled': False},
         'context': {'input_token_cap': 900000, 'safety_margin_tokens': 3000,
                     'recent_turns': 4, 'history_token_cap': 5000},
         'compaction': {'trigger_ratio': 0.8, 'target_ratio': 0.6},
@@ -79,11 +81,18 @@ def test_agent_debugger_fields_reach_the_frozen_harness_snapshot(runtime):
     frozen = service.resolve(pid, 'step5')['values']
 
     for group, expected in override.items():
+        if group == 'tools':
+            continue  # Legacy permission switches no longer affect new Runs.
         for key, value in expected.items():
             if group == 'output':
                 assert frozen[group][key]['step5'] is False
+            elif group == 'prompts':
+                assert frozen['prompts']['harness']['legacy_agent'] == value
             else:
                 assert frozen[group][key] == value
+    assert frozen['tools']['enabled'] == list(READ_TOOL_NAMES)
+    assert frozen['tools']['ask_user_enabled'] is True
+    assert {tool.name for tool in ReadTools(store, pid, frozen).functions()} == set(READ_TOOL_NAMES)
     assert '调试角色指令' in instructions('step5', frozen)
 
 
@@ -111,7 +120,7 @@ def test_new_agent_can_be_registered_and_assigned_to_a_stage(runtime):
     resolved = service.resolve(pid, 'step5')['values']
     assert stage_agent('step5', resolved) == 'relationship_designer'
     assert resolved['model']['reasoning_effort'] == 'high'
-    assert resolved['tools']['enabled'] == ['read_record']
+    assert resolved['tools']['enabled'] == list(READ_TOOL_NAMES)
     assert '关系设计 Agent 的覆盖指令。' in instructions('step5', resolved)
     view = service.view(pid, 'step5')
     assert view['registry']['agents']['relationship_designer']['name'] == '关系设计 Agent'
@@ -160,7 +169,7 @@ def test_configuration_page_sections_resolve_at_their_runtime_scope(runtime):
     resolved = service.resolve(pid, 'step7')['values']
     assert resolved['context']['recent_turns'] == 3
     assert resolved['model']['reasoning_effort'] == 'high'
-    assert resolved['tools']['enabled'] == ['get_artifact']
+    assert resolved['tools']['enabled'] == list(READ_TOOL_NAMES)
     assert resolved['output']['structured']['step7'] is False
     assert resolved['repair']['max_rounds'] == 5
     assert next(profile for profile in resolved['context']['profiles']['profiles']
@@ -174,7 +183,7 @@ def test_configuration_page_sections_resolve_at_their_runtime_scope(runtime):
 
     validation = service.resolve(pid, 'step11')['values']
     assert validation['prompts']['validation'] == '检查角色动机连续性'
-    assert validation['tools']['enabled'] == ['read_record']
+    assert validation['tools']['enabled'] == list(READ_TOOL_NAMES)
     assert '检查角色动机连续性' in instructions('step11', validation)
 
 
@@ -247,6 +256,51 @@ def test_validation_agent_is_configurable_and_disabled_by_default():
     prompt = instructions('step11', values)
     assert '检查最终 Graph 的剧情连续性。' in prompt
     assert '只校验本次提供的最终 Nexo Graph' in prompt
+
+
+def test_creative_and_harness_layers_preview_the_effective_run_prompt():
+    values, _ = initial_values()
+    p = values['prompts']
+    p['base'] = '共通创作测试'
+    p['agents']['interaction_architect'] = '角色创作测试'
+    p['stages']['step5'] = '阶段创作测试'
+    p['harness']['base'] = '共通协议测试'
+    p['harness']['agents']['interaction_architect'] = '角色协议测试'
+    p['harness']['stages']['step5'] = '阶段协议测试'
+    p['harness']['runtime']['step5'] = '运行协议测试'
+    parts = instruction_parts('step5', values)
+    assert list(parts.values())[1:] == [
+        '共通协议测试', '共通创作测试', '角色协议测试', '角色创作测试',
+        '阶段协议测试', '阶段创作测试', '运行协议测试']
+    preview = instructions_preview('step5', values)
+    assert preview['final'] == instructions('step5', values) + '\n\n' + p['harness']['ask_user']
+    p['harness']['ask_user'] = '新提问协议'
+    assert instructions_preview('step5', values)['final'].endswith('新提问协议')
+
+
+def test_legacy_mixed_prompt_is_preserved_in_advanced_layer():
+    old = {'prompts': {'base': '旧自定义共通规则',
+                       'agent': '旧自定义 Agent 规则',
+                       'stage': '旧自定义阶段规则'}}
+    upgraded = legacy_prompt_overrides(old)
+    h = upgraded['prompts']['harness']
+    assert h['legacy_base'] == '旧自定义共通规则'
+    assert h['legacy_agent'] == '旧自定义 Agent 规则'
+    assert h['legacy_stage'] == '旧自定义阶段规则'
+    assert upgraded['prompts']['validation_enabled'] is True
+    values, _ = initial_values()
+    from branch_agent.configuration import merge
+    effective = merge(values, upgraded)
+    assert '旧自定义共通规则' in instructions('step5', effective)
+    assert effective['prompts']['base'] != '旧自定义共通规则'
+
+
+def test_old_frozen_config_without_harness_layer_remains_readable():
+    values, _ = initial_values()
+    values['prompts'].pop('harness')
+    values['prompts'].pop('validation_enabled')
+    assert '运行时固定引用协议' in instructions('step5', values)
+    assert 'ask_user' in instructions_preview('coordinator', values)['final']
 
 
 def test_legacy_published_schema_is_upgraded_with_source_message_classification(runtime):

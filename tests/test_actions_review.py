@@ -180,6 +180,32 @@ def test_review_chapter_change_reaches_explicit_planning_prompt(runtime, monkeyp
     assert model.calls == []
 
 
+def test_manager_chapter_confirmation_queues_resume_without_stale_root(runtime):
+    engine, model, pid, cid = runtime
+    engine.import_source(pid, cid, "甲见乙。", "原作")
+    with engine.store.transaction():
+        message = engine._message(pid, cid, "请改编全剧", role="user")
+        root = engine._new_task(pid, cid, message, "generate", is_workflow=True,
+                                stages=list(range(1, 12)), request="请改编全剧")
+        data = engine._task_data(root)
+        data["manager_controlled"] = True
+        engine._save_task_data(root, data)
+        engine._propose_chapters(root, [{"chapter_id": "chapter-a", "source_message_ids": [message["id"]]}],
+                                 message, "建议一章", {"id": None})
+        engine._transition(root, "waiting_user")
+    service = ActionService(engine)
+    item = engine._task_data(root)["pending_user_items"][0]
+    shown = card(service, pid, cid, "pending:" + item["id"])
+    receipt = submit(service, pid, cid, shown, "confirm")
+    assert receipt["status"] == "confirmed"
+    current = engine.store.get(root["id"], pid)
+    assert current["state"] == "queued"
+    assert engine._task_data(current)["confirmed_chapter_plan_ref"]
+    assert len([q for q in engine.store.list(pid, "queued_request")
+                if engine._projection(pid, "queue_context", q["id"]).get("manager_resume")]) == 1
+    assert model.calls == []
+
+
 def test_review_changed_source_and_old_unknown_step2_restart_from_step1_with_new_config(runtime):
     from test_error_reporting import failed_operation
 

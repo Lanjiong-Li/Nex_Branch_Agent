@@ -157,6 +157,7 @@ async def test_expired_session_writer_cannot_append_after_new_owner(runtime):
 async def test_cache_write_surcharge_uses_preserved_provider_usage(runtime):
     from decimal import Decimal
     store,task,run,session,config=runtime
+    config['model']['name']='gpt-5.6-sol'
     response=provider_response()
     response['usage']['input_tokens_details']={'cached_tokens':30,'cache_write_tokens':20}
     client=AsyncOpenAI(api_key='mock',http_client=httpx.AsyncClient(transport=httpx.MockTransport(

@@ -94,8 +94,8 @@ class SchemaCatalog:
                 raise ValueError('needs_input 必须包含明确问题')
         return payload
 
-    def output_type(self, schema_id, schemas=None):
-        return JSONOutput(self, schema_id, schemas)
+    def output_type(self, schema_id, schemas=None, *, strict=True):
+        return JSONOutput(self, schema_id, schemas, strict=strict)
 
     def validate_publication(self, schemas, profiles=None):
         if set(schemas) != set(self.schemas):
@@ -177,11 +177,11 @@ class SchemaCatalog:
 
 
 class JSONOutput(AgentOutputSchemaBase):
-    def __init__(self, catalog, schema_id, schemas=None):
-        self.catalog, self.schema_id, self.schemas = catalog, schema_id, schemas
+    def __init__(self, catalog, schema_id, schemas=None, *, strict=True):
+        self.catalog, self.schema_id, self.schemas, self.strict = catalog, schema_id, schemas, strict
     def is_plain_text(self): return False
     def name(self): return self.schema_id
-    def is_strict_json_schema(self): return True
+    def is_strict_json_schema(self): return self.strict
     def json_schema(self):
         schema = deepcopy((self.schemas or self.catalog.schemas)[self.schema_id])
         schema.pop('$schema', None)

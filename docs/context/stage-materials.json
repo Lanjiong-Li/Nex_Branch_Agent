@@ -15,11 +15,11 @@
     "required": "required=true 表示相应子任务开始前必须解析、读到并校验；load=on_demand 仅改变加载时机。有效空集合允许，来源缺失/失败不等于空。任何材料一旦被声明为直接依赖，即使此模板 required=false 也须读取。",
     "load": "auto 由 Harness 预取；on_demand 在 Agent 工具请求或对应消费子任务前展开。引用本身不足以满足要求正文的必需材料。",
     "detail": "full 为 selectors 指向内容的完整值；index 为所列目录/定位字段且不代表全文阅读；ref 仅保留固定引用。改变 full 为 index/ref 不解除 complete_scope 的后续展开义务。",
-    "priority": "整数越大越先装入预算；低优先级必需材料仍不可丢弃。Step2–11 超预算可按契约分批；Step1 全文为不可分批的必需输入，超导入或实际总上下文上限即拒绝启动。",
+    "priority": "整数越大越先装入预算；低优先级必需材料仍不可丢弃。Step2–11 超预算可按契约分批；Step1 的全文或固定窗口都是不可裁剪的必需输入，实际总上下文超限即暂停。",
     "coverage": "complete_scope 要求固定目标范围内全部选中字段/条目最终被读取并完成任务检查；context_only 仅提供控制/索引/工作连续性；evidence_only 只证明实际展开的证据。索引、摘要和 top-k 不算全量覆盖。",
     "common": "每个 profile 先加载 common_materials，再按源身份/版本/字段/范围去重；工作摘要非权威且仅当已有有效摘要时加载。",
     "config_boundary": "允许 HTML 调整 selectors、scope_filter 注册名、load、detail、priority 及可选材料。不得通过配置绕过项目隔离、固定版本、阶段前置确认、必需约束或全量覆盖；修改必须通过静态路径与依赖检查，并生成 ConfigVersion。",
-    "step1_full_text": "Step1 每次执行原作切分或修正的模型调用，都必须在实际输入上下文中同时包含冻结原作完整正文 [0, UTF-16长度)。索引、摘要、历史引用、截断文本和多次调用分批读取均不能替代全文；后续工具调用或修正轮次仍保留全文。先校验 context.step1_source.max_source_tokens 和完整调用输入预算，任一超限阻止启动，不降级。此约束不可通过 HTML 材料选择或压缩配置关闭。"
+    "step1_full_text": "Step1 原文估算 token 数不超过 trigger_tokens 时，单次模型调用包含冻结原作全文；超过时，Harness 按 window_tokens 从上次完整事件边界提供固定原作窗口，使用绝对 UTF-16 索引并分别扫描全局事件与主要人物事件。窗口预算不足或无法找到完整事件时暂停且不推进游标。两种模式都不得以摘要或索引替代本次要求的原文范围。"
   },
   "builtin_sources": {
     "runtime.task_frame": {
@@ -135,10 +135,10 @@
         "start_utf16",
         "end_utf16"
       ],
-      "source": "冻结 source_text ArtifactVersion/Blob 的完整权威原作文本；原样保留空格、换行、Unicode，不按章节、事件、当前批次或范围裁剪。仅 Step1 用作全文输入，原始附件解析后的固定文本版本及哈希必须可追溯。",
+      "source": "冻结 source_text ArtifactVersion/Blob 的权威原作文本；全文模式载入 [0,N)，窗口模式载入 Harness 确定的绝对 UTF-16 区间。两种模式都原样保留空格、换行、Unicode，不裁剪本次要求的范围，固定版本及哈希可追溯。",
       "range": {
-        "start_utf16": 0,
-        "end_utf16": "frozen_source_utf16_length"
+        "start_utf16": "zero_or_window_start",
+        "end_utf16": "source_length_or_window_end"
       },
       "truncate": false
     }
@@ -155,7 +155,7 @@
     "review_scope": "按本次审核清单选择全部应审条目，分批完整展开正文与互动；每个节点、互动、全局变量及跨章关系均纳入对应检查范围，索引不算全文审核。",
     "history_query": "仅在本项目按用户问题搜索；命中只是候选，回答历史原因前须展开当时原始记录和版本。历史版本允许失效，但必须标明当时/当前状态。",
     "summary_window": "按本次摘要任务固定的消息区间与当前有效状态选择原始记录，已覆盖消息可去重但不能仅重复概括旧摘要。",
-    "full_source": "只返回冻结原作全文及 [0, 冻结文本UTF-16长度) 区间；忽略局部章节/事件/批次筛选要求，不允许截断、邻接窗口、摘要或 top-k 替代。超导入或实际调用上下文上限时拒绝启动 Step1。"
+    "full_source": "返回 Step1 当前要求的固定原作全文或滑动窗口区间，带绝对 UTF-16 起止索引；不允许截断该区间或用摘要、top-k 替代。调用超预算时暂停，不推进游标。"
   },
   "common_materials": [
     {
@@ -317,7 +317,7 @@
         }
       ],
       "notes": [
-        "一次基于全本原作执行双视图切分；每次后续切分/修正调用也必须同时保留完整原作。目录索引仅辅助定位，不代替正文。超过 max_source_tokens 或实际总上下文上限时拒绝启动；不摘要、不截断、不分批降级。"
+        "原作不超过触发阈值时一次基于全文执行双视图切分；超过阈值时全局事件和人物事件各自逐窗切分，完成事件边界后推进。目录索引仅辅助定位，不代替本次要求的正文范围；预算不足时暂停，不摘要、不截断。"
       ]
     },
     {
@@ -979,7 +979,7 @@
     "source_views 的 global_events 与 character_views.events 是独立事件集合，各自以 source_anchors 直接指向固定原作的 UTF-16 区间；游戏事件是 Step5 重新设计的集合，也独立锚定原文。三类事件 ID 不按同名自动互换。",
     "payload 保留要求、策略和方案说明不等于人工确认；确认范围来自 runtime.applicable_controls。只有方案中的固定 stage_artifact_refs 生效引用才能提供下游阶段依赖。",
     "Step5–8 确认后由 Harness 写回方案并形成新版本。Step5 产物不含 plan_ref；Step6 复用 Step5 Session 生成仅含事件 ID 和 narrative_function 的补丁；Harness 合并为新版 game_event_view，并将新版本写回 game_events。Step7 独立 Session 仅读取方案引用的固定事件视图，确认后写回 ending_routes；Step8 独立 Session 仅读取方案引用的固定事件视图与已确认结局路线，确认后写回 player_profiles。各阶段另加本阶段 instructions。输入解析按最新获准基线的引用清单协调，不循环要求旧产物改写引用。是否受影响由依赖/范围映射判断。",
-    "Step1 使用冻结原作全文，不创建批次清单；Step2–11 的阶段事件、章节材料及审核批次使用内部 batch_manifest。当前文件只声明其供模型消费的稳定投影；具体分批和版本映射规则由上下文执行契约规定。",
+    "Step1 使用冻结原作全文或按完整事件边界推进的独立滑动窗口，不创建 batch_manifest；Step2–11 的阶段事件、章节材料及审核批次使用内部 batch_manifest。",
     "Step9 所选游戏事件确定章节原文范围，Harness 合并其固定 source_anchors 并写入 chapter_design；Step10 精确读取这些范围。完整正文不缩成摘要。材料可分批读取，但单章交付格式不因此变成部分章；如果完整输出超预算，应暂停并调整获准预算或任务，而非静默截断或改变业务章节边界。"
   ]
 }

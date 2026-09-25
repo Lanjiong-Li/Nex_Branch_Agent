@@ -79,18 +79,16 @@ def validate_step1_profile(profile, all_config):
         'source_ref', 'text', 'start_utf16', 'end_utf16',
     }
     assert projection['range'] == {
-        'start_utf16': 0, 'end_utf16': 'frozen_source_utf16_length',
+        'start_utf16': 'zero_or_window_start', 'end_utf16': 'source_length_or_window_end',
     }
     assert projection['truncate'] is False
     assert 'current_source_block' not in all_config['scope_filters']
 
 
 def validate_step1_parameters(parameters):
-    assert set(parameters) == {'mode', 'max_source_tokens', 'overflow_behavior'}
-    assert parameters['mode'] == 'full_text'
-    assert parameters['overflow_behavior'] == 'reject'
-    assert type(parameters['max_source_tokens']) is int
-    assert parameters['max_source_tokens'] > 0
+    assert set(parameters) == {'trigger_tokens', 'window_tokens'}
+    assert type(parameters['trigger_tokens']) is int and parameters['trigger_tokens'] > 0
+    assert type(parameters['window_tokens']) is int and parameters['window_tokens'] > 0
 
 
 step1 = next(profile for profile in profiles if profile['stage'] == 'step1')
@@ -109,8 +107,8 @@ for stage in ['base', *defaults['stage_overrides']]:
     assert type(margin) is int and margin >= 0, (stage, margin)
     if stage == 'step1':
         validate_step1_parameters(context_values['step1_source'])
-        assert context_values['step1_source']['max_source_tokens'] < context_values['input_token_cap'], \
-            'Step1 must leave input space for instructions and other required materials'
+        assert context_values['step1_source']['window_tokens'] < context_values['input_token_cap'], \
+            'Step1 window must leave input space for instructions and other required materials'
 # Model capability checks and actual assembled-input counts are runtime requirements,
 # not established by this offline defaults/path validator.
 
@@ -157,12 +155,12 @@ assert not path_exists(schemas['chapter_design'], '/payload/linear_body/unknown_
 assert not path_exists(schemas['nexo_graph'], '/payload/chapters')
 assert path_exists(schemas['nexo_graph'], '/chapters/*/nodes/*/body')
 
-# Check that editable defaults cannot silently restore the rejected Step1 modes.
+# Check that editable defaults cannot silently restore invalid window settings.
 for invalid in [
-    {'mode': 'batched', 'max_source_tokens': 200000, 'overflow_behavior': 'reject'},
-    {'mode': 'full_text', 'max_source_tokens': 200000, 'overflow_behavior': 'summarize'},
-    {'mode': 'full_text', 'max_source_tokens': 0, 'overflow_behavior': 'reject'},
-    {'mode': 'full_text', 'max_source_tokens': True, 'overflow_behavior': 'reject'},
+    {'trigger_tokens': 0, 'window_tokens': 300000},
+    {'trigger_tokens': True, 'window_tokens': 300000},
+    {'trigger_tokens': 500000, 'window_tokens': 0},
+    {'trigger_tokens': 500000, 'window_tokens': True},
 ]:
     try:
         validate_step1_parameters(invalid)
@@ -176,7 +174,7 @@ print(json.dumps({
     'business_field_paths': business_paths,
     'builtin_field_paths': builtin_paths,
     'registered_filters': len(config['scope_filters']),
-    'step1_full_source_and_parameter_checks': 'passed',
+    'step1_source_window_and_parameter_checks': 'passed',
     'stage_token_defaults': 'passed',
     'defaults_and_path_checks': 'passed',
     'scope': 'offline specification validation; no runtime or model execution',

@@ -345,9 +345,14 @@ def create_app(store=None,engine=None,model_service=None,data_dir=None):
             blob=db.blob_put(p,raw,media_type,name)
             result=engine.import_source(p,c,text,name)
             values,_=config.values(p,'step1');n=tokens(text,values['model']['name'])
+            source_settings=values['context']['step1_source']
+            window_mode=n>source_settings['trigger_tokens']
             return public({'result':result,'attachment':blob,'source_tokens':n,
-                'source_limit':values['context']['step1_source']['max_source_tokens'],
-                'input_budget':input_budget(values),'admitted':n<=values['context']['step1_source']['max_source_tokens']})
+                'source_mode':'sliding_window' if window_mode else 'full_text',
+                'source_window_threshold':source_settings['trigger_tokens'],
+                'source_window_tokens':source_settings['window_tokens'],
+                'input_budget':input_budget(values),
+                'admitted':window_mode or n<input_budget(values)})
         return once(request,p,'source.import',body,work)
     @app.get(BASE+'/projects/{p}/status')
     async def status(request:Request,p:str):access(request,p);return public(engine.status(p))
@@ -361,6 +366,13 @@ def create_app(store=None,engine=None,model_service=None,data_dir=None):
     @app.get(BASE+'/projects/{p}/run-debug')
     async def run_debug_list(request:Request,p:str,limit:int=30,cursor:int=0):
         access(request,p);limit,cursor=page_window(limit,cursor)
+        agent_names={}
+        def run_agent_name(run):
+            version_id=run.get('config_version_id')
+            if version_id not in agent_names:
+                snapshot=db.get(version_id,p) if version_id else None
+                agent_names[version_id]=(snapshot or {}).get('values',{}).get('prompts',{}).get('agent_names',{})
+            return agent_names[version_id].get(run['agent_key']) or run['agent_key']
         rows=db._connection().execute(
             'SELECT data FROM runs WHERE project_id=%s ORDER BY created_at DESC,id DESC LIMIT %s OFFSET %s',
             (p,limit+1,cursor)).fetchall()
@@ -369,7 +381,8 @@ def create_app(store=None,engine=None,model_service=None,data_dir=None):
             run=entry['data'];task=db.get(run['task_id'],p)
             calls=db.list(p,'model_call',limit=1000,filters={'run_id':run['id']})
             snapshots=db.list(p,'context_snapshot',limit=1,filters={'run_id':run['id']})
-            result.append({'run':run,'task':task,'model':snapshots[0]['model'] if snapshots else None,
+            result.append({'run':run,'task':task,'agent_name':run_agent_name(run),
+                           'model':snapshots[0]['model'] if snapshots else None,
                            'calls':len(calls),'input_tokens':sum(c.get('usage',{}).get('input_tokens') or 0 for c in calls),
                            'output_tokens':sum(c.get('usage',{}).get('output_tokens') or 0 for c in calls)})
         return {'items':public(result),'next_cursor':str(cursor+limit) if len(rows)>limit else None}
@@ -378,6 +391,8 @@ def create_app(store=None,engine=None,model_service=None,data_dir=None):
         access(request,p);run=db.get(run_id,p)
         if not run or run['record_type']!='run':raise HTTPException(404,'Run 不存在')
         task=db.get(run['task_id'],p)
+        snapshot=db.get(run['config_version_id'],p) if run.get('config_version_id') else None
+        agent_name=(snapshot or {}).get('values',{}).get('prompts',{}).get('agent_names',{}).get(run['agent_key']) or run['agent_key']
         calls=sorted(db.list(p,'model_call',limit=1000,filters={'run_id':run_id}),
                      key=lambda row:(row['turn_index'],row['attempt'],row['created_at']))
         snapshots={};outputs=[]
@@ -389,14 +404,27 @@ def create_app(store=None,engine=None,model_service=None,data_dir=None):
                 if history and history['record_type']=='history_record':outputs.append({'model_call_id':call['id'],'history':history})
         tools=sorted(db.list(p,'tool_call',limit=1000,filters={'run_id':run_id}),key=lambda row:row['created_at'])
         versions=db.list(p,'artifact_version',limit=1000,filters={'producer_run_id':run_id})
+        trace_spans=db._connection().execute('''
+            SELECT trace_id,span_id,parent_id,kind,name,started_at,ended_at,error_code,metadata
+            FROM sdk_trace_spans WHERE project_id=%s AND run_id=%s
+            ORDER BY started_at NULLS LAST,span_id LIMIT 2000''',(p,run_id)).fetchall()
+        visible_events={'run.transitioned','task.transitioned','checkpoint.saved',
+                        'artifact.presented','graph.checked','project.delivered',
+                        'repair.scheduled','confirmation.requested_by_agent',
+                        'session.compacted','source.window_completed'}
+        events=sorted((row for row in db.list(p,'runtime_event',limit=1000,filters={'run_id':run_id})
+                       if row['event_name'] in visible_events),
+                      key=lambda row:(row['created_at'],row['sequence']))
         artifacts=[]
         for version in versions:
             artifact=db.get(version['artifact_id'],p)
             _,content=ReadTools(db,p,config.values(p)[0]).resolve(
                 {'record_id':version['artifact_id'],'version':str(version['version'])})
             artifacts.append({'artifact':artifact,'version':version,'content':content})
-        return public({'run':run,'task':task,'calls':calls,'snapshots':list(snapshots.values()),
-                       'outputs':outputs,'tools':tools,'artifacts':artifacts})
+        return public({'run':run,'task':task,'agent_name':agent_name,
+                       'calls':calls,'snapshots':list(snapshots.values()),
+                       'outputs':outputs,'tools':tools,'artifacts':artifacts,
+                       'trace_spans':trace_spans,'events':events})
     @app.get(BASE+'/projects/{p}/records')
     async def records(request:Request,p:str,record_type:str|None=None,limit:int=50,cursor:int=0,state:str|None=None,
                       stage:int|None=None,chapter_id:str|None=None,session_id:str|None=None,task_id:str|None=None,
@@ -527,6 +555,30 @@ def create_app(store=None,engine=None,model_service=None,data_dir=None):
     @app.get(BASE+'/account/config')
     async def get_account_config(request:Request,stage:str='coordinator',agent_key:str|None=None):
         user=auth.identity(request);return public(config.view_for_account(user['account_id'],stage,agent_key))
+    @app.post(BASE+'/account/config/instructions-preview')
+    async def preview_account_instructions(request:Request):
+        auth.identity(request);body=await json_body(request)
+        values,stage=body.get('values'),body.get('stage')
+        if not isinstance(values,dict) or not isinstance(stage,str) or stage not in (
+                'coordinator',*[f'step{i}' for i in range(1,12)],
+                'aux.summary','aux.history_answer','aux.subtask'):
+            raise HTTPException(400,'预览需要有效的配置与阶段')
+        from .prompts import instructions_preview
+        return public(instructions_preview(stage,values))
+    @app.get(BASE+'/account/config/editor')
+    async def get_account_config_editor(request:Request,scope_kind:str='project',scope_key:str|None=None):
+        user=auth.identity(request)
+        return config.editor_draft_for_account(user['account_id'],scope_kind,scope_key)
+    @app.put(BASE+'/account/config/editor')
+    async def save_account_config_editor(request:Request):
+        user=auth.identity(request,True);body=await json_body(request)
+        return config.save_editor_draft_for_account(user['account_id'],body.get('scope_kind','project'),
+          body.get('scope_key'),body.get('payload'),body.get('expected_revision'))
+    @app.delete(BASE+'/account/config/editor')
+    async def clear_account_config_editor(request:Request):
+        user=auth.identity(request,True);body=await json_body(request)
+        return config.clear_editor_draft_for_account(user['account_id'],body.get('scope_kind','project'),
+          body.get('scope_key'),body.get('expected_revision'))
     @app.post(BASE+'/account/config/validate')
     async def validate_account_config(request:Request):
         auth.identity(request,True);body=await json_body(request)

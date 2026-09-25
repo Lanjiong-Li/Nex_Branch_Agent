@@ -64,6 +64,24 @@ def test_step1_prepares_fixed_full_source_and_material_audit(context_case):
     assert any(item["source_ref"]["record_id"] == original["artifact_id"] for item in selections)
 
 
+def test_step1_window_material_contains_only_fixed_utf16_slice(context_case):
+    from branch_agent.context import prepare_runtime_materials, build_materials, utf16_length
+    store, pid, original, source, _, execution = context_case
+    materials = [{"schema_id": "source_text", "content": source, "ref": ref(original), "record": original}]
+    task, run, session, config = execution("step1", materials)
+    first = "第一场：甲见乙🌍。\n"
+    window = {"text": source[len(first):], "start_utf16": utf16_length(first),
+              "end_utf16": utf16_length(source)}
+    prepared = prepare_runtime_materials("step1", task, run, session, config, materials, store,
+                                         step1_window=window)
+    packed, actual, _ = build_materials("step1", prepared, config, store, pid)
+    assert actual == window["text"]
+    assert source not in json.dumps(packed, ensure_ascii=False)
+    block = next(item for item in packed if item.get("builtin") == "runtime.full_source")
+    assert block["data"]["start_utf16"] == utf16_length(first)
+    assert block["data"]["end_utf16"] == utf16_length(source)
+
+
 def test_step10_reads_only_confirmed_chapter_source_intervals(context_case):
     from branch_agent.context import prepare_runtime_materials, build_materials, utf16_length
     store, pid, original, source, _, execution = context_case
@@ -495,7 +513,7 @@ def test_headroom_reduces_main_batch_units():
     from branch_agent.context_batching import plan_batches
     from branch_agent.configuration import initial_values
     from branch_agent.context import tokens
-    cfg,_=initial_values();cfg['model']['max_output_tokens']=40
+    cfg,_=initial_values();cfg['model'].update(name='gpt-5.6-sol',max_output_tokens=40)
     cfg['context']['batching'].update(target_tokens=35,hard_max_tokens=40,max_items=1,neighbor_tokens_each_side=0)
     data=[{'source_ref':{'record_id':str(uuid4()),'version':'1','item_id':None,'json_pointer':''},'content':'甲乙丙丁戊己庚辛壬癸。'*30}]
     loose=deepcopy(cfg);loose['context']['batching']['output_headroom_ratio']=.1
@@ -530,7 +548,7 @@ def test_optional_pruning_updates_evidence_and_keeps_required():
 def test_prepare_batch_defers_owned_units_when_remaining_budget_is_small():
     from branch_agent.context_batching import plan_batches,prepare_batch
     from branch_agent.configuration import initial_values
-    cfg,_=initial_values();cfg['context']['batching'].update(target_tokens=10,hard_max_tokens=20,max_items=10,neighbor_tokens_each_side=0)
+    cfg,_=initial_values();cfg['model']['name']='gpt-5.6-sol';cfg['context']['batching'].update(target_tokens=10,hard_max_tokens=20,max_items=10,neighbor_tokens_each_side=0)
     inputs=[{'source_ref':{'record_id':str(uuid4()),'version':'1','item_id':None,'json_pointer':''},'content':'甲'} for _ in range(6)]
     plan=plan_batches('step2',str(uuid4()),str(uuid4()),inputs,cfg)
     result=prepare_batch(plan,plan['batches'][0]['batch_id'],inputs,cfg,available_tokens=3)

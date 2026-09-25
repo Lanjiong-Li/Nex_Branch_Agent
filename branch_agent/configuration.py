@@ -4,11 +4,22 @@ from copy import deepcopy
 from decimal import Decimal, InvalidOperation
 import json
 import re
+from psycopg.types.json import Jsonb
+from .storage import VersionConflict
 from .schemas import ROOT, SchemaCatalog, digest
-from .prompts import defaults as prompt_defaults, stage_agent, instruction_parts
+from .prompts import (defaults as prompt_defaults, stage_agent, instruction_parts,
+                      legacy_prompt_overrides)
 
 # Capability data is explicit and editable only through registered model profiles.
 MODELS = {
+ 'deepseek-flash': {'provider':'deepseek','context_window':1000000, 'max_output_tokens':384000,
+  'reasoning_efforts':['none','low','high','max'], 'tokenizer':'o200k_base',
+  'token_estimate_multiplier':1.25,
+  'source':'https://api-docs.deepseek.com/zh-cn/quick_start/pricing/'},
+ 'deepseek-v4-pro': {'provider':'deepseek','context_window':1000000, 'max_output_tokens':384000,
+  'reasoning_efforts':['none','low','high','max'], 'tokenizer':'o200k_base',
+  'token_estimate_multiplier':1.25,
+  'source':'https://api-docs.deepseek.com/zh-cn/quick_start/pricing/'},
  'gpt-5.6-sol': {'context_window':1050000, 'max_output_tokens':128000,
   'reasoning_efforts':['none','low','medium','high','xhigh','max'], 'tokenizer':'o200k_base',
   'source':'https://developers.openai.com/api/docs/models/gpt-5.6-sol'},
@@ -60,6 +71,7 @@ SESSION_SHARING_DEFAULTS = {
     'step10': None,
     'step11': None,
 }
+READ_TOOL_NAMES = ('list_records', 'read_record')
 for _name in ('gpt-5-mini','gpt-5-nano'):
     MODELS[_name]={'context_window':400000,'max_output_tokens':128000,
         'reasoning_efforts':['minimal','low','medium','high'],'tokenizer':'o200k_base',
@@ -81,7 +93,8 @@ def initial_values():
         'repair':{'max_rounds':2}, 'task':{'max_active_seconds':3600,'max_cost':{'amount':'20.00','currency':'USD'},'disabled_limits':[]},
         'recovery':{'max_attempts':3,'backoff_seconds':[5,30,120]},
         'runtime':{'lease_seconds':60,'heartbeat_seconds':15,'stop_grace_seconds':30},
-        'tools':{'enabled':['get_artifact','search_records','read_record'],'read_token_cap':4000,'descriptions':{}},
+        'tools':{'enabled':list(READ_TOOL_NAMES),'ask_user_enabled':True,
+                 'read_token_cap':4000,'descriptions':{}},
         'retrieval':{'top_k':8,'snippet_tokens':200,'neighbor_messages':2},
         'compaction':{'trigger_ratio':0.75,'target_ratio':0.5},
         'summary':{'target_tokens':1500,'checkpoint_events':['confirmation','stage.completed']},
@@ -97,9 +110,17 @@ def initial_values():
                   'structured':{'coordinator':True,
                       **{f'step{i}': i != 2 for i in range(1,12)},
                       'aux.summary':False,'aux.history_answer':True,'aux.subtask':True}},
-        'model':{'temperature':None}, 'pricing':{'version':'openai-2026-09-21',
-            'source':'https://developers.openai.com/api/docs/models/gpt-5.6-sol',
-            'models':{'gpt-5.6-sol':{'input_per_million':'4.00','cached_input_per_million':'0.40',
+        'model':{'temperature':None}, 'pricing':{'version':'multi-provider-2026-09-25-peak-usd',
+            'source':'https://api-docs.deepseek.com/quick_start/pricing/',
+            'models':{'deepseek-flash':{'input_per_million':'0.30','cached_input_per_million':'0.006',
+                'output_per_million':'1.20','long_input_threshold':1000000,
+                'long_input_multiplier':'1','long_output_multiplier':'1','cache_write_multiplier':'1',
+                'source':'https://api-docs.deepseek.com/quick_start/pricing/'},
+              'deepseek-v4-pro':{'input_per_million':'1.32','cached_input_per_million':'0.044',
+                'output_per_million':'3.96','long_input_threshold':1000000,
+                'long_input_multiplier':'1','long_output_multiplier':'1','cache_write_multiplier':'1',
+                'source':'https://api-docs.deepseek.com/quick_start/pricing/'},
+              'gpt-5.6-sol':{'input_per_million':'4.00','cached_input_per_million':'0.40',
                 'output_per_million':'20.00','long_input_threshold':272000,
                 'long_input_multiplier':'2','long_output_multiplier':'1.5','cache_write_multiplier':'1.25'},
               'gpt-5.6-luna':{'input_per_million':'0.20','cached_input_per_million':'0.02',
@@ -116,6 +137,20 @@ def initial_values():
 
 def validate_values(values, schemas):
     prompts=values.get('prompts',{})
+    harness=prompts.get('harness',{})
+    if not isinstance(harness,dict) or any(not isinstance(harness.get(key),str)
+        for key in ('base','manager','manager_structured','manager_plain',
+                    'ask_user','no_ask_user','window')):
+        raise ValueError('Harness 协议指令必须是文本')
+    if type(prompts.get('validation_enabled')) is not bool:
+        raise ValueError('校验 Agent 启用开关必须为布尔值')
+    if any(not isinstance(harness.get(key),dict) or
+           any(not isinstance(value,str) for value in harness[key].values())
+           for key in ('agents','stages','runtime','legacy_agents','legacy_stages')):
+        raise ValueError('Harness Agent 与阶段协议必须是文本映射')
+    if any(not isinstance(harness.get(key,''),str) for key in
+           ('legacy_base','legacy_agent','legacy_stage')):
+        raise ValueError('旧版指令必须是文本')
     agents=prompts.get('agents')
     names=prompts.get('agent_names')
     assignments=prompts.get('stage_agents')
@@ -144,8 +179,6 @@ def validate_values(values, schemas):
     allowed=executable
     if set(structured)-set(allowed):
         raise ValueError('存在未注册的 output_type 阶段开关')
-    if structured.get('coordinator') is False:
-        raise ValueError('对话协调 Agent 的调度协议必须保持结构化输出')
     if structured.get('step2') is True or structured.get('aux.summary') is True:
         raise ValueError('Step2 与压缩摘要是内部纯文本产物，不绑定 output_type')
     if values['summary']['checkpoint_events']!=['confirmation','stage.completed']:
@@ -183,8 +216,9 @@ def validate_values(values, schemas):
     available = min(values['context']['input_token_cap'],limits['context_window']-model['max_output_tokens']-margin)
     if available <= 0: raise ValueError('配置未留下有效输入空间')
     source = values['context']['step1_source']
-    if source['mode'] != 'full_text' or source['overflow_behavior'] != 'reject': raise ValueError('Step1只能全文读取且超限拒绝')
-    if type(source['max_source_tokens']) is not int or source['max_source_tokens'] <= 0: raise ValueError('原文上限必须为正整数')
+    for field in ('trigger_tokens', 'window_tokens'):
+        if type(source.get(field)) is not int or source[field] <= 0:
+            raise ValueError('滑动窗口机制参数必须为正整数')
     ratios = values['compaction']
     if not 0 < ratios['target_ratio'] < ratios['trigger_ratio'] < 1: raise ValueError('压缩比例应满足0<目标<触发<1')
     rt = values['runtime']
@@ -221,7 +255,8 @@ def validate_values(values, schemas):
             except (InvalidOperation,TypeError,ValueError):raise ValueError(f'{name}计价字段{key}无效') from None
             if not amount.is_finite() or amount<0:raise ValueError(f'{name}计价字段{key}无效')
         if type(price['long_input_threshold']) is not int or price['long_input_threshold']<1:raise ValueError('长输入计价阈值无效')
-    if set(values['tools']['enabled']) - {'get_artifact','search_records','read_record'}: raise ValueError('存在未注册工具')
+    if set(values['tools']['enabled']) - set(READ_TOOL_NAMES): raise ValueError('存在未注册工具')
+    if type(values['tools'].get('ask_user_enabled', True)) is not bool: raise ValueError('主动提问工具开关必须为布尔值')
     catalog = SchemaCatalog(); catalog.validate_publication(schemas,values['context']['profiles'])
     for name in values['output']['bindings'].values():
         if name not in schemas: raise ValueError('输出类型绑定不存在')
@@ -449,6 +484,59 @@ class ConfigService:
         return 'harness:'+account_id
 
     @staticmethod
+    def _editor_scope(scope_kind,scope_key):
+        if scope_kind not in ('project','agent','stage','auxiliary'):
+            raise ValueError('不允许编辑该配置范围')
+        if scope_kind=='project': return ''
+        if not isinstance(scope_key,str) or not scope_key:
+            raise ValueError('缺少配置范围标识')
+        return scope_key
+
+    def editor_draft_for_account(self,account_id,scope_kind,scope_key=None):
+        key=self._editor_scope(scope_kind,scope_key)
+        row=self.store._connection().execute('''SELECT revision,payload,updated_at
+          FROM account_config_editor_drafts WHERE account_id=%s AND scope_kind=%s AND scope_key=%s''',
+          (account_id,scope_kind,key)).fetchone()
+        return {'revision':row['revision'],'payload':row['payload'],'updated_at':row['updated_at'].isoformat()} if row else {'revision':0,'payload':None}
+
+    def save_editor_draft_for_account(self,account_id,scope_kind,scope_key,payload,expected_revision):
+        key=self._editor_scope(scope_kind,scope_key)
+        if not isinstance(payload,dict) or not isinstance(payload.get('values'),dict) or not isinstance(payload.get('schemas'),dict):
+            raise ValueError('编辑草稿需包含 values 和 schemas 对象')
+        if not isinstance(payload.get('schema_texts',{}),dict) or not isinstance(payload.get('raw_fields',{}),dict):
+            raise ValueError('编辑草稿的原始文本字段必须是对象')
+        if not isinstance(expected_revision,int) or expected_revision<0:
+            raise ValueError('草稿版本无效')
+        if len(json.dumps(payload,ensure_ascii=False).encode('utf-8'))>8*1024*1024:
+            raise ValueError('编辑草稿超过 8 MB')
+        with self.store.transaction():
+            self.store.advisory_lock('config:editor:'+account_id+':'+scope_kind+':'+key)
+            current=self.editor_draft_for_account(account_id,scope_kind,key)
+            if current['revision']!=expected_revision:
+                raise VersionConflict('草稿已在其他页面更新；请先刷新配置页再继续')
+            if expected_revision:
+                row=self.store._connection().execute('''UPDATE account_config_editor_drafts
+                  SET payload=%s,revision=revision+1,updated_at=clock_timestamp()
+                  WHERE account_id=%s AND scope_kind=%s AND scope_key=%s
+                  RETURNING revision,updated_at''',(Jsonb(payload),account_id,scope_kind,key)).fetchone()
+            else:
+                row=self.store._connection().execute('''INSERT INTO account_config_editor_drafts
+                  (account_id,scope_kind,scope_key,payload) VALUES(%s,%s,%s,%s)
+                  RETURNING revision,updated_at''',(account_id,scope_kind,key,Jsonb(payload))).fetchone()
+            return {'revision':row['revision'],'updated_at':row['updated_at'].isoformat()}
+
+    def clear_editor_draft_for_account(self,account_id,scope_kind,scope_key,expected_revision):
+        key=self._editor_scope(scope_kind,scope_key)
+        with self.store.transaction():
+            self.store.advisory_lock('config:editor:'+account_id+':'+scope_kind+':'+key)
+            current=self.editor_draft_for_account(account_id,scope_kind,key)
+            if current['revision']!=expected_revision:
+                raise VersionConflict('草稿已在其他页面更新；请先刷新配置页再继续')
+            self.store._connection().execute('''DELETE FROM account_config_editor_drafts
+              WHERE account_id=%s AND scope_kind=%s AND scope_key=%s''',(account_id,scope_kind,key))
+            return {'revision':0,'payload':None}
+
+    @staticmethod
     def _scope_key(scope_kind,scope_key):
         return scope_kind+':'+(scope_key or '')
 
@@ -494,7 +582,10 @@ class ConfigService:
                 if r['config_key']==self._account_key(account_id)]
 
     def published_for_account(self,account_id):
-        return [self._logical(r) for r in self._physical(account_id,'published')]
+        rows=[self._logical(r) for r in self._physical(account_id,'published')]
+        for row in rows:
+            row['values']=legacy_prompt_overrides(row['values'])
+        return rows
 
     def published(self, project_id):
         return self.published_for_account(self._account(project_id))
@@ -534,7 +625,7 @@ class ConfigService:
         selector=deepcopy(data)
         for row in (project_row,stage_row):
             if row:
-                value=self._upgrade_context_overrides(row['values'])
+                value=legacy_prompt_overrides(self._upgrade_context_overrides(row['values']))
                 value.pop('schemas',None)
                 selector=merge(selector,value)
         selected_agent=agent_key or stage_agent(stage,selector)
@@ -543,7 +634,7 @@ class ConfigService:
         for chosen in (project_row,latest('agent',selected_agent),stage_row,latest('auxiliary',stage)):
             if chosen:
                 ids.append(chosen['id'])
-                v=self._upgrade_context_overrides(chosen['values'])
+                v=legacy_prompt_overrides(self._upgrade_context_overrides(chosen['values']))
                 schemas=merge(schemas,self._upgrade_schema_overrides(v.pop('schemas',{})))
                 data=merge(data,v)
         # Internal plain-text artifacts are not Agent structured outputs.
@@ -553,6 +644,11 @@ class ConfigService:
         data.get('output',{}).get('bindings',{}).pop('aux.summary',None)
         data.get('output',{}).get('bindings',{}).pop('step2',None)
         data.get('summary',{}).pop('extra_fields',None)
+        # Tool permissions are no longer configurable. Keep the legacy fields
+        # in resolved snapshots for compatibility, but override old per-Agent
+        # switches so every new Run receives the registered tools.
+        data['tools']['enabled']=list(READ_TOOL_NAMES)
+        data['tools']['ask_user_enabled']=True
         data['schemas']=schemas
         return data,list(dict.fromkeys(ids))
 
@@ -640,8 +736,8 @@ class ConfigService:
                     or row.get('owner_account_id')!=account_id): raise ValueError('配置草稿不存在')
             for stage in ['coordinator',*[f'step{i}' for i in range(1,12)],'aux.summary','aux.history_answer','aux.subtask']:
                 data,_=self.values_for_account(account_id,stage,row); available=validate_values(data,data['schemas'])
-                if stage=='step1' and data['context']['step1_source']['max_source_tokens'] >= available:
-                    raise ValueError('Step1原文上限必须小于实际输入预算，为其他必要材料留空间')
+                if stage=='step1' and data['context']['step1_source']['window_tokens'] >= available:
+                    raise ValueError('滑动窗口大小须小于 Step1 实际输入预算，为 instructions 和输出合同留空间')
             for old in self._physical(account_id,'published'):
                 if old['scope_key']==row['scope_key']:
                     old['state']='retired'; self.store.update(old,old['row_version'])

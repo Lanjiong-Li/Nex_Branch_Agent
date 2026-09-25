@@ -68,7 +68,7 @@
 
 工作摘要作为 `artifact_kind=work_summary` 的纯文本 ArtifactVersion 保存，不绑定 Agent `output_type`；覆盖消息与来源由 `source_refs` 和 Session 记录维护。原作保存为 `artifact_kind=source_text`，正文版本中的 Blob 为权威原文。各阶段产物使用其 `schema_id` 作为 `artifact_kind`。
 
-Step1 不生成分批计划；切分、修正、重试及恢复中的每次模型调用都在 ContextSnapshot 中保存完整原作固定版本的实际输入及 token 计量，不能以摘要或分页读取记录代替全文输入。全文准入按[上下文执行方案](../context/上下文执行方案.md)执行，超限拒绝调用。
+Step1 不生成 `batch_manifest`；根据阈值在全文和滑动窗口之间选择。每次模型调用记录固定原作版本、本次实际原文范围、输入输出与 token 计量。窗口进度按全局事件和主要人物事件分别保存，双视图覆盖全篇后才保存最终 `source_views`。超预算或没有完整事件时不推进游标，详见[上下文执行方案](../context/上下文执行方案.md)。
 
 其他阶段的分批计划使用 `artifact_kind=batch_manifest`、`output_schema=null`，内容按[上下文执行方案](../context/上下文执行方案.md)的 `context.batch_manifest.v1` 内部处理器校验；它是程序生成的版本化计划，不是新增模型输出类型。覆盖进度由批次子 Task 和 `context.batch_completed` 事件重建。身份索引、版本比较、依赖评估与确认映射的事件载荷及跨记录约束见[版本与确认映射](../context/版本与确认映射.md)，不增加核心记录类型。
 
@@ -84,7 +84,7 @@ Step1 不生成分批计划；切分、修正、重试及恢复中的每次模�
 - ArtifactState 保存状态投影；每次状态变化与对应事件在同一事务中提交。原始确认始终可追溯。
 - ConfigVersion 的已保存 `values` 不原地改写；编辑另存版本。发布状态可以更新并留下事件，`run_snapshot` 创建后整体不可变。
 - Run、Task、调用状态及队列等可变记录通过 `row_version` 并发检查修改，不能从 HTML JSON 面板任意 PATCH。
-- SessionItem 是可重建工作数据。裁剪或压缩切换 `WorkSession.generation`；先保存归档、摘要和调用快照，再清理旧代工作 items。删除工作 items 不删除原始历史。Step1 的工作历史即使重建，下一次模型调用仍必须从固定原作版本加载全文，不能沿用摘要代替。
+- SessionItem 是可重建工作数据。裁剪或压缩切换 `WorkSession.generation`；先保存归档、摘要和调用快照，再清理旧代工作 items。删除工作 items 不删除原始历史。Step1 的工作历史即使重建，下一次模型调用仍必须从固定原作版本加载本次要求的全文或窗口，不能沿用摘要代替。
 
 `Artifact.current_effective_version` 仅指整个产物范围已生效的版本。部分确认保存在 Confirmation／ArtifactState.effective_selections 中，不能把未确认部分标为有效。已确认、依赖有效、质量通过是三个独立状态；任一个不能替代其余条件。
 

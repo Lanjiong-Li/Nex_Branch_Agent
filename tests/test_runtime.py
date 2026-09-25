@@ -725,6 +725,7 @@ def _review_scope_runtime(runtime, *, enable_validation=True):
     # explicitly enable it because they exercise its review/repair contract.
     if enable_validation:
         engine.config_service.base["prompts"]["validation"] = "检查最终 Graph 的语义质量。"
+        engine.config_service.base["prompts"]["validation_enabled"] = True
     engine.import_source(pid, cid, "甲见乙。", "审核合成原作")
     source = engine.workflow.resolve(pid, "source_text")
     with engine.store.transaction():
@@ -953,6 +954,96 @@ def test_model_database_reference_is_program_bound_without_repair(runtime):
     assert len(model.calls) == 1
     saved = engine.workflow.resolve(pid, "source_views")
     assert saved["content"]["value"]["evidence_refs"] == [ref(engine.workflow.resolve(pid, "source_text"))]
+
+
+def test_step1_sliding_window_keeps_independent_runs_and_saves_one_final_view(runtime):
+    from branch_agent.context import prepare_runtime_materials, build_materials, utf16_length
+    engine, _, pid, cid = runtime
+    original = "甲见乙。丙离开。"
+    draft = engine.config_service.draft(pid, {"context": {"step1_source": {
+        "trigger_tokens": 1, "window_tokens": 7}}})
+    engine.config_service.publish(pid, draft["id"])
+    engine.import_source(pid, cid, original, "故事")
+    with engine.store.transaction():
+        message = engine._message(pid, cid, "切分", role="user")
+        task = engine._new_task(pid, cid, message, "generate", stage=1)
+
+    class WindowModel(FakeModel):
+        async def run(self, stage, task, run, session, config, materials, message, control=None,
+                      instructions_override=None, step1_window=None):
+            assert stage == "step1"
+            assert step1_window is not None
+            prepared = prepare_runtime_materials(stage, task, run, session, config, materials,
+                                                 self.store, step1_window=step1_window)
+            _, visible, _ = build_materials(stage, prepared, config, self.store, task["project_id"])
+            assert visible == step1_window["text"]
+            self.calls.append((step1_window["view"], session["id"]))
+            if control:
+                await control()
+            source_ref = next(item["ref"] for item in materials if item["schema_id"] == "source_text")
+            start, end = step1_window["start_utf16"], step1_window["end_utf16"]
+            anchor = {"source_ref": source_ref, "start_utf16": start, "end_utf16": end,
+                      "exact_quote": None, "prefix": None, "suffix": None}
+            event = {"title": "相遇", "summary": "甲见乙", "narrative_order": 1,
+                     "story_time": None, "source_anchors": [anchor]}
+            global_events = [{**event, "event_id": "local-1", "character_ids": ["CHAR-甲"]}] if step1_window["view"] == "global" else []
+            character_views = ([{"character_id": "CHAR-甲", "name": "甲", "aliases": [],
+                                 "description": "主人物", "events": [{**event,
+                                 "character_event_id": "local-1", "involvement": "见到乙"}]}]
+                               if step1_window["view"] == "character" else [])
+            return {"result_kind": "ready", "payload": {"source_ref": source_ref,
+                    "global_events": global_events, "character_views": character_views,
+                    "covered_source_anchors": [anchor], "remaining_source_anchors": []},
+                    "questions": [], "evidence_refs": [], "notes": []}
+
+    model = WindowModel()
+    model.store = engine.store
+    engine.model_service = model
+    asyncio.run(engine.tick(pid, cid))
+    assert engine.store.get(task["id"], pid)["state"] == "succeeded"
+    assert [view for view, _ in model.calls] == ["global", "global", "character", "character"]
+    assert len({session_id for _, session_id in model.calls}) == 4
+    saved = engine.workflow.resolve(pid, "source_views")
+    assert len(saved["content"]["value"]["payload"]["global_events"]) == 2
+    assert len(saved["content"]["value"]["payload"]["character_views"]) == 1
+
+
+def test_step1_window_without_complete_event_preserves_cursor_without_final_artifact(runtime):
+    engine, _, pid, cid = runtime
+    draft = engine.config_service.draft(pid, {"context": {"step1_source": {
+        "trigger_tokens": 1, "window_tokens": 7}}})
+    engine.config_service.publish(pid, draft["id"])
+    engine.import_source(pid, cid, "甲见乙。丙离开。", "故事")
+    with engine.store.transaction():
+        message = engine._message(pid, cid, "切分", role="user")
+        task = engine._new_task(pid, cid, message, "generate", stage=1)
+
+    class IncompleteSecondWindow(FakeModel):
+        async def run(self, stage, task, run, session, config, materials, message, control=None,
+                      instructions_override=None, step1_window=None):
+            source_ref = next(item["ref"] for item in materials if item["schema_id"] == "source_text")
+            start, end = step1_window["start_utf16"], step1_window["end_utf16"]
+            anchor = {"source_ref": source_ref, "start_utf16": start, "end_utf16": end,
+                      "exact_quote": None, "prefix": None, "suffix": None}
+            events = ([{"event_id": "local", "title": "事件", "summary": "摘要", "narrative_order": 1,
+                        "story_time": None, "character_ids": [], "source_anchors": [anchor]}]
+                      if start == 0 else [])
+            return {"result_kind": "ready", "payload": {"source_ref": source_ref,
+                    "global_events": events, "character_views": [],
+                    "covered_source_anchors": [anchor], "remaining_source_anchors": []},
+                    "questions": [], "evidence_refs": [], "notes": []}
+
+    model = IncompleteSecondWindow()
+    model.store = engine.store
+    engine.model_service = model
+    asyncio.run(engine.tick(pid, cid))
+    assert engine.store.get(task["id"], pid)["state"] == "paused"
+    progress = engine._task_data(task)["source_window_state"]
+    assert progress["global_cursor"] == 4
+    assert progress["character_cursor"] == 0
+    assert len(progress["windows"]) == 1
+    with pytest.raises(WorkflowBlocked, match="missing_material"):
+        engine.workflow.resolve(pid, "source_views")
 
 
 @pytest.mark.parametrize("entry", ["continue", "legacy_continue", "stale_resume", "crash_recovery"])

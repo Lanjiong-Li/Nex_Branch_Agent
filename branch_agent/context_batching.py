@@ -6,11 +6,10 @@ commit its real result versions and call complete_batch in the same transaction.
 from __future__ import annotations
 from copy import deepcopy
 import hashlib
-from importlib.metadata import version
 import re
 from uuid import UUID
 
-from .context import MaterialError, BudgetExceeded, _all, _identity, _ref, pointer_values, tokens, unwrap, utf16_length, input_budget
+from .context import MaterialError, BudgetExceeded, _all, _identity, _ref, pointer_values, tokens, token_estimator_version, unwrap, utf16_length, input_budget
 from .records import canonical_bytes, new_record
 
 
@@ -185,7 +184,7 @@ def plan_batches(stage,task_id,config_version_id,inputs,config,*,generation=1):
     return {'schema_version':'1.0.0','task_id':task_id,'config_version_id':config_version_id,'stage':stage,
             'generation':generation,'input_refs':[deepcopy(i['source_ref']) for i in inputs],
             'units':[u for u,_,_ in values],'batches':batches,
-            'estimator_version':'tiktoken/'+version('tiktoken')+':o200k_base'}
+            'estimator_version':token_estimator_version(model)}
 
 
 def validate_manifest(manifest,inputs,config):

@@ -3,6 +3,8 @@ from __future__ import annotations
 from copy import deepcopy
 import hashlib
 import json
+import math
+from importlib.metadata import version
 import re
 import tiktoken
 from .schemas import schema_path
@@ -21,12 +23,21 @@ class BudgetExceeded(RuntimeError):
         super().__init__(message)
 
 
-def tokens(value, model='gpt-5.6-sol'):
+def tokens(value, model='deepseek-flash'):
     from .configuration import MODELS
     cap=MODELS.get(model)
     if not cap: raise ValueError('未知模型的token估算器')
     text=value if isinstance(value,str) else json.dumps(value,ensure_ascii=False,separators=(',',':'))
-    return len(tiktoken.get_encoding(cap['tokenizer']).encode(text,disallowed_special=()))
+    estimate=len(tiktoken.get_encoding(cap['tokenizer']).encode(text,disallowed_special=()))
+    # DeepSeek uses a different tokenizer. Until an exact, versioned tokenizer
+    # is bundled, reserve extra space for every preflight and batch decision.
+    return math.ceil(estimate*cap.get('token_estimate_multiplier',1))
+
+
+def token_estimator_version(model):
+    from .configuration import MODELS
+    cap=MODELS[model]
+    return f"tiktoken/{version('tiktoken')}:{cap['tokenizer']}:x{cap.get('token_estimate_multiplier',1)}"
 
 
 def input_budget(config):
@@ -243,7 +254,7 @@ def _validate_batch_state(store,task,state,stage,config):
     return manifest
 
 
-def prepare_runtime_materials(stage,task,run,session,config,materials,store):
+def prepare_runtime_materials(stage,task,run,session,config,materials,store,step1_window=None):
     """Freeze real inputs and derive auditable runtime projections; never resolve latest."""
     project=task['project_id']
     if run['task_id']!=task['id'] or run['project_id']!=project or session['id']!=run['session_id']:
@@ -376,9 +387,16 @@ def prepare_runtime_materials(stage,task,run,session,config,materials,store):
         if not isinstance(text,str) or not text:raise MaterialError('empty_source','Original text is empty or not text')
         data={'source_ref':material['ref'],'text':text,'start_utf16':0,'end_utf16':utf16_length(text)}
         if stage=='step1':
-            selected.append({**material,'builtin':'runtime.full_source','content':data,'required':True})
-            sections=[];position=0
-            for line in text.splitlines(keepends=True):
+            if step1_window is not None:
+                start,end=step1_window['start_utf16'],step1_window['end_utf16']
+                excerpt=text.encode('utf-16-le')[start*2:end*2].decode('utf-16-le')
+                if excerpt!=step1_window['text']:
+                    raise MaterialError('source_interval_invalid','Step1 window does not match frozen original')
+                data={'source_ref':material['ref'],'text':excerpt,'start_utf16':start,'end_utf16':end}
+            selected.append({**material,'builtin':'runtime.full_source','content':data,'required':True,
+                             'window_mode':step1_window is not None})
+            sections=[];position=data['start_utf16']
+            for line in data['text'].splitlines(keepends=True):
                 end=position+utf16_length(line)
                 sections.append({'section_id':hashlib.sha256(canonical_bytes([material['ref'],position,end])).hexdigest()[:24],
                                  'title':None,'start_utf16':position,'end_utf16':end});position=end
@@ -650,10 +668,9 @@ def build_materials(stage,materials,config,store,project_id):
             if type(start) is not int or type(end) is not int or not 0<=start<end<=utf16_length(text) or actual!=content['text']:
                 raise MaterialError('source_interval_invalid','Original text does not match fixed UTF-16 range')
             if builtin=='runtime.full_source':
-                if start!=0 or end!=utf16_length(text):raise MaterialError('missing_full_source','Step1 requires the full original')
-                source=text;count=tokens(source,config['model']['name'])
-                if count>config['context']['step1_source']['max_source_tokens']:
-                    raise BudgetExceeded('source_token_limit','原文超过Step1完整导入上限',{'source_tokens':count})
+                if not material.get('window_mode') and (start!=0 or end!=utf16_length(text)):
+                    raise MaterialError('missing_full_source','Step1 requires the full original')
+                source=content['text']
             policy={'required':builtin=='runtime.full_source' or material.get('required',False) or any(r['required'] for r in matching),
                     'auto':all(r['load']=='auto' for r in matching),'priority':max((r.get('priority',100) for r in matching),default=100),
                     'selection_indices':[len(selections)]}

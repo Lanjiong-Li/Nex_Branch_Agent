@@ -89,6 +89,18 @@ def pending_confirmation(runtime):
     return task,version
 
 
+def test_confirmation_revision_ignores_unrelated_task_record_updates(runtime):
+    engine,_,pid,cid=runtime;service=ActionService(engine);task,_=pending_confirmation(runtime)
+    item=engine._task_data(task)['pending_user_items'][0]
+    before=card(service,pid,cid,'pending:'+item['id'])
+    with engine.store.transaction():
+        current=engine.store.get(task['id'],pid)
+        update(engine.store,current,latest_checkpoint_id=current['latest_checkpoint_id'])
+    after=card(service,pid,cid,before['id'])
+    assert after['revision']==before['revision']
+    assert after['actions']==before['actions']
+
+
 def test_confirmation_uses_exact_version_and_real_user_source(runtime):
     engine,model,pid,cid=runtime;service=ActionService(engine);task,version=pending_confirmation(runtime)
     item=engine._task_data(task)['pending_user_items'][0]
@@ -190,6 +202,49 @@ def test_fresh_restart_rebuilds_step_one_even_when_previous_effective_exists(run
     assert model.calls==['step1']
     children=engine.store.list(pid,'task',filters={'parent_task_id':receipt['task_id']})
     assert any(t['scope']['stage']==1 and t['state']=='succeeded' for t in children)
+
+
+def test_manager_restart_returns_dispatch_to_coordinator(runtime):
+    engine, _, pid, cid = runtime
+    service = ActionService(engine)
+    root, child = initial_task(runtime)
+    with engine.store.transaction():
+        data = engine._task_data(root)
+        data['manager_controlled'] = True
+        engine._save_task_data(root, data)
+        engine._transition(child, 'paused', 'repair_exhausted')
+        engine._transition(root, 'paused', 'child_blocked')
+    shown = card(service, pid, cid, 'task:' + child['id'])
+    receipt = submit(service, pid, cid, shown, 'restart',
+                     {'max_cost_usd': '2', 'max_active_seconds': 600})
+    replacement = engine.store.get(receipt['task_id'], pid)
+    assert engine._task_data(replacement)['manager_controlled'] is True
+    assert engine._task_data(replacement)['recovery_stage'] == 1
+    assert not engine.store.list(pid, 'task', filters={'parent_task_id': replacement['id']})
+    pending = [item for item in engine.store.list(pid, 'queued_request', filters={'conversation_id': cid})
+               if item['state'] == 'pending']
+    assert len(pending) == 1
+    assert engine._projection(pid, 'queue_context', pending[0]['id'])['manager_resume'] is True
+
+
+def test_manager_resume_leaves_stage_for_manager_tool(runtime):
+    engine, _, pid, cid = runtime
+    service = ActionService(engine)
+    root, child = initial_task(runtime)
+    with engine.store.transaction():
+        data = engine._task_data(root)
+        data['manager_controlled'] = True
+        engine._save_task_data(root, data)
+        engine._transition(child, 'paused', 'repair_exhausted')
+        engine._transition(root, 'paused', 'child_blocked')
+    shown = card(service, pid, cid, 'task:' + child['id'])
+    submit(service, pid, cid, shown, 'resume')
+    assert engine.store.get(child['id'], pid)['state'] == 'queued'
+    assert engine._task_data(child)['parent_owned'] is True
+    pending = [item for item in engine.store.list(pid, 'queued_request', filters={'conversation_id': cid})
+               if item['state'] == 'pending']
+    assert len(pending) == 1
+    assert engine._projection(pid, 'queue_context', pending[0]['id'])['manager_resume'] is True
 
 
 def test_resume_keeps_frozen_config_and_budget_without_silent_increment(runtime):

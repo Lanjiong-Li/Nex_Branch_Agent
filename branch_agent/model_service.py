@@ -11,23 +11,108 @@ from dataclasses import asdict
 from pathlib import Path
 from types import SimpleNamespace
 from dotenv import load_dotenv, dotenv_values
-from agents import Agent, Runner, RunConfig, ModelSettings, ModelRetrySettings, function_tool
+from agents import Agent, Runner, RunConfig, ModelSettings, ModelRetrySettings, function_tool, trace
+from agents.agent import StopAtTools, ToolsToFinalOutputResult
+from agents.items import ToolCallItem, ToolCallOutputItem
 from agents.lifecycle import RunHooksBase
 from agents.models.openai_responses import OpenAIResponsesModel, _mark_transport_request_without_usage
 from agents.run import ModelInputData
+from agents.exceptions import MaxTurnsExceeded
 from openai import AsyncOpenAI
 from openai.types.shared import Reasoning
+from pydantic import BaseModel, Field
 from .context import BudgetExceeded, PackedMaterials, build_materials, prepare_runtime_materials, fit_input, tokens, unwrap, input_budget, prune_optional_materials
 from .schemas import ROOT, SchemaCatalog, digest
-from .prompts import instructions, stage_agent
+from .prompts import instructions, stage_agent, harness_prompts
 from .records import new_record, now_utc, usage
 from .model_errors import terminal_failure, http_failure
+from .local_tracing import register_run, unregister_run
 
 
 class ModelRunError(RuntimeError):
     def __init__(self, code, message, retryable=False, details=None):
         self.code,self.retryable,self.details=code,retryable,details or {}
         super().__init__(message)
+
+
+class UserQuestion(BaseModel):
+    prompt: str = Field(description="向用户提出的具体问题；只询问用户才能决定或提供的信息")
+    suggested_answers: list[str] = Field(description="可直接选择的简短回答；没有合适选项时使用空数组")
+    confirmation_task_id: str | None = Field(default=None, description="确认已保存的阶段候选产物时填写 run_stage 返回的 task_id；其他问题留空。Harness 会从任务读取固定产物版本")
+
+
+def ask_user_request(output):
+    """Recognize only the Harness-owned result of the ask_user tool."""
+    if not isinstance(output, str):
+        return None
+    try:
+        value = json.loads(output)
+    except ValueError:
+        return None
+    if not isinstance(value, dict) or value.get("_harness_tool") != "ask_user":
+        return None
+    questions = value.get("questions")
+    if not isinstance(questions, list) or not 1 <= len(questions) <= 3:
+        raise ModelRunError("ask_user_invalid", "主动提问必须包含 1–3 个有效问题")
+    normalized = []
+    for index, question in enumerate(questions):
+        if not isinstance(question, dict) or not isinstance(question.get("prompt"), str) or not question["prompt"].strip():
+            raise ModelRunError("ask_user_invalid", "主动提问缺少具体问题")
+        answers = question.get("suggested_answers", [])
+        if not isinstance(answers, list) or any(not isinstance(answer, str) or not answer.strip() for answer in answers):
+            raise ModelRunError("ask_user_invalid", "建议选项必须是非空文本")
+        confirmation_task_id = question.get("confirmation_task_id")
+        if confirmation_task_id is not None and (not isinstance(confirmation_task_id, str) or not confirmation_task_id.strip()):
+            raise ModelRunError("ask_user_invalid", "确认任务 ID 必须是非空文本")
+        normalized.append({"question_id": f"ask-user-{index + 1}", "prompt": question["prompt"].strip(),
+                           "suggested_answers": list(dict.fromkeys(answer.strip() for answer in answers)),
+                           **({"confirmation_task_id": confirmation_task_id} if confirmation_task_id else {})})
+    return {"__ask_user__": normalized}
+
+
+def manager_tool_behavior(_context, tool_results):
+    """End a manager turn when a child needs the user or cannot advance."""
+    for item in tool_results:
+        if item.tool.name not in ("run_stage", "propose_chapters", "finish_workflow"):
+            continue
+        try:
+            receipt = json.loads(item.output)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(receipt, dict):
+            continue
+        status = receipt.get("status")
+        if status in ("needs_user_input", "prerequisite_pending", "paused", "failed", "stopped", "completed") \
+                or item.tool.name == "propose_chapters" and status == "waiting_user":
+            return ToolsToFinalOutputResult(True, json.dumps({
+                "_harness_tool": "manager_halt", "receipt": receipt}, ensure_ascii=False))
+    for item in tool_results:
+        if item.tool.name == "ask_user":
+            return ToolsToFinalOutputResult(True, item.output)
+    return ToolsToFinalOutputResult(False, None)
+
+
+def manager_halt_request(output):
+    if not isinstance(output, str):
+        return None
+    try:
+        value = json.loads(output)
+    except ValueError:
+        return None
+    return value.get("receipt") if isinstance(value, dict) and value.get("_harness_tool") == "manager_halt" else None
+
+
+def stopped_on_ask_user(result):
+    """A model-written marker is not a substitute for the actual tool call."""
+    outputs = [item for item in result.new_items if isinstance(item, ToolCallOutputItem)]
+    if not outputs or outputs[-1].output != result.final_output:
+        return False
+    raw_output = outputs[-1].raw_item
+    call_id = raw_output.get("call_id") if isinstance(raw_output, dict) else getattr(raw_output, "call_id", None)
+    return bool(call_id and any(isinstance(item, ToolCallItem)
+        and getattr(item.raw_item, "name", None) == "ask_user"
+        and getattr(item.raw_item, "call_id", None) == call_id
+        for item in result.new_items))
 
 
 def ref(row):
@@ -274,48 +359,123 @@ class ReadTools:
                 continue
             break
         return result(selected,next_offset)
+    def catalog(self,record_type=None,artifact_kind=None,stage=None,chapter_id=None,confirmation_status=None,cursor=None):
+        """List lightweight project records; artifacts are the default discovery scope."""
+        if cursor is not None and (not cursor.isascii() or not cursor.isdecimal()):
+            raise ValueError('分页游标必须为非负整数')
+        kind=record_type or 'artifact'
+        if kind!='artifact' and any(value is not None for value in (artifact_kind,stage,chapter_id,confirmation_status)):
+            raise ValueError('产物类型、阶段、章节和确认状态筛选只适用于 artifact')
+        rows=all_records(self.store,self.project_id,kind)
+        rows.sort(key=lambda row:(row['created_at'],row['id']),reverse=True)
+        entries=[]
+        for row in rows:
+            item={'record_type':row['record_type'],'record_ref':self._record_ref(row),'created_at':row['created_at']}
+            if kind=='artifact':
+                scope=row['scope']
+                if artifact_kind is not None and row['artifact_kind']!=artifact_kind:continue
+                if stage is not None and scope.get('stage')!=stage:continue
+                if chapter_id is not None and chapter_id not in scope.get('chapter_ids',[]):continue
+                latest=row['latest_version'];state=None
+                if latest:
+                    versions=self.store.list(self.project_id,'artifact_version',limit=1,
+                                             filters={'artifact_id':row['id'],'version':latest})
+                    if versions:
+                        states=self.store.list(self.project_id,'artifact_state',limit=10000,
+                                               filters={'artifact_version_id':versions[0]['id']})
+                        state=states[-1] if states else None
+                status=state['confirmation_status'] if state else None
+                if confirmation_status is not None and status!=confirmation_status:continue
+                item.update(artifact_kind=row['artifact_kind'],
+                            scope={'stage':scope.get('stage'),'chapter_ids':scope.get('chapter_ids',[])},
+                            latest_version=latest,current_effective_version=row['current_effective_version'],
+                            confirmation_status=status,
+                            dependency_status=state['dependency_status'] if state else None,
+                            quality_status=state['quality_status'] if state else None)
+            elif kind=='history_record':
+                item.update({key:row.get(key) for key in ('conversation_id','sequence','role','kind')})
+            entries.append(item)
+        offset=int(cursor or 0)
+        if offset>len(entries):raise ValueError('分页游标超出当前列表范围')
+        selected=[];cap=self.config['tools']['read_token_cap'];model=self.config['model']['name']
+        page_size=self.config['retrieval']['top_k']
+        def result(items,end):
+            return {'status':'ok' if entries else 'no_matches','items':items,
+                    'next_cursor':str(end) if end<len(entries) else None}
+        for item in entries[offset:offset+page_size]:
+            if tokens(json.dumps(result(selected+[item],offset+len(selected)+1),ensure_ascii=False),model)>cap:
+                if not selected:raise BudgetExceeded('tool_output_budget_exceeded','工具读取预算不足以容纳列表引用')
+                break
+            selected.append(item)
+        return result(selected,offset+len(selected))
+    def artifact_page(self,artifact,version='current_effective',cursor=None,item_id=None,json_pointer=None):
+        if cursor is not None and not version.isdigit():
+            raise ValueError('续页必须使用上一页source_ref.version，不能重新取current_effective或latest_draft')
+        resolved=artifact['current_effective_version'] if version=='current_effective' else (
+            artifact['latest_version'] if version=='latest_draft' else int(version))
+        if resolved is None:return {'status':'no_effective_version'}
+        target={'record_id':artifact['id'],'version':str(resolved),'item_id':item_id,'json_pointer':json_pointer}
+        record,content=self.resolve(target)
+        if not record:return {'status':'not_found'}
+        states=self.store.list(self.project_id,'artifact_state',limit=10000,filters={'artifact_version_id':record['id']})
+        state=states[-1] if states else None
+        extra={'state':None,'state_ref':self._record_ref(state) if state else None}
+        if state:
+            extra['state']={key:state[key] for key in ('confirmation_status','dependency_status','quality_status','row_version','effective_selections')}
+            extra['state'].update(effective_selections_complete=True,effective_selection_count=len(state['effective_selections']))
+        try:page=self.page(content,target,int(cursor or 0),extra)
+        except BudgetExceeded as exc:
+            if exc.code!='tool_output_budget_exceeded' or not state:raise
+            # Unknown scope is explicit, never an empty list or a whole-artifact confirmation.
+            extra['state'].update(effective_selections=None,effective_selections_complete=False)
+            extra['effective_selections_ref']={**extra['state_ref'],'json_pointer':'/effective_selections'}
+            page=self.page(content,target,int(cursor or 0),extra)
+        return page
     def functions(self):
         @function_tool
-        async def read_record(record_id:str, version:str|None=None, cursor:str|None=None, item_id:str|None=None, json_pointer:str|None=None)->str:
-            """读取当前项目的固定记录或原作；后续页须沿用record_id和version。"""
+        async def read_record(record_id:str|None=None, artifact_kind:str|None=None, version:str|None=None,
+                              chapter_id:str|None=None, cursor:str|None=None, item_id:str|None=None,
+                              json_pointer:str|None=None)->str:
+            """按记录ID或产物类型读取项目内容。产物默认读有效版，可选latest_draft或数字版本；续页须用返回的固定数字版本。支持字段、条目和分页。"""
+            if bool(record_id)==bool(artifact_kind):raise ValueError('必须且只能提供 record_id 或 artifact_kind')
+            if artifact_kind:
+                rows=all_records(self.store,self.project_id,'artifact',{'artifact_kind':artifact_kind})
+                if chapter_id:rows=[row for row in rows if chapter_id in row['scope']['chapter_ids']]
+                if len(rows)!=1:
+                    return json.dumps({'status':'ambiguous_target' if rows else 'not_found',
+                                       'candidates':[row['id'] for row in rows]},ensure_ascii=False)
+                return json.dumps(self.artifact_page(rows[0],version or 'current_effective',cursor,item_id,json_pointer),ensure_ascii=False)
+            row=self.store.get(record_id,self.project_id)
+            if row and row['record_type']=='artifact':
+                if chapter_id and chapter_id not in row['scope']['chapter_ids']:
+                    return json.dumps({'status':'not_found'},ensure_ascii=False)
+                return json.dumps(self.artifact_page(row,version or 'current_effective',cursor,item_id,json_pointer),ensure_ascii=False)
+            if chapter_id is not None:raise ValueError('chapter_id 只适用于产物')
+            if version in ('current_effective','latest_draft'):
+                raise ValueError('非产物记录必须使用具体版本')
             target={'record_id':record_id,'version':version,'item_id':item_id,'json_pointer':json_pointer}
             row,value=self.resolve(target)
             if row is None: return json.dumps({'status':'not_found'},ensure_ascii=False)
             return json.dumps(self.page(value,target,int(cursor or 0)),ensure_ascii=False)
         @function_tool
-        async def get_artifact(artifact_kind:str, artifact_id:str|None=None, version:str='current_effective', chapter_id:str|None=None, cursor:str|None=None)->str:
-            """读取产物，默认有效版；续页用source_ref.version固定数字。部分确认不代表整份生效；状态范围未展开时先read_record读取effective_selections_ref。"""
-            if cursor is not None and not version.isdigit():raise ValueError('续页必须使用上一页source_ref.version，不能重新取current_effective或latest_draft')
-            rows=all_records(self.store,self.project_id,'artifact',{'artifact_kind':artifact_kind})
-            if artifact_id: rows=[r for r in rows if r['id']==artifact_id]
-            if chapter_id: rows=[r for r in rows if chapter_id in r['scope']['chapter_ids']]
-            if len(rows)!=1: return json.dumps({'status':'ambiguous_target' if rows else 'not_found','candidates':[r['id'] for r in rows]})
-            a=rows[0]; v=a['current_effective_version'] if version=='current_effective' else a['latest_version'] if version=='latest_draft' else int(version)
-            if v is None: return json.dumps({'status':'no_effective_version'})
-            target={'record_id':a['id'],'version':str(v),'item_id':None,'json_pointer':None}; record,content=self.resolve(target)
-            if not record:return json.dumps({'status':'not_found'})
-            states=self.store.list(self.project_id,'artifact_state',limit=10000,filters={'artifact_version_id':record['id']})
-            state=states[0] if states else None
-            extra={'state':None,'state_ref':self._record_ref(state) if state else None}
-            if state:
-                extra['state']={key:state[key] for key in ('confirmation_status','dependency_status','quality_status','row_version','effective_selections')}
-                extra['state'].update(effective_selections_complete=True,effective_selection_count=len(state['effective_selections']))
-            try:page=self.page(content,target,int(cursor or 0),extra)
-            except BudgetExceeded as exc:
-                if exc.code!='tool_output_budget_exceeded' or not state:raise
-                # Unknown scope is explicit, never an empty list or a whole-artifact confirmation.
-                extra['state'].update(effective_selections=None,effective_selections_complete=False)
-                extra['effective_selections_ref']={**extra['state_ref'],'json_pointer':'/effective_selections'}
-                page=self.page(content,target,int(cursor or 0),extra)
-            return json.dumps(page,ensure_ascii=False)
-        @function_tool
-        async def search_records(query:str, record_type:str|None=None, cursor:str|None=None)->str:
-            """检索项目归档；match=false为同会话邻接片段。续页保持query/record_type不变，详情用read_record读取固定引用。"""
-            return json.dumps(self.search(query,record_type,cursor),ensure_ascii=False)
-        available=[get_artifact,search_records,read_record]
+        async def list_records(query:str|None=None, record_type:str|None=None, artifact_kind:str|None=None,
+                               stage:int|None=None, chapter_id:str|None=None,
+                               confirmation_status:str|None=None, cursor:str|None=None)->str:
+            """默认列出项目产物类型、范围、ID、版本和状态；提供query时按关键词查项目记录与对话，可用record_type缩小范围。返回固定引用供read_record读取。"""
+            if query is not None and query.strip():
+                if any(value is not None for value in (artifact_kind,stage,chapter_id,confirmation_status)):
+                    raise ValueError('关键词检索仅支持 record_type 筛选')
+                return json.dumps(self.search(query,record_type,cursor),ensure_ascii=False)
+            return json.dumps(self.catalog(record_type,artifact_kind,stage,chapter_id,confirmation_status,cursor),ensure_ascii=False)
+        available=[list_records,read_record]
         for tool in available:
             if tool.name in self.config['tools'].get('descriptions',{}): tool.description=self.config['tools']['descriptions'][tool.name]
-        return [t for t in available if t.name in self.config['tools']['enabled']]
+        enabled=set(self.config['tools']['enabled'])
+        # A paused Run can still hold a snapshot with the retired tool names.
+        # Expose their replacements when that Run resumes.
+        if 'search_records' in enabled:enabled.add('list_records')
+        if 'get_artifact' in enabled:enabled.add('read_record')
+        return [t for t in available if t.name in enabled]
 
 
 class AuditHooks(RunHooksBase):
@@ -526,35 +686,85 @@ class AuditedResponsesModel(OpenAIResponsesModel):
 
 
 class ModelService:
+    supports_manager = True
+    supports_ask_user = True
     def __init__(self,store,client=None):
         self.store=store;self.catalog=SchemaCatalog();self.client=client
-    async def run(self,stage,task,run,session,config,materials,message,control=None):
-        load_dotenv(ROOT/'.env',override=False)
-        if self.client is None:
-            api_key=dotenv_values(ROOT/'.env').get('OPENAI_API_KEY') or os.environ.get('OPENAI_API_KEY')
-            if not api_key: raise ModelRunError('missing_api_key','请在服务端 .env 配置 OPENAI_API_KEY')
-            self.client=AsyncOpenAI(api_key=api_key,max_retries=0,timeout=600)
+        self._provider_clients={}
+
+    def _client_for(self,model_name):
+        # An injected client is used by the SDK integration tests. Production
+        # clients are isolated per provider so one Agent can use DeepSeek while
+        # another Agent in the same process still uses OpenAI.
+        if self.client is not None:
+            return self.client
+        from .configuration import MODELS
+        profile=MODELS[model_name]
+        provider=profile.get('provider','openai')
+        if provider not in self._provider_clients:
+            load_dotenv(ROOT/'.env',override=False)
+            key_name='DEEPSEEK_API_KEY' if provider=='deepseek' else 'OPENAI_API_KEY'
+            api_key=os.environ.get(key_name) or dotenv_values(ROOT/'.env').get(key_name)
+            if not api_key:
+                raise ModelRunError('missing_api_key',f'请在服务端 .env 配置 {key_name}')
+            self._provider_clients[provider]=AsyncOpenAI(
+                api_key=api_key,
+                base_url='https://api.deepseek.com' if provider=='deepseek' else None,
+                max_retries=0,timeout=600)
+        return self._provider_clients[provider]
+
+    async def run(self,stage,task,run,session,config,materials,message,control=None,
+                  extra_tools=None,instructions_override=None,step1_window=None):
+        client=self._client_for(config['model']['name'])
         original_materials=materials
-        materials=prepare_runtime_materials(stage,task,run,session,config,materials,self.store)
+        materials=prepare_runtime_materials(stage,task,run,session,config,materials,self.store,step1_window=step1_window)
         packed,source,selections=build_materials(stage,materials,config,self.store,task['project_id'])
         structured=config.get('output',{}).get('structured',{}).get(
             stage, stage not in ('aux.summary','step2'))
         plain_text=not structured
         schema_id=None if plain_text else self.catalog.schema_for(stage,config)
-        output=None if plain_text else self.catalog.output_type(schema_id,config.get('schemas'))
+        from .configuration import MODELS
+        provider=MODELS[config['model']['name']].get('provider','openai')
+        # DeepSeek's strict JSON Schema subset rejects the existing registered
+        # anyOf contracts. Its non-strict json_schema mode works with them;
+        # the Harness still validates the full schema after every response.
+        output=None if plain_text else self.catalog.output_type(
+            schema_id,config.get('schemas'),strict=provider!='deepseek')
         # Tool availability follows the selected Agent's resolved profile.
         # Internal compaction remains tool-free because it is not a user
         # configurable business stage.
         tools=[] if stage=='aux.summary' else ReadTools(self.store,task['project_id'],config).functions()
+        if extra_tools:
+            tools.extend(extra_tools)
+        can_ask=stage not in ('step2','aux.summary','aux.subtask') and step1_window is None and config.get('tools',{}).get('ask_user_enabled',True)
+        if can_ask:
+            @function_tool
+            async def ask_user(questions: list[UserQuestion]) -> str:
+                """Ask 1–3 questions requiring a user's decision. The coordinator may request confirmation of a saved stage candidate by setting confirmation_task_id to run_stage's task_id; Harness binds its fixed artifact versions. Never ask the user to verify Harness status, record IDs, or versions. The user may select an answer or write freely."""
+                if not 1<=len(questions)<=3:
+                    raise ValueError('ask_user accepts 1–3 questions')
+                items=[question.model_dump() for question in questions]
+                if any(not item['prompt'].strip() for item in items):
+                    raise ValueError('ask_user questions cannot be empty')
+                return json.dumps({'_harness_tool':'ask_user','questions':items},ensure_ascii=False)
+            tools.append(ask_user)
         tool_defs=[{'type':'function','name':t.name,'description':t.description,'parameters':t.params_json_schema} for t in tools]
         persistent=PersistentSession(self.store,session,task,run)
         audit=AuditHooks(self,stage,task,run,persistent,config,control,tool_defs,output,selections,source if stage=='step1' else None)
         settings=ModelSettings(max_tokens=config['model']['max_output_tokens'],reasoning=Reasoning(effort=config['model']['reasoning_effort']),
-            temperature=config['model'].get('temperature'),truncation='disabled',store=False,preserve_raw_usage=True,
+            temperature=config['model'].get('temperature'),parallel_tool_calls=False if can_ask else None,
+            truncation='disabled',store=False,preserve_raw_usage=True,
             retry=ModelRetrySettings(max_retries=0))
-        agent=Agent(name=stage_agent(stage,config),instructions=instructions(stage,config),
-            model=AuditedResponsesModel(model=config['model']['name'],openai_client=self.client,audit=audit,max_retries=config['retry']['max_retries']),model_settings=settings,
-            output_type=output,tools=tools)
+        prompt=instructions_override or instructions(stage,config)
+        if can_ask:
+            prompt+='\n\n'+harness_prompts(config)['ask_user']
+        elif stage not in ('aux.summary', 'aux.subtask'):
+            prompt+='\n\n'+harness_prompts(config)['no_ask_user']
+        agent=Agent(name=stage_agent(stage,config),instructions=prompt,
+            model=AuditedResponsesModel(model=config['model']['name'],openai_client=client,audit=audit,max_retries=config['retry']['max_retries']),model_settings=settings,
+            output_type=output,tools=tools,
+            tool_use_behavior=(manager_tool_behavior if stage == 'coordinator' and extra_tools else
+                               StopAtTools(stop_at_tool_names=['ask_user']) if can_ask else 'run_llm_again'))
         async def deduplicate_summary(packed,selections):
             summary_ref=persistent.row.get('latest_summary_ref')
             if not summary_ref:return packed,selections
@@ -569,7 +779,8 @@ class ModelService:
             from .compaction import compact_session
             await compact_session(self,persistent,stage,config,agent.instructions,tool_defs,output,request,control)
             if persistent.row['generation']!=session['generation']:
-                materials=prepare_runtime_materials(stage,task,run,persistent.row,config,original_materials,self.store)
+                materials=prepare_runtime_materials(stage,task,run,persistent.row,config,original_materials,self.store,
+                                                    step1_window=step1_window)
                 packed,source,selections=build_materials(stage,materials,config,self.store,task['project_id'])
                 packed,selections=await deduplicate_summary(packed,selections)
                 audit.materials=selections
@@ -601,8 +812,25 @@ class ModelService:
                     if reduced==packed:raise
                     packed,selections=reduced,trimmed;audit.materials=selections
                     request=json.dumps({**envelope,'_harness_materials':packed},ensure_ascii=False)
-            result=await Runner.run(agent,request,session=persistent,max_turns=run['max_turns']-run['model_turns_used'],hooks=audit,
-                run_config=RunConfig(tracing_disabled=True,call_model_input_filter=audit.input_filter))
+            trace_id=register_run(self.store,task['project_id'],run['id'])
+            try:
+                with trace(f"{stage} · {agent.name}",trace_id=trace_id,
+                           group_id=task.get('budget_root_task_id') or task['id'],
+                           metadata={'project_id':task['project_id'],'run_id':run['id'],'stage':stage}):
+                    result=await Runner.run(agent,request,session=persistent,
+                        max_turns=run['max_turns']-run['model_turns_used'],hooks=audit,
+                        run_config=RunConfig(trace_include_sensitive_data=False,
+                                             call_model_input_filter=audit.input_filter))
+            finally:
+                unregister_run(trace_id)
+            question_request=ask_user_request(result.final_output) if can_ask else None
+            if question_request is not None:
+                if not stopped_on_ask_user(result):
+                    raise ModelRunError('ask_user_invalid_origin', '主动提问必须通过 ask_user 工具调用')
+                return question_request
+            manager_halt = manager_halt_request(result.final_output) if stage == 'coordinator' and extra_tools else None
+            if manager_halt is not None:
+                return {'__manager_halt__': manager_halt}
             return result.final_output if plain_text else output.catalog.validate(schema_id,result.final_output,config.get('schemas'))
         except BaseException as exc:
             http_error=http_failure(exc)
@@ -615,6 +843,9 @@ class ModelService:
                         error=http_error or {'code':type(exc).__name__,'message':'模型调用失败，详见受控错误分类','retryable':False,'details':{'http_status':known}})
                     self.store.update(row,row['row_version'])
             if isinstance(exc,(BudgetExceeded,asyncio.CancelledError,ModelRunError)) or getattr(exc,'reason',None): raise
+            if isinstance(exc,MaxTurnsExceeded):
+                raise ModelRunError('turn_limit','本次运行已达到模型轮次上限。',
+                                    details=deepcopy(audit.response_details)) from None
             if http_error:raise ModelRunError(**http_error) from None
             code=type(exc).__name__; status=getattr(exc,'status_code',None)
             details=deepcopy(audit.response_details)

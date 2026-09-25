@@ -100,7 +100,9 @@ class ActionService:
             cards.append((card, context))
         for task in tasks:
             data = self.engine._task_data(task)
-            if data.get('superseded_by_task_id'):
+            if (data.get('superseded_by_task_id') or data.get('invalid_stage_dispatch')
+                    or data.get('resolved_by_manager_reconciliation')
+                    or task['pause_reason'] == 'manager_prerequisite_pending'):
                 continue
             for item in data.get('pending_user_items', []):
                 if item['state'] != 'open':
@@ -136,8 +138,10 @@ class ActionService:
                         target_state.append(data.get('chapter_plan'))
                 add({'id': 'pending:' + item['id'], 'kind': item['kind'],
                      'title': '确认产物' if item['kind'] == 'confirmation' else '需要你的答复',
-                     'description': item['description'], 'details': details, 'targets': targets, 'actions': actions},
-                    [task, item, target_state, ref(source) if source else None], {'task': task, 'pending': item})
+                     'description': item['description'], 'agent_requested': bool(item.get('agent_requested')),
+                     'details': details, 'targets': targets, 'actions': actions},
+                    [{'id': task['id'], 'state': task['state']}, item, target_state,
+                     ref(source) if source else None], {'task': task, 'pending': item})
             stale_wait = task['state'] == 'waiting_user' and any(p['state'] == 'open' and p['kind'] == 'confirmation'
                 and self._pending_validity(pid, cid, task, p) for p in data.get('pending_user_items', []))
             if (task['state'] not in ('paused', 'stopped', 'failed') and not stale_wait) or data.get('parent_owned') or data.get('batch_owned'):
@@ -292,6 +296,17 @@ class ActionService:
                     update(self.store, ctx['task'], pause_reason=None)
                 self.engine.control_task(pid, ctx['task']['id'], 'continue', additional_seconds=int(seconds), additional_cost=str(amount))
                 self._resume_waiting_ancestors(pid, cid, ctx['task'], message)
+                root = ctx['root']
+                if self.engine._task_data(root).get('manager_controlled'):
+                    for task in self._tasks(pid, cid):
+                        if task['parent_task_id'] != root['id'] or task['state'] != 'queued':
+                            continue
+                        data = self.engine._task_data(task)
+                        if data.get('stage') in STAGES and not data.get('batch_owned'):
+                            data['parent_owned'] = True
+                            self.engine._save_task_data(task, data)
+                    root = self.store.get(root['id'], project_id=pid)
+                    self.engine._queue_manager_resume(root, message)
                 receipt = {'status': 'queued', 'task_id': ctx['task']['id']}
             else:
                 receipt = self._restart(pid, cid, ctx, action_id, values, message)
@@ -380,7 +395,13 @@ class ActionService:
                     'new_source_message_id': message['id'], 'new_queue_id': clarified['id']}, conversation=cid, task=task['id'], source=message['id'])
                 self.engine._transition(task, 'succeeded', source=message['id'])
             else:
+                parent = self.store.get(task['parent_task_id'], project_id=pid) if task['parent_task_id'] else None
+                if action_id != 'confirm' and parent and self.engine._task_data(parent).get('manager_controlled'):
+                    data['parent_owned'] = True
+                    self.engine._save_task_data(task, data)
                 self.engine._transition(task, 'succeeded' if action_id == 'confirm' else 'queued', source=message['id'])
+                if parent and self.engine._task_data(parent).get('manager_controlled'):
+                    self.engine._queue_manager_resume(parent, message)
             if data.get('batch_owned') and task['parent_task_id']:
                 parent = self.store.get(task['parent_task_id'], project_id=pid)
                 pdata = self.engine._task_data(parent)
@@ -390,7 +411,7 @@ class ActionService:
                     self.engine._transition(parent, 'queued', source=message['id'])
         return {'status': 'waiting_user' if remaining else 'confirmed' if action_id == 'confirm' else 'queued', 'task_id': task['id']}
 
-    def _request_changes(self, pid, cid, task, item, text, message):
+    def _request_changes(self, pid, cid, task, item, text, message, *, schedule_manager_resume=True):
         data = self.engine._task_data(task)
         if data.get('chapter_plan') and data.get('is_workflow'):
             data['request'] = data.get('request', '') + '\n用户要求调整章节：' + text
@@ -402,6 +423,8 @@ class ActionService:
                     p.update(state='resolved', answer_message_ids=[message['id']])
             self.engine._save_task_data(task, data)
             self.engine._transition(task, 'queued', source=message['id'])
+            if schedule_manager_resume and data.get('manager_controlled'):
+                self.engine._queue_manager_resume(task, message)
             return {'status': 'queued', 'task_id': task['id']}
         if data.get('stage') not in STAGES or data.get('batch_owned'):
             raise WorkflowBlocked('action_unavailable', {'reason': '当前范围不能直接生成修订稿。'})
@@ -411,7 +434,13 @@ class ActionService:
         if not parent:
             replacement = update(self.store, replacement, budget_root_task_id=task['budget_root_task_id'])
         self._freeze(replacement, data['stage'])
+        if parent and self.engine._task_data(parent).get('manager_controlled'):
+            replacement_data = self.engine._task_data(replacement)
+            replacement_data['parent_owned'] = True
+            self.engine._save_task_data(replacement, replacement_data)
         self._supersede(pid, cid, [task], replacement, message)
+        if schedule_manager_resume and parent and self.engine._task_data(parent).get('manager_controlled'):
+            self.engine._queue_manager_resume(parent, message)
         return {'status': 'queued', 'task_id': replacement['id']}
 
     def _freeze(self, task, stage):
@@ -468,19 +497,25 @@ class ActionService:
         newroot = self.engine._new_task(pid, cid, message, 'generate', is_workflow=True,
             stages=list(range(1,12)) if fresh else rootdata.get('stages', [stage]),
             chapter_ids=[] if fresh else deepcopy(rootdata.get('chapter_ids', [])),
-            request=request, fresh_start=fresh, source_ref=ref(ctx['source']), replaces_task_id=root['id'])
+            request=request, fresh_start=fresh, source_ref=ref(ctx['source']), replaces_task_id=root['id'],
+            manager_controlled=bool(rootdata.get('manager_controlled')),
+            recovery_stage=stage if rootdata.get('manager_controlled') else None)
         limits = deepcopy(newroot['budget'])
         limits.update(max_cost={'amount': str(cost), 'currency': 'USD'} if cost is not None else None,
                       max_active_seconds=int(seconds), disabled_limits=[] if self.engine.cost_gates_enabled else ['cost'])
         newroot = update(self.store, newroot, budget=limits)
         self._supersede(pid, cid, ctx['tree'], newroot, message)
-        child = self.engine._dispatch(newroot, stage, None if fresh else olddata.get('chapter_id'), request=request)
-        self._freeze(child, stage)
+        if rootdata.get('manager_controlled'):
+            self.engine._queue_manager_resume(newroot, message)
+            child = None
+        else:
+            child = self.engine._dispatch(newroot, stage, None if fresh else olddata.get('chapter_id'), request=request)
+            self._freeze(child, stage)
         if self.engine.cost_gates_enabled and ctx['unknown_calls']:
             self.engine._event(pid, 'usage.unknown_accepted', {'model_call_refs': [ref(c) for c in ctx['unknown_calls']],
                 'old_budget_root_task_id': root['budget_root_task_id'], 'new_budget_root_task_id': newroot['id'],
                 'new_budget': limits, 'source_message_id': message['id']}, conversation=cid, task=newroot['id'], source=message['id'])
-        return {'status': 'queued', 'task_id': newroot['id'], 'stage_task_id': child['id']}
+        return {'status': 'queued', 'task_id': newroot['id'], 'stage_task_id': child['id'] if child else None}
 
     def _report_usage(self, pid, ctx, values, message):
         call = next((c for c in ctx['unknown_calls'] if c['id'] == values['model_call_id']), None)
