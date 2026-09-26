@@ -7,7 +7,7 @@ import re
 from psycopg.types.json import Jsonb
 from .storage import VersionConflict
 from .schemas import ROOT, SchemaCatalog, digest
-from .prompts import (defaults as prompt_defaults, stage_agent, instruction_parts,
+from .prompts import (defaults as prompt_defaults, stage_agent, step1_agent, instruction_parts,
                       legacy_prompt_overrides)
 
 # Capability data is explicit and editable only through registered model profiles.
@@ -34,6 +34,8 @@ MODELS = {
 ARTIFACT_PRODUCERS = {
     'source_text': 0,
     'source_views': 1,
+    'source_global_events': 1,
+    'source_character_events': 1,
     'source_global_analysis': 2,
     'source_character_analysis': 2,
     'adaptation_strategy': 3,
@@ -47,10 +49,10 @@ ARTIFACT_PRODUCERS = {
 }
 STAGE_INPUT_DEFAULTS = {
     'step1': ['source_text'],
-    'step2': ['source_views'],
+    'step2': ['source_global_events', 'source_character_events'],
     'step3': ['source_global_analysis', 'source_character_analysis'],
     'step4': ['source_global_analysis', 'source_character_analysis', 'adaptation_strategy'],
-    'step5': ['source_views', 'source_global_analysis', 'source_character_analysis'],
+    'step5': ['source_global_events', 'source_character_events', 'source_global_analysis', 'source_character_analysis'],
     'step6': ['game_event_view'],
     'step7': ['game_event_view'],
     'step8': ['game_event_view', 'ending_routes'],
@@ -109,6 +111,7 @@ def initial_values():
         'output':{'bindings':SchemaCatalog().registry['bindings'],
                   'structured':{'coordinator':True,
                       **{f'step{i}': i != 2 for i in range(1,12)},
+                      'step1.global':True,'step1.character':True,
                       'aux.summary':False,'aux.history_answer':True,'aux.subtask':True}},
         'model':{'temperature':None}, 'pricing':{'version':'multi-provider-2026-09-25-peak-usd',
             'source':'https://api-docs.deepseek.com/quick_start/pricing/',
@@ -170,13 +173,21 @@ def validate_values(values, schemas):
         raise ValueError('阶段 Agent 映射必须覆盖全部可执行阶段')
     if any(agent_key not in agents for agent_key in assignments.values()):
         raise ValueError('阶段 Agent 映射引用了不存在的 Agent')
+    step1_assignments=prompts.get('step1_view_agents')
+    if not isinstance(step1_assignments,dict) or set(step1_assignments)!={'global','character'}:
+        raise ValueError('Step1 必须分别配置全局事件与主要人物事件 Agent')
+    if any(not isinstance(agent_key,str) or agent_key not in agents
+           for agent_key in step1_assignments.values()):
+        raise ValueError('Step1 事件视图引用了不存在的 Agent')
     unsupported_output=set(values.get('output',{}))-{'bindings','structured'}
     if unsupported_output:
         raise ValueError('尚未注册这些输出消费端配置：'+', '.join(sorted(unsupported_output))+'；请使用现有Schema编辑入口')
     structured=values.get('output',{}).get('structured',{})
     if not isinstance(structured,dict) or any(type(value) is not bool for value in structured.values()):
         raise ValueError('output.structured 必须是阶段到布尔值的映射')
-    allowed=executable
+    if not {'step1.global','step1.character'} <= set(structured):
+        raise ValueError('Step1 两路必须分别配置 output_type 开关')
+    allowed=executable|{'step1.global','step1.character'}
     if set(structured)-set(allowed):
         raise ValueError('存在未注册的 output_type 阶段开关')
     if structured.get('step2') is True or structured.get('aux.summary') is True:
@@ -300,6 +311,8 @@ class ConfigService:
                 properties.pop('source_analysis_ref',None)
                 for field in ('source_global_analysis_ref','source_character_analysis_ref'):
                     properties[field]=deepcopy(current['properties'][field])
+                if name=='adaptation_plan':
+                    properties['strategy_ref']=deepcopy(current['properties']['strategy_ref'])
                 required=[]
                 for field in payload['required']:
                     if field=='source_analysis_ref':
@@ -408,6 +421,22 @@ class ConfigService:
     def _upgrade_context_overrides(values):
         """Map saved single-analysis material profiles to the active split artifacts."""
         upgraded=deepcopy(values)
+        prompts=upgraded.get('prompts',{})
+        if isinstance(prompts,dict) and 'step1_view_agents' not in prompts:
+            old_agent=prompts.get('stage_agents',{}).get('step1')
+            if old_agent and old_agent!='source_parser':
+                # An explicitly assigned legacy Step1 Agent stays selected
+                # for both views until the editor chooses two new roles.
+                prompts['step1_view_agents']={'global':old_agent,'character':old_agent}
+        stage_inputs=upgraded.get('context',{}).get('stage_inputs')
+        if isinstance(stage_inputs,dict):
+            for stage,selected in stage_inputs.items():
+                if isinstance(selected,list) and 'source_views' in selected:
+                    replacement=[]
+                    for kind in selected:
+                        replacement.extend(('source_global_events','source_character_events')
+                                           if kind=='source_views' else (kind,))
+                    stage_inputs[stage]=list(dict.fromkeys(replacement))
         bindings=upgraded.get('output',{}).get('bindings',{})
         if bindings.get('step6') in ('event_function_map', 'game_event_view'):
             bindings['step6']='game_event_narrative_patch'
@@ -437,14 +466,23 @@ class ConfigService:
                 continue
             expanded=[]
             existing={m.get('source',{}).get('schema_id') for m in materials if isinstance(m,dict)}
+            if 'source_views' in existing:
+                # Old profiles selected nested pointers from the combined
+                # source_views artifact. Use the registered split selectors
+                # for each view, retaining unrelated user-selected materials.
+                for canonical_material in current['materials']:
+                    kind=canonical_material.get('source',{}).get('schema_id')
+                    if kind in ('source_global_events','source_character_events') and kind not in existing:
+                        expanded.append(deepcopy(canonical_material))
             for material in materials:
+                if material.get('source',{}).get('builtin')=='runtime.default_strategy':
+                    continue
+                if material.get('source',{}).get('schema_id')=='source_views':
+                    continue
                 if profile.get('stage')=='step5' and material.get('source',{}).get('schema_id')=='adaptation_plan':
                     continue
                 if profile.get('stage') in ('step7','step8') and material.get('source',{}).get('schema_id')=='event_function_map':
                     continue
-                if profile.get('stage')=='step5' and material.get('source',{}).get('schema_id')=='source_views' \
-                        and material.get('id')=='player_view':
-                    material['scope_filter']='all_pinned'
                 if material.get('source',{}).get('schema_id')=='source_analysis':
                     for kind,identity in (('source_global_analysis','global_event_analysis'),
                                           ('source_character_analysis','character_event_analysis')):
@@ -628,7 +666,7 @@ class ConfigService:
                 value=legacy_prompt_overrides(self._upgrade_context_overrides(row['values']))
                 value.pop('schemas',None)
                 selector=merge(selector,value)
-        selected_agent=agent_key or stage_agent(stage,selector)
+        selected_agent=agent_key or (step1_agent('global',selector) if stage=='step1' else stage_agent(stage,selector))
         if selected_agent not in selector.get('prompts',{}).get('agents',{}):
             raise ValueError('选择的 Agent 不存在')
         for chosen in (project_row,latest('agent',selected_agent),stage_row,latest('auxiliary',stage)):
@@ -649,14 +687,18 @@ class ConfigService:
         # switches so every new Run receives the registered tools.
         data['tools']['enabled']=list(READ_TOOL_NAMES)
         data['tools']['ask_user_enabled']=True
+        if stage=='step1':
+            # Each branch snapshot must resolve its own Agent profile and
+            # instructions while preserving the two configured assignments.
+            data['prompts']['stage_agents']['step1']=selected_agent
         data['schemas']=schemas
         return data,list(dict.fromkeys(ids))
 
-    def resolve(self, project_id, stage='coordinator'):
+    def resolve(self, project_id, stage='coordinator', agent_key=None):
         from .records import new_record
         with self.store.transaction():
             self.store.advisory_lock('config:publish:'+project_id)
-            values,ids=self.values(project_id,stage); validate_values(values,values['schemas'])
+            values,ids=self.values(project_id,stage,agent_key=agent_key); validate_values(values,values['schemas'])
             if not stage.startswith('aux.'):
                 values['auxiliary_configs']={}
                 for auxiliary in ('aux.summary','aux.subtask'):
@@ -677,7 +719,7 @@ class ConfigService:
         registry=deepcopy(self.catalog.registry); registry['models']=MODELS
         registry['agents']={key:{'name':values['prompts']['agent_names'][key]}
                             for key in values['prompts']['agents']}
-        selected=agent_key or stage_agent(stage,values)
+        selected=agent_key or (step1_agent('global',values) if stage=='step1' else stage_agent(stage,values))
         preview_values=deepcopy(values)
         preview_values['prompts']['stage_agents'][stage]=selected
         parts=instruction_parts(stage,preview_values)
@@ -694,7 +736,7 @@ class ConfigService:
     def validate_candidate(self, values, schemas, stage='coordinator'):
         """Validate an editor candidate without saving or publishing it."""
         allowed={'coordinator',*[f'step{i}' for i in range(1,12)],
-                 'aux.summary','aux.history_answer','aux.subtask'}
+                 'aux.summary','aux.history_answer','aux.subtask','step1.global','step1.character'}
         if stage not in allowed:
             raise ValueError('未知的 output_type 阶段')
         candidate=deepcopy(values)
@@ -736,8 +778,12 @@ class ConfigService:
                     or row.get('owner_account_id')!=account_id): raise ValueError('配置草稿不存在')
             for stage in ['coordinator',*[f'step{i}' for i in range(1,12)],'aux.summary','aux.history_answer','aux.subtask']:
                 data,_=self.values_for_account(account_id,stage,row); available=validate_values(data,data['schemas'])
-                if stage=='step1' and data['context']['step1_source']['window_tokens'] >= available:
-                    raise ValueError('滑动窗口大小须小于 Step1 实际输入预算，为 instructions 和输出合同留空间')
+                if stage=='step1':
+                    for view in ('global','character'):
+                        branch,_=self.values_for_account(account_id,stage,row,agent_key=step1_agent(view,data))
+                        branch_available=validate_values(branch,branch['schemas'])
+                        if branch['context']['step1_source']['window_tokens'] >= branch_available:
+                            raise ValueError('滑动窗口大小须小于两个 Step1 Agent 各自的输入预算')
             for old in self._physical(account_id,'published'):
                 if old['scope_key']==row['scope_key']:
                     old['state']='retired'; self.store.update(old,old['row_version'])

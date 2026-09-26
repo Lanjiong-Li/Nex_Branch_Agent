@@ -13,7 +13,8 @@ JSON 文件是 `output_type` 的定义源。[SchemaCatalog／JSONOutput](../../.
 | 使用位置 | Schema | 版本 |
 | --- | --- | --- |
 | 协调／历史回答 | [coordinator_response](coordinator_response.schema.json) | 1.1.0 |
-| Step1 | [source_views](source_views.schema.json) | 1.3.0 |
+| Step1 · 全局事件 Agent | [source_global_events](source_global_events.schema.json) | 1.0.0 |
+| Step1 · 主要人物事件 Agent | [source_character_events](source_character_events.schema.json) | 1.0.0 |
 | Step2 | 两份普通文本分析：`source_global_analysis`、`source_character_analysis`（均不绑定 `output_type`） | — |
 | Step3 | [adaptation_strategy](adaptation_strategy.schema.json) | 2.1.0 |
 | Step4 | [adaptation_plan](adaptation_plan.schema.json) | 2.1.0 |
@@ -27,11 +28,11 @@ JSON 文件是 `output_type` 的定义源。[SchemaCatalog／JSONOutput](../../.
 | 局部辅助任务 | [subtask_result](subtask_result.schema.json) | 1.0.0 |
 | 整剧输出／最终产物 | [nexo_graph](nexo_graph.schema.json) | 2.0.0 |
 
-共 13 个活动 Schema。Step2 的全局事件分析、主要人物事件分析与工作摘要均为普通文本产物，不注册为 Agent `output_type`；Step6 的模型输出仅是叙事功能补丁，Harness 将其合并到原有 `game_event_view`，保存新版本并更新方案的 `game_events` 引用。Step7 根据这个固定版本的事件视图生成独立 `ending_routes`；来源记录与版本由 Harness 保存，确认后更新方案的 `ending_routes` 引用。旧 `event_function_map` 仅供历史产物解读。旧 Nexo 编辑包快照留在 v1，不在活动注册表中。
+共 15 个注册 Schema，其中旧 `source_views` 仅供历史配置和产物读取；新 Step1 分别保存两份结构化产物。Step2 的全局事件分析、主要人物事件分析与工作摘要均为普通文本产物，不注册为 Agent `output_type`；Step6 的模型输出仅是叙事功能补丁，Harness 将其合并到原有 `game_event_view`，保存新版本并更新方案的 `game_events` 引用。Step7 根据这个固定版本的事件视图生成独立 `ending_routes`；来源记录与版本由 Harness 保存，确认后更新方案的 `ending_routes` 引用。旧 `event_function_map` 仅供历史产物解读。旧 Nexo 编辑包快照留在 v1，不在活动注册表中。
 
 ## 返回结构与消费边界
 
-- 除 `nexo_graph` 外的 12 个活动结构化类型使用 `result_kind/payload/questions/evidence_refs/notes` 信封；Step2 一次返回带固定分隔标记的可读文本，Harness 拆分保存为两份独立产物。任何模型状态或文本均不是实际用户确认。
+- 除 `nexo_graph` 外的注册结构化类型使用 `result_kind/payload/questions/evidence_refs/notes` 信封；Step2 一次返回带固定分隔标记的可读文本，Harness 拆分保存为两份独立产物。任何模型状态或文本均不是实际用户确认。
 - `nexo_graph` **不使用信封**：`id/name/description/prompt/revision/updatedAt/chapters/chapterEdges/variables/scenes` 就是完整根结构。来源、运行、Schema、确认和产物版本存在 Harness 外壳。整剧模式只有在所需材料与身份目录完整后启用，缺项经前置阶段／协调处理，不在 Project 中塞入问题或伪造字段值。
 - 字段是编辑器的 camelCase，节点为 `story`；`body` 保存完整文字，互动以 `scriptInline.afterLine/order` 定位；`Variable.value` 为类型对应的字符串。上游原作 UTF-16 锚点与语义类型初值仍保持其本来定义。
 - 本 profile 保留 TypeScript 必需字段，并收紧适用类型。选入可选字段显式必填但使用原字段类型；没有采用“可选即 null”。可选制作/复制/版本缓存字段省略，已存工程中的对应原值必须在消费合并时保留。Project JSON 不是现有 API 可直接接收的请求体。

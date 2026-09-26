@@ -162,7 +162,7 @@ def test_missing_required_material_cannot_be_silently_skipped(context_case):
     store, pid, _, _, _, execution = context_case
     task, run, session, config = execution("step2", [])
     prepared = prepare_runtime_materials("step2", task, run, session, config, [], store)
-    with pytest.raises(MaterialError, match="source_views"):
+    with pytest.raises(MaterialError, match="source_global_events"):
         build_materials("step2", prepared, config, store, pid)
 
 
@@ -250,18 +250,23 @@ def test_historical_provenance_does_not_reintroduce_a_pinned_artifacts_old_body(
     content={'result_kind':'ready','payload':{'source_ref':ref(original),'global_events':[
         {'event_id':'one','title':'相遇','summary':'Historical wording','narrative_order':0,
          'story_time':None,'character_ids':[],'source_anchors':[anchor]}],
-        'character_views':[],'covered_source_anchors':[anchor],'remaining_source_anchors':[]},
+        'covered_source_anchors':[anchor],'remaining_source_anchors':[]},
+        'questions':[],'evidence_refs':[ref(original)],'notes':[]}
+    character={'result_kind':'ready','payload':{'source_ref':ref(original),'character_views':[],
+        'covered_source_anchors':[anchor],'remaining_source_anchors':[]},
         'questions':[],'evidence_refs':[ref(original)],'notes':[]}
     with store.transaction():
-        old=workflow.save(pid,'source_views',content,stage=1,origin='program',inputs=[ref(original)],effective=True)
-        other_artifact=store.put(new_record('artifact',pid,artifact_kind='source_views'))
-        other=workflow.save(pid,'source_views',content,stage=1,origin='program',inputs=[ref(original)],
+        old=workflow.save(pid,'source_global_events',content,stage=1,origin='program',inputs=[ref(original)],effective=True)
+        other_artifact=store.put(new_record('artifact',pid,artifact_kind='source_global_events'))
+        other=workflow.save(pid,'source_global_events',content,stage=1,origin='program',inputs=[ref(original)],
                             artifact_id=other_artifact['id'],effective=True)
         revised=deepcopy(content);revised['payload']['global_events'][0]['summary']='Current wording'
         revised['evidence_refs'].extend([ref(other),ref(old)])
-        current=workflow.save(pid,'source_views',revised,stage=1,origin='program',inputs=[ref(original)],
+        current=workflow.save(pid,'source_global_events',revised,stage=1,origin='program',inputs=[ref(original)],
                               artifact_id=old['artifact_id'],effective=True)
-    materials=[{'ref':ref(current),'required':True}]
+        character_version=workflow.save(pid,'source_character_events',character,stage=1,
+            origin='program',inputs=[ref(original)],effective=True)
+    materials=[{'ref':ref(current),'required':True},{'ref':ref(character_version),'required':True}]
     task,run,session,config=execution('step2',materials)
     prepared=prepare_runtime_materials('step2',task,run,session,config,materials,store)
     packed,_,audit=build_materials('step2',prepared,config,store,pid)
@@ -477,14 +482,19 @@ def test_aggregation_waits_for_full_ledger_then_preserves_original_refs(context_
     anchor={'source_ref':ref(original),'start_utf16':0,'end_utf16':len(source.encode('utf-16-le'))//2,'exact_quote':source,'prefix':None,'suffix':None}
     content={'result_kind':'ready','payload':{'source_ref':ref(original),'global_events':[
         {'event_id':'one','title':'相遇','summary':source,'narrative_order':0,'story_time':None,'character_ids':[],'source_anchors':[anchor]}],
-        'character_views':[],'covered_source_anchors':[anchor],'remaining_source_anchors':[]},'questions':[],'evidence_refs':[ref(original)],'notes':[]}
+        'covered_source_anchors':[anchor],'remaining_source_anchors':[]},'questions':[],'evidence_refs':[ref(original)],'notes':[]}
+    character={'result_kind':'ready','payload':{'source_ref':ref(original),'character_views':[],
+        'covered_source_anchors':[anchor],'remaining_source_anchors':[]},
+        'questions':[],'evidence_refs':[ref(original)],'notes':[]}
     with store.transaction():
-        old_views=workflow.save(pid,'source_views',content,stage=1,origin='program',inputs=[ref(original)],effective=True)
+        old_views=workflow.save(pid,'source_global_events',content,stage=1,origin='program',inputs=[ref(original)],effective=True)
         content['evidence_refs'].append(ref(old_views))
-        views=workflow.save(pid,'source_views',content,stage=1,origin='program',inputs=[ref(original)],effective=True)
-    materials=[{'ref':ref(views),'required':True}]
+        views=workflow.save(pid,'source_global_events',content,stage=1,origin='program',inputs=[ref(original)],effective=True)
+        character_views=workflow.save(pid,'source_character_events',character,stage=1,origin='program',inputs=[ref(original)],effective=True)
+    materials=[{'ref':ref(views),'required':True},{'ref':ref(character_views),'required':True}]
     task,run,session,config=execution('step2',materials)
-    inputs=[{'source_ref':ref(views),'content':content}]
+    inputs=[{'source_ref':ref(views),'content':content},
+            {'source_ref':ref(character_views),'content':character}]
     plan=plan_batches('step2',task['id'],run['config_version_id'],inputs,config)
     manifest=persist_manifest(store,task,run,plan,inputs,config)
     with pytest.raises(MaterialError,match='All owned'):
@@ -493,9 +503,11 @@ def test_aggregation_waits_for_full_ledger_then_preserves_original_refs(context_
         intent='generate',scope=task['scope'],parent_task_id=task['id'],budget_root_task_id=task['budget_root_task_id']))
     child_run=store.put(new_record('run',pid,task_id=child['id'],session_id=session['id'],agent_key='test',config_version_id=run['config_version_id']))
     child_output={'result_kind':'ready','payload':{'task':'测试批次','findings':[], 'recommendations':[],
-        'limitations':[],'artifact_refs':[ref(views)]},'questions':[],'evidence_refs':[ref(views)],'notes':[]}
+        'limitations':[],'artifact_refs':[ref(views),ref(character_views)]},
+        'questions':[],'evidence_refs':[ref(views),ref(character_views)],'notes':[]}
     with store.transaction():
-        result=workflow.save(pid,'subtask_result',child_output,run=child_run,inputs=[ref(views)],effective=True)
+        result=workflow.save(pid,'subtask_result',child_output,run=child_run,
+            inputs=[ref(views),ref(character_views)],effective=True)
     for batch in plan['batches']:
         complete_batch(store,pid,ref(manifest),batch['batch_id'],child['id'],[ref(result)],batch['owned_unit_ids'])
     aggregate=aggregation_materials(store,task,run,config,materials,ref(manifest))
@@ -506,7 +518,7 @@ def test_aggregation_waits_for_full_ledger_then_preserves_original_refs(context_
     assert not any(p['source_ref']==ref(old_views) for p in packed)
     assert any(s['source_ref']==ref(old_views) and 'historical provenance' in s['reason'] for s in selections)
     assert not any(p['source_kind']=='source_text' for p in packed)
-    assert any(s['source_ref']==ref(views) and s['inclusion']=='included' and 'source_views_index' in s['reason'] for s in selections)
+    assert any(s['source_ref']==ref(views) and s['inclusion']=='included' and 'source_global_events_index' in s['reason'] for s in selections)
 
 
 def test_headroom_reduces_main_batch_units():

@@ -68,7 +68,7 @@
 
 工作摘要作为 `artifact_kind=work_summary` 的纯文本 ArtifactVersion 保存，不绑定 Agent `output_type`；覆盖消息与来源由 `source_refs` 和 Session 记录维护。原作保存为 `artifact_kind=source_text`，正文版本中的 Blob 为权威原文。各阶段产物使用其 `schema_id` 作为 `artifact_kind`。
 
-Step1 不生成 `batch_manifest`；根据阈值在全文和滑动窗口之间选择。每次模型调用记录固定原作版本、本次实际原文范围、输入输出与 token 计量。窗口进度按全局事件和主要人物事件分别保存，双视图覆盖全篇后才保存最终 `source_views`。超预算或没有完整事件时不推进游标，详见[上下文执行方案](../context/上下文执行方案.md)。
+Step1 不生成 `batch_manifest`；根据阈值在全文和滑动窗口之间选择。全局事件 Agent 与主要人物事件 Agent 并行读取同一固定原作版本，各有独立 Run、Session、窗口游标与输入输出记录。每条视图覆盖全篇后分别保存为 `source_global_events` 和 `source_character_events`，不合并成一份 `source_views`。下游阶段要求两份有效产物及一致的原作来源；一条视图失败不抹去另一条已验证的进度。超预算或无法确认安全区间时不推进对应游标，详见[上下文执行方案](../context/上下文执行方案.md)。
 
 其他阶段的分批计划使用 `artifact_kind=batch_manifest`、`output_schema=null`，内容按[上下文执行方案](../context/上下文执行方案.md)的 `context.batch_manifest.v1` 内部处理器校验；它是程序生成的版本化计划，不是新增模型输出类型。覆盖进度由批次子 Task 和 `context.batch_completed` 事件重建。身份索引、版本比较、依赖评估与确认映射的事件载荷及跨记录约束见[版本与确认映射](../context/版本与确认映射.md)，不增加核心记录类型。
 

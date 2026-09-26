@@ -34,17 +34,27 @@ def _anchor(source_ref, start, end):
 
 
 def validate_window(output, source, source_ref, pass_name, start, end, empty_boundaries=()):
-    """Only a complete event boundary may advance a pass's cursor."""
+    """Validate one view's independently committed prefix of a source window.
+
+    A character pass may explicitly attest that a covered prefix has no
+    completed main-character event. Its cursor does not depend on the global
+    pass's event boundaries. ``empty_boundaries`` is retained for callers of
+    the earlier interface, but is deliberately ignored.
+    """
+    if pass_name not in ("global", "character"):
+        raise WorkflowBlocked("source_window_wrong_view")
+    if not 0 <= start < end <= utf16_length(source):
+        raise WorkflowBlocked("source_window_coverage_invalid", {"start_utf16": start, "window_end_utf16": end})
     if output.get("result_kind") != "ready" or output.get("payload") is None or output.get("questions"):
         raise WorkflowBlocked("source_window_incomplete")
     value = locate_source_anchors(output, source, source_ref, full_coverage=False)
     payload = value["payload"]
     if pass_name == "global":
-        if payload["character_views"]:
+        if payload.get("character_views"):
             raise WorkflowBlocked("source_window_wrong_view")
         events = payload["global_events"]
     else:
-        if payload["global_events"]:
+        if payload.get("global_events"):
             raise WorkflowBlocked("source_window_wrong_view")
         events = [event for view in payload["character_views"] for event in view["events"]]
     covered = payload["covered_source_anchors"]
@@ -53,7 +63,13 @@ def validate_window(output, source, source_ref, pass_name, start, end, empty_bou
     commit = covered[0]["end_utf16"]
     if not start < commit <= end:
         raise WorkflowBlocked("source_window_coverage_invalid", {"window_end_utf16": end})
-    if not events and not (pass_name == "character" and commit in empty_boundaries):
+    remaining = payload["remaining_source_anchors"]
+    expected_remaining = [] if commit == end else [(commit, end)]
+    actual_remaining = [(anchor["start_utf16"], anchor["end_utf16"]) for anchor in remaining]
+    if actual_remaining != expected_remaining:
+        raise WorkflowBlocked("source_window_coverage_invalid",
+                              {"view": pass_name, "commit_utf16": commit, "window_end_utf16": end})
+    if not events and (pass_name != "character" or payload["character_views"]):
         raise WorkflowBlocked("source_window_no_complete_event",
                               {"view": pass_name, "start_utf16": start, "end_utf16": end})
     terminal = 0
@@ -72,48 +88,70 @@ def validate_window(output, source, source_ref, pass_name, start, end, empty_bou
     return value, commit
 
 
-def combine_windows(windows, source_ref, source_length):
-    """Merge validated windows; each pass must independently cover the source."""
+def _blank_result(source_ref, source_length, pass_name):
     result = {"result_kind": "ready", "payload": {"source_ref": deepcopy(source_ref),
-              "global_events": [], "character_views": [],
               "covered_source_anchors": [_anchor(source_ref, 0, source_length)],
               "remaining_source_anchors": []}, "questions": [],
               "evidence_refs": [deepcopy(source_ref)], "notes": []}
-    for pass_name in ("global", "character"):
-        cursor = 0
-        for item in (item for item in windows if item["pass"] == pass_name):
-            if item["start_utf16"] != cursor:
-                raise WorkflowBlocked("source_coverage_incomplete", {"view": pass_name})
-            cursor = item["commit_utf16"]
-            payload = item["output"]["payload"]
-            if pass_name == "global":
-                result["payload"]["global_events"].extend(deepcopy(payload["global_events"]))
-            else:
-                for view in payload["character_views"]:
-                    existing = next((candidate for candidate in result["payload"]["character_views"]
-                                     if candidate["character_id"] == view["character_id"] or
-                                     candidate["name"] == view["name"]), None)
-                    if existing is None:
-                        result["payload"]["character_views"].append(deepcopy(view))
-                    elif existing["name"] == view["name"]:
-                        existing["events"].extend(deepcopy(view["events"]))
-                        existing["aliases"] = list(dict.fromkeys(existing["aliases"] + view["aliases"]))
-                    else:
-                        raise WorkflowBlocked("source_character_id_conflict", {"character_id": view["character_id"]})
-        if cursor != source_length:
+    result["payload"]["global_events" if pass_name == "global" else "character_views"] = []
+    return result
+
+
+def combine_view_windows(windows, pass_name, source_ref, source_length):
+    """Assemble one independently complete view for its own saved artifact."""
+    if pass_name not in ("global", "character"):
+        raise WorkflowBlocked("source_window_wrong_view")
+    result = _blank_result(source_ref, source_length, pass_name)
+    cursor = 0
+    for item in (item for item in windows if item["pass"] == pass_name):
+        if item["start_utf16"] != cursor or not cursor < item["commit_utf16"] <= source_length:
             raise WorkflowBlocked("source_coverage_incomplete", {"view": pass_name})
-    character_ids = [view["character_id"] for view in result["payload"]["character_views"]]
+        payload = item["output"]["payload"]
+        covered = payload["covered_source_anchors"]
+        if (len(covered) != 1 or covered[0]["start_utf16"] != cursor or
+                covered[0]["end_utf16"] != item["commit_utf16"]):
+            raise WorkflowBlocked("source_coverage_incomplete", {"view": pass_name})
+        cursor = item["commit_utf16"]
+        if pass_name == "global":
+            if payload.get("character_views"):
+                raise WorkflowBlocked("source_window_wrong_view")
+            result["payload"]["global_events"].extend(deepcopy(payload["global_events"]))
+        else:
+            if payload.get("global_events"):
+                raise WorkflowBlocked("source_window_wrong_view")
+            for view in payload["character_views"]:
+                existing = next((candidate for candidate in result["payload"]["character_views"]
+                                 if candidate["character_id"] == view["character_id"] or
+                                 candidate["name"] == view["name"]), None)
+                if existing is None:
+                    result["payload"]["character_views"].append(deepcopy(view))
+                elif existing["name"] == view["name"] and existing["character_id"] == view["character_id"]:
+                    existing["events"].extend(deepcopy(view["events"]))
+                    existing["aliases"] = list(dict.fromkeys(existing["aliases"] + view["aliases"]))
+                else:
+                    raise WorkflowBlocked("source_character_id_conflict", {"character_id": view["character_id"]})
+    if cursor != source_length:
+        raise WorkflowBlocked("source_coverage_incomplete", {"view": pass_name})
+    character_ids = [view["character_id"] for view in result["payload"].get("character_views", [])]
     if len(character_ids) != len(set(character_ids)):
         raise WorkflowBlocked("source_window_duplicate_id")
     # Local window numbering is not a global identity. Assign stable sequence
-    # numbers only after both independent coverage passes have completed.
-    for index, event in enumerate(result["payload"]["global_events"], 1):
+    # numbers only after this view has completely covered the source.
+    for index, event in enumerate(result["payload"].get("global_events", []), 1):
         event["event_id"] = f"GEV-{index:05d}"
         event["narrative_order"] = index
     index = 0
-    for view in result["payload"]["character_views"]:
+    for view in result["payload"].get("character_views", []):
         for event in view["events"]:
             index += 1
             event["character_event_id"] = f"CEV-{index:05d}"
             event["narrative_order"] = index
     return result
+
+
+def combine_windows(windows, source_ref, source_length):
+    """Compatibility merger for older single-artifact Step 1 runs."""
+    global_result = combine_view_windows(windows, "global", source_ref, source_length)
+    character_result = combine_view_windows(windows, "character", source_ref, source_length)
+    global_result["payload"]["character_views"] = character_result["payload"]["character_views"]
+    return global_result

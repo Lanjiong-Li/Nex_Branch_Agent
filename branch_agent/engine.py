@@ -390,7 +390,10 @@ class Engine:
                     saved_child = self._saved_output(descendant, prior_run)
                     if child_data.get("resume_saved_result") and self._output_rejected(descendant, child_data["resume_saved_result"]["source_run_id"]):
                         child_data.pop("resume_saved_result")
-                    resumable_pause = descendant["state"] == "paused" and (descendant["pause_reason"] in ("cost_limit", "active_time_limit", "turn_limit", "child_blocked", "repair_exhausted") or (not self.cost_gates_enabled and descendant["pause_reason"] == 'usage_uncertain'))
+                    resumable_pause = descendant["state"] == "paused" and (
+                        descendant["pause_reason"] in ("cost_limit", "active_time_limit", "turn_limit", "child_blocked", "repair_exhausted")
+                        or (child_data.get("step1_view") and descendant["pause_reason"] not in ("operation_uncertain", "checkpoint_invalid", "dependency_changed"))
+                        or (not self.cost_gates_enabled and descendant["pause_reason"] == 'usage_uncertain'))
                     # A parent-owned batch may have a fully persisted model result
                     # awaiting corrected evidence validation. Explicit continuation
                     # can recheck it without dispatching another model request.
@@ -406,6 +409,13 @@ class Engine:
                     child_data["manual_continuation"] = True
                     if descendant["pause_reason"] == "repair_exhausted":
                         child_data["additional_repair_rounds"] = child_data.get("additional_repair_rounds", 0) + 2
+                    if child_data.get("step1_view") and child_data.get("source_window_state"):
+                        # Resuming a source-view branch may adopt the latest
+                        # model and window settings while retaining its
+                        # already committed UTF-16 prefix.
+                        child_data.pop("config_version_id", None)
+                        child_data.pop("resume_saved_result", None)
+                        saved_child = None
                     if (saved_child and not child_data.get("coordinator")
                             and (child_data.get("stage") != 2 or isinstance(saved_child, str))):
                         child_data["resume_saved_result"] = {"source_run_id": prior_run, "output": saved_child}
@@ -729,14 +739,14 @@ class Engine:
                                      for t in children):
                 self._dispatch(root, stage)
                 return
-            if data.get('fresh_start') and not any(t['scope']['stage'] == stage and t['state'] == 'succeeded' for t in children):
+            if (data.get('fresh_start') or stage in (3, 4)) and not any(
+                    t['scope']['stage'] == stage and t['state'] == 'succeeded' for t in children):
                 self._dispatch(root, stage)
                 return
             try:
                 for output_kind in STAGE_OUTPUTS.get(stage, (STAGES[stage],)):
                     self.workflow.resolve(root["project_id"], output_kind)
             except WorkflowBlocked:
-                self._dispatch(root, stage)
                 self._dispatch(root, stage)
                 return
         chapter_ids = data.get("chapter_ids", [])
@@ -920,11 +930,35 @@ class Engine:
     def _budget_check(self, task):
         root = self.store.get(task["budget_root_task_id"], project_id=task["project_id"])
         members = all_records(self.store, task["project_id"], "task", budget_root_task_id=root["id"])
-        calls = [c for c in all_records(self.store, task["project_id"], "model_call") if c["task_id"] in {t["id"] for t in members}]
+        members_by_id = {member["id"]: member for member in members}
+        calls = [c for c in all_records(self.store, task["project_id"], "model_call") if c["task_id"] in members_by_id]
         cost = Decimal("0")
         for call in calls:
             if call.get("state") in ("pending", "running", "unknown"):
-                raise WorkflowBlocked("operation_uncertain")
+                # The two Step 1 views intentionally run at the same time. A
+                # live sibling call is in flight, not an uncertain old call.
+                # Keep unknown calls and stale leases blocking recovery.
+                sibling = members_by_id[call["task_id"]]
+                data = self._task_data(task)
+                sibling_data = self._task_data(sibling)
+                parallel_step1 = (
+                    call["state"] in ("pending", "running")
+                    and data.get("step1_view") in ("global", "character")
+                    and sibling_data.get("step1_view") in ("global", "character")
+                    and sibling_data["step1_view"] != data["step1_view"]
+                    and sibling["parent_task_id"] == task["parent_task_id"]
+                )
+                if parallel_step1:
+                    sibling_run = self.store.get(call["run_id"], project_id=task["project_id"])
+                    parallel_step1 = bool(
+                        sibling_run and sibling_run["state"] == "running"
+                        and sibling_run["lease_owner"] == self.owner
+                        and sibling_run["lease_expires_at"]
+                        and sibling_run["lease_expires_at"] > self.store.now()
+                    )
+                if not parallel_step1:
+                    raise WorkflowBlocked("operation_uncertain")
+                continue
             measured = call.get("usage", {})
             amount = measured.get("reported_cost") or measured.get("estimated_cost")
             # A received incomplete/failed response can still consume tokens.
@@ -1014,7 +1048,8 @@ class Engine:
         return materials
 
     async def _invoke(self, stage, task, run, session, config, materials, message, token,
-                      *, extra_tools=None, instructions_override=None, step1_window=None):
+                      *, extra_tools=None, instructions_override=None, step1_window=None,
+                      step1_view=None):
         async def control():
             with self.store.transaction():
                 self.store.advisory_lock(f"{task['project_id']}:conversation:{task['conversation_id']}")
@@ -1034,6 +1069,8 @@ class Engine:
             kwargs["instructions_override"] = instructions_override
         if step1_window is not None:
             kwargs["step1_window"] = step1_window
+        if step1_view is not None:
+            kwargs["step1_view"] = step1_view
         model = asyncio.create_task(self.model_service.run(stage if isinstance(stage, str) else f"step{stage}", task, run, session, config, materials, message, control=control, **kwargs))
         self._calls[run["id"]] = model
         forced = asyncio.get_running_loop().create_future()
@@ -1096,15 +1133,14 @@ class Engine:
                         data["config_version_id"] = config_version["id"]
                         self._save_task_data(task, data)
                 source_config = config_version["values"]["context"]["step1_source"]
-                windowed = (data.get("source_window_state") or
+                windowed = (data.get("step1_mode") == "window" if data.get("step1_mode") else
                             tokens(source_text, config_version["values"]["model"]["name"]) > source_config["trigger_tokens"])
             except Exception as error:
                 reason = getattr(error, "reason", None) or getattr(error, "code", None) or "configuration_error"
                 self._fail_execution(task, None, reason, str(error), getattr(error, "details", None))
                 return
-            if windowed:
-                await self._drive_step1_windows(task, token, source_version, source_text)
-                return
+            await self._drive_step1_views(task, token, source_version, source_text, windowed)
+            return
         if data.get("batch_manifest_ref") and not data.get("batch_coverage_ready"):
             await self._drive_batch(task, token)
             return
@@ -1199,134 +1235,9 @@ class Engine:
                            if reason == "source_index_migration_required" else str(error))
                 self._fail_execution(task, run, reason, message, getattr(error, "details", None))
 
-    async def _drive_step1_windows(self, task, token, source_version, source_text):
-        """Run global and character extraction in separate, resumable windows."""
-        from .context import utf16_length
-        from .prompts import instructions
-        from .source_windows import source_window, validate_window, combine_windows
-
-        project, cid = task["project_id"], task["conversation_id"]
-        source_ref = ref(source_version)
-        source_length = utf16_length(source_text)
-        run = None
-        try:
-            while True:
-                with self.store.transaction():
-                    self.store.advisory_lock(f"{project}:materials")
-                    self.store.advisory_lock(f"{project}:conversation:{cid}")
-                    task = self.store.get(task["id"], project_id=project)
-                    self._assert_authorized_source(task)
-                    self._budget_check(task)
-                    data = self._task_data(task)
-                    state = data.get("source_window_state")
-                    if state is None:
-                        state = {"source_ref": source_ref, "pass": "global", "global_cursor": 0,
-                                 "character_cursor": 0, "windows": []}
-                        data["source_window_state"] = state
-                        self._save_task_data(task, data)
-                    if state["source_ref"] != source_ref:
-                        raise WorkflowBlocked("dependency_changed", {"kind": "source_text"})
-                    view = state["pass"]
-                    cursor = state[f"{view}_cursor"]
-                    materials = self.workflow.materials(project, 1, None)
-                    resume = data.get("resume_saved_result")
-                    if resume and (not isinstance(resume.get("output"), dict) or
-                                   self._output_rejected(task, resume["source_run_id"])):
-                        data.pop("resume_saved_result", None)
-                        self._save_task_data(task, data)
-                        resume = None
-                    task, run, session, config = self._start_run(
-                        task, 1, materials, recovery=bool(resume), fresh_allowance=not resume,
-                        session_key_override=f"step1-window:{task['id']}:{view}:{cursor}")
-                    values = config
-                    if values.get("output", {}).get("structured", {}).get("step1", True) is False:
-                        raise WorkflowBlocked("source_window_output_type_required")
-                    limit = values["context"]["step1_source"]["window_tokens"]
-                    window = source_window(source_text, cursor, limit, values["model"]["name"])
-                    window["view"] = view
-                    known = []
-                    global_boundaries = []
-                    if view == "character":
-                        for item in state["windows"]:
-                            if item["pass"] == "global":
-                                saved = self._projection(project, "source_window_output", item["run_id"])["output"]
-                                for event in saved["payload"]["global_events"]:
-                                    if any(anchor["end_utf16"] > cursor and
-                                           anchor["start_utf16"] < window["end_utf16"]
-                                           for anchor in event["source_anchors"]):
-                                        known.extend(event["character_ids"])
-                                    global_boundaries.append(max(anchor["end_utf16"] for anchor in event["source_anchors"]))
-                    data = self._task_data(task)
-                    data["model_dispatched"] = not bool(resume)
-                    self._save_task_data(task, data)
-                prompt = (instructions("step1", values) + "\n\n" + harness_prompts(values)['window'] +
-                    f"\n本窗口绝对 UTF-16 范围 [{cursor},{window['end_utf16']})；"
-                    f"本次只生成{('全局事件' if view == 'global' else '主要人物事件')}视图，另一视图必须为空数组。")
-                if known:
-                    prompt += "\n已识别人物 ID（请沿用，不要另起同名 ID）：" + "、".join(dict.fromkeys(known))
-                available_boundaries = sorted(set(boundary for boundary in global_boundaries
-                                                  if cursor < boundary <= window["end_utf16"]))
-                if view == "character" and available_boundaries:
-                    prompt += ("\n若当前范围确实没有主要人物事件，可以返回空 character_views，但覆盖终点必须选一个"
-                               "已完成全局事件边界；这只用于证明扫描范围，不把全局事件当作人物事件。"
-                               "可用终点：" + "、".join(map(str, available_boundaries)))
-                result = resume["output"] if resume else await self._invoke(
-                    1, task, run, session, config, materials,
-                    data.get("request", "切分原作") + f"\n当前视图：{view}", token,
-                    instructions_override=prompt, step1_window=window)
-                with self.store.transaction():
-                    self.store.advisory_lock(f"{project}:conversation:{cid}")
-                    self._assert_run(task, run, token)
-                    self._save_projection(project, "run_result", run["id"],
-                                          {"output": result, **({"source_run_id": resume["source_run_id"]} if resume else {})})
-                    self._checkpoint(task, run, "process_model_result")
-                await self._consume_steers(task, run, token)
-                with self.store.transaction():
-                    self.store.advisory_lock(f"{project}:materials")
-                    self.store.advisory_lock(f"{project}:conversation:{cid}")
-                    task = self._assert_run(task, run, token)
-                    bound = self._bind_program_provenance(1, run, result, materials)
-                    validated, commit = validate_window(bound, source_text, source_ref, view,
-                                                         cursor, window["end_utf16"], available_boundaries)
-                    self._save_projection(project, "source_window_output", run["id"],
-                                          {"output": validated, "source_ref": source_ref})
-                    data = self._task_data(task)
-                    data.pop("resume_saved_result", None)
-                    state = data["source_window_state"]
-                    state["windows"].append({"pass": view, "start_utf16": cursor,
-                                             "commit_utf16": commit, "run_id": run["id"]})
-                    state[f"{view}_cursor"] = commit
-                    if view == "global" and commit == source_length:
-                        state["pass"] = "character"
-                    self._save_task_data(task, data)
-                    self._event(project, "source.window_completed",
-                                {"view": view, "start_utf16": cursor, "end_utf16": window["end_utf16"],
-                                 "commit_utf16": commit, "source_ref": source_ref},
-                                conversation=cid, task=task["id"], run=run["id"])
-                    if state["character_cursor"] == source_length:
-                        windows = [{**item, "output": self._projection(
-                            project, "source_window_output", item["run_id"])["output"]}
-                                   for item in state["windows"]]
-                        combined = combine_windows(windows, source_ref, source_length)
-                        self._apply_stage(task, run, combined, materials)
-                        return
-                    self._checkpoint(task, run, "advance_work")
-                    self._close_run(task, run, "succeeded")
-                    run = None
-        except asyncio.CancelledError:
-            if self._closing:
-                return
-            self._fail_execution(task, run, "user_stop")
-        except Exception as error:
-            reason = getattr(error, "reason", None) or getattr(error, "code", None) or "configuration_error"
-            explanation = {
-                "source_window_no_complete_event": "当前窗口没有可确认的完整事件；游标未推进。请调大窗口 token 数后重新运行",
-                "source_window_budget": "窗口 token 数太小，无法读取原文；游标未推进",
-                "input_budget_exceeded": "当前窗口加上 instructions 和输出合同后超过模型输入预算；游标未推进。请调小窗口或调整模型配置",
-                "output_limit_exceeded": "窗口输出达到模型上限，未记为完成；请调整输出上限或缩小窗口",
-                "source_window_output_type_required": "滑动窗口模式需要启用 Step1 output_type，才能验证事件边界和全篇覆盖",
-            }.get(reason, str(error))
-            self._fail_execution(task, run, reason, explanation, getattr(error, "details", None))
+    async def _drive_step1_views(self, task, token, source_version, source_text, windowed):
+        from .step1_execution import drive_step1_views
+        await drive_step1_views(self, task, token, source_version, source_text, windowed)
 
     def _auxiliary_config(self, project, parent_config_id, stage):
         fixed = self.store.get(parent_config_id, project_id=project)
@@ -1551,7 +1462,7 @@ class Engine:
                     data = self._task_data(current)
                     saved_ready = ((data.get("stage") == 2 and isinstance(saved, str) and bool(saved.strip()))
                         or (data.get("stage") != 2 and isinstance(saved, dict) and saved.get("result_kind") == "ready"))
-                    if saved_ready and not data.get("source_window_state") and data.get("stage") in STAGES and data.get("stage") != 6 and not data.get("batch_owned") \
+                    if saved_ready and not data.get("source_window_state") and not data.get("step1_view") and data.get("stage") in STAGES and data.get("stage") != 6 and not data.get("batch_owned") \
                             and not data.get("result_ref") and not data.get("result_refs"):
                         if data["stage"] == 2:
                             versions = {}
@@ -1682,7 +1593,7 @@ class Engine:
                 "source_character_analysis_ref": ("source_character_analysis",),
                 "character_ref": ("source_character_analysis",),
                 "decision_refs": ("runtime.applicable_controls",),
-                "default_strategy_ref": ("runtime.default_strategy",),
+                "default_strategy_ref": ("adaptation_strategy",),
             },
             "adaptation_plan": {
                 "source_global_analysis_ref": ("source_global_analysis",),
@@ -1693,7 +1604,7 @@ class Engine:
                 "source_refs": ("adaptation_strategy", "source_global_analysis", "source_character_analysis"),
             },
             "game_event_view": {
-                "character_refs": ("source_views",),
+                "character_refs": ("source_character_events",),
                 "source_ref": ("source_text",),
             },
             "player_profiles": {
@@ -1781,7 +1692,10 @@ class Engine:
         # of every referenced body.  Provenance still follows the parent's
         # immutable references, while those bodies remain outside model input.
         if stage == 5:
-            views = next(source for source in sources if source["kind"] == "source_views")
+            views = next(source for source in sources if source["kind"] == "source_global_events")
+            characters = next(source for source in sources if source["kind"] == "source_character_events")
+            if views["content"]["payload"]["source_ref"] != characters["content"]["payload"]["source_ref"]:
+                raise WorkflowBlocked("source_reference_mismatch", {"kind": "step1_views"})
             source_version = self.workflow.fixed_version(run["project_id"],
                 views["content"]["payload"]["source_ref"])
             sources.append({"kind": "source_text", "ref": ref(source_version),
@@ -1867,8 +1781,9 @@ class Engine:
         if stage == 3:
             payload["player_identity"]["character_ref"] = None
             payload["player_identity"]["decision_refs"] = []
-            if not any(source["kind"] == "runtime.default_strategy" for source in sources):
-                payload["strategy_basis"]["default_strategy_ref"] = None
+            baseline = next((source for source in materials if source.get("material_role") == "current_stage_baseline"
+                             and source.get("schema_id") == "adaptation_strategy"), None)
+            payload["strategy_basis"]["default_strategy_ref"] = deepcopy(baseline["ref"]) if baseline else None
         if stage == 4:
             payload["stage_artifact_refs"] = {
                 "game_events": None,
@@ -2123,7 +2038,7 @@ class Engine:
                 raise WorkflowBlocked("source_anchor_invalid", {"kind": "character_views.events"})
         if stage in (5, 9):
             if stage == 5:
-                views_material = next(m for m in materials if m["schema_id"] == "source_views")
+                views_material = next(m for m in materials if m["schema_id"] == "source_global_events")
                 views_version = views_material.get("record") or self.workflow.fixed_version(
                     task["project_id"], views_material["ref"])
                 source_version = self.workflow.original_for(task["project_id"], views_version)

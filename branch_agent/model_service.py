@@ -714,15 +714,16 @@ class ModelService:
         return self._provider_clients[provider]
 
     async def run(self,stage,task,run,session,config,materials,message,control=None,
-                  extra_tools=None,instructions_override=None,step1_window=None):
+                  extra_tools=None,instructions_override=None,step1_window=None,step1_view=None):
         client=self._client_for(config['model']['name'])
         original_materials=materials
         materials=prepare_runtime_materials(stage,task,run,session,config,materials,self.store,step1_window=step1_window)
         packed,source,selections=build_materials(stage,materials,config,self.store,task['project_id'])
+        output_key=f'step1.{step1_view}' if stage=='step1' and step1_view else stage
         structured=config.get('output',{}).get('structured',{}).get(
-            stage, stage not in ('aux.summary','step2'))
+            output_key, output_key not in ('aux.summary','step2'))
         plain_text=not structured
-        schema_id=None if plain_text else self.catalog.schema_for(stage,config)
+        schema_id=None if plain_text else self.catalog.schema_for(output_key,config)
         from .configuration import MODELS
         provider=MODELS[config['model']['name']].get('provider','openai')
         # DeepSeek's strict JSON Schema subset rejects the existing registered
@@ -736,7 +737,7 @@ class ModelService:
         tools=[] if stage=='aux.summary' else ReadTools(self.store,task['project_id'],config).functions()
         if extra_tools:
             tools.extend(extra_tools)
-        can_ask=stage not in ('step2','aux.summary','aux.subtask') and step1_window is None and config.get('tools',{}).get('ask_user_enabled',True)
+        can_ask=stage not in ('step2','aux.summary','aux.subtask') and step1_window is None and step1_view is None and config.get('tools',{}).get('ask_user_enabled',True)
         if can_ask:
             @function_tool
             async def ask_user(questions: list[UserQuestion]) -> str:

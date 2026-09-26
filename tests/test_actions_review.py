@@ -5,7 +5,7 @@ from copy import deepcopy
 import pytest
 
 from branch_agent.actions import ActionService
-from branch_agent.workflow import WorkflowBlocked, body, ref, update
+from branch_agent.workflow import WorkflowBlocked, ref, update
 from test_actions import card, failed_output, initial_task, pending_confirmation, pending_question, submit
 from test_runtime import runtime, source_response, step2_response
 
@@ -92,9 +92,12 @@ def test_review_question_required_and_select_options_enforced_in_backend(runtime
 
 def test_review_real_stage_needs_input_retains_options(runtime):
     engine, model, pid, cid = runtime
-    _, task = initial_task(runtime)
+    _, task = initial_task(runtime, stage=3)
+    with engine.store.transaction():
+        for kind in ("source_global_analysis", "source_character_analysis"):
+            engine.workflow.save(pid, kind, "已确认的原作分析", stage=2, effective=True)
     question = {"question_id": "choice-1", "prompt": "保留哪条路线？", "reason": "决定后续范围",
-                "target_field": "/payload/route", "suggested_answers": ["保留甲", "保留乙"], "blocking_scope": "step1"}
+                "target_field": "/payload/route", "suggested_answers": ["保留甲", "保留乙"], "blocking_scope": "step3"}
     model.responses = [{"result_kind": "needs_input", "payload": None, "questions": [question], "evidence_refs": [], "notes": []}]
     asyncio.run(engine.tick(pid, cid))
     item = engine._task_data(task)["pending_user_items"][0]
@@ -212,10 +215,11 @@ def test_review_changed_source_and_old_unknown_step2_restart_from_step1_with_new
     engine, model, pid, cid = runtime
     engine.import_source(pid, cid, "甲见乙。", "原作 v1")
     source_v1 = engine.workflow.resolve(pid, "source_text")
-    source_material = {"schema_id": "source_text", "content": body(engine.store, source_v1), "ref": ref(source_v1)}
+    from test_split_source_workflow import _output as split_source_output
     with engine.store.transaction():
-        views = engine.workflow.save(pid, "source_views", source_response(None, [source_material]),
-                                     stage=1, inputs=[ref(source_v1)], effective=True)
+        views = [engine.workflow.save(pid, kind, split_source_output(kind, ref(source_v1)),
+                                      stage=1, inputs=[ref(source_v1)], effective=True)
+                 for kind in ("source_global_events", "source_character_events")]
     task, run, call = failed_operation(engine, pid, cid)
     old_config = deepcopy(engine.store.get(run["config_version_id"], pid))
     with engine.store.transaction():
@@ -225,7 +229,7 @@ def test_review_changed_source_and_old_unknown_step2_restart_from_step1_with_new
     published = engine.config_service.publish(pid, draft["id"])
     engine.import_source(pid, cid, "甲与乙分别。", "原作 v2")
     source_v2 = engine.workflow.resolve(pid, "source_text")
-    assert engine.workflow.state(views)["dependency_status"] == "review_required"
+    assert all(engine.workflow.state(view)["dependency_status"] == "review_required" for view in views)
     service = ActionService(engine)
     shown = card(service, pid, cid, "task:" + task["id"])
     assert next(a for a in shown["actions"] if a["id"] == "rerun_published")["disabled_reason"]
@@ -243,19 +247,24 @@ def test_review_changed_source_and_old_unknown_step2_restart_from_step1_with_new
     assert published["id"] in snapshot["resolved_from_ids"]
     analysis = step2_response("故事前提\n甲乙分别。\n保留分别事件及其因果。",
                               "人物关系\n保留甲乙原有人物关系。")
-    model.responses = [source_response, analysis]
+    model.responses = [source_response, source_response, analysis]
     async def drive():
         for _ in range(3):
             await engine.tick(pid, cid)
     asyncio.run(drive())
-    assert model.calls == ["step1", "step2"]
+    assert model.calls == ["step1", "step1", "step2"]
     children = engine.store.list(pid, "task", filters={"parent_task_id": root["id"]})
     step2 = next(t for t in children if t["scope"]["stage"] == 2)
     assert step2["state"] == "waiting_user"
     step2_config = engine.store.get(engine._task_data(step2)["config_version_id"], pid)
     assert step2_config["values"]["model"]["max_output_tokens"] == 100000
-    first_run = engine.store.list(pid, "run", filters={"task_id": child["id"]})[0]
-    assert ref(source_v2) in first_run["input_refs"] and ref(source_v1) not in first_run["input_refs"]
+    view_children = engine.store.list(pid, "task", filters={"parent_task_id": child["id"]})
+    assert {engine._task_data(view)["step1_view"] for view in view_children} == {"global", "character"}
+    view_runs = [run for view in view_children
+                 for run in engine.store.list(pid, "run", filters={"task_id": view["id"]})]
+    assert len(view_runs) == 2
+    assert all(ref(source_v2) in run["input_refs"] and ref(source_v1) not in run["input_refs"]
+               for run in view_runs)
 
 
 @pytest.mark.parametrize("remote_unknown", [False, True])

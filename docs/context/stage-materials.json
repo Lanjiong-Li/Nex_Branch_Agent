@@ -85,13 +85,6 @@
       ],
       "source": "Step2–11 固定内部 batch_manifest 和当前批次检查点的投影；材料按区间、事件/章/节点按稳定条目引用。衔接资料从已保存批次结果展开，邻接不计完成覆盖。不是 Agent output_type 的新增字段，Step1 不创建或使用分批状态。"
     },
-    "runtime.default_strategy": {
-      "fields": [
-        "strategy_ref",
-        "text"
-      ],
-      "source": "生效 ConfigVersion 中 adaptation.default_strategy 的固定引用与原文，默认文本见 defaults.json；沉默不代替用户在 Step3 的必要选择。"
-    },
     "runtime.target_contract": {
       "fields": [
         "schema_ref",
@@ -277,8 +270,11 @@
     },
     {
       "stage": "step1",
-      "label": "原作双视图切片",
-      "agent": "source_parser",
+      "label": "原作双 Agent 事件切分",
+      "agents": {
+        "global": "source_global_parser",
+        "character": "source_character_parser"
+      },
       "include_common_materials": true,
       "materials": [
         {
@@ -317,7 +313,7 @@
         }
       ],
       "notes": [
-        "原作不超过触发阈值时一次基于全文执行双视图切分；超过阈值时全局事件和人物事件各自逐窗切分，完成事件边界后推进。目录索引仅辅助定位，不代替本次要求的正文范围；预算不足时暂停，不摘要、不截断。"
+        "原作不超过触发阈值时，两个 Agent 分别基于全文生成全局事件与主要人物事件；超过阈值时各自按完整事件边界独立推进滑动窗口。两份产物分别保存。目录索引仅辅助定位，不代替正文范围；预算不足时暂停，不摘要、不截断。"
       ]
     },
     {
@@ -327,15 +323,30 @@
       "include_common_materials": true,
       "materials": [
         {
-          "id": "source_views_index",
+          "id": "source_global_events_index",
           "source": {
-            "schema_id": "source_views"
+            "schema_id": "source_global_events"
           },
           "selectors": [
             "/payload/source_ref",
             "/payload/global_events/*/event_id",
             "/payload/global_events/*/title",
-            "/payload/global_events/*/narrative_order",
+            "/payload/global_events/*/narrative_order"
+          ],
+          "scope_filter": "all_pinned",
+          "load": "auto",
+          "required": true,
+          "detail": "index",
+          "priority": 70,
+          "coverage": "context_only"
+        },
+        {
+          "id": "source_character_events_index",
+          "source": {
+            "schema_id": "source_character_events"
+          },
+          "selectors": [
+            "/payload/source_ref",
             "/payload/character_views/*/character_id",
             "/payload/character_views/*/name"
           ],
@@ -347,13 +358,30 @@
           "coverage": "context_only"
         },
         {
-          "id": "source_views_detail",
+          "id": "source_global_events_detail",
           "source": {
-            "schema_id": "source_views"
+            "schema_id": "source_global_events"
           },
           "selectors": [
             "/payload/source_ref",
             "/payload/global_events",
+            "/payload/covered_source_anchors",
+            "/payload/remaining_source_anchors"
+          ],
+          "scope_filter": "current_batch",
+          "load": "auto",
+          "required": true,
+          "detail": "full",
+          "priority": 70,
+          "coverage": "complete_scope"
+        },
+        {
+          "id": "source_character_events_detail",
+          "source": {
+            "schema_id": "source_character_events"
+          },
+          "selectors": [
+            "/payload/source_ref",
             "/payload/character_views",
             "/payload/covered_source_anchors",
             "/payload/remaining_source_anchors"
@@ -367,7 +395,7 @@
         }
       ],
       "notes": [
-        "Step2 分批分析完整双视图并汇总核心信息；分析时不预设玩家角色，也不把它当成另一次原作切片。"
+        "Step2 分批分析完整两份独立事件视图并汇总核心信息；分析时不预设玩家角色，也不把它当成另一次原作切片。"
       ]
     },
     {
@@ -409,7 +437,7 @@
         {
           "id": "character_candidates",
           "source": {
-            "schema_id": "source_views"
+            "schema_id": "source_character_events"
           },
           "selectors": [
             "/payload/character_views/*/character_id",
@@ -425,28 +453,26 @@
           "coverage": "context_only"
         },
         {
-          "id": "default_strategy",
+          "id": "candidate_evidence_global",
           "source": {
-            "builtin": "runtime.default_strategy"
+            "schema_id": "source_global_events"
           },
           "selectors": [
-            "/strategy_ref",
-            "/text"
+            "/payload/global_events"
           ],
-          "scope_filter": "task_scope",
-          "load": "auto",
-          "required": true,
+          "scope_filter": "referenced_entities",
+          "load": "on_demand",
+          "required": false,
           "detail": "full",
-          "priority": 70,
-          "coverage": "context_only"
+          "priority": 30,
+          "coverage": "evidence_only"
         },
         {
-          "id": "candidate_evidence",
+          "id": "candidate_evidence_character",
           "source": {
-            "schema_id": "source_views"
+            "schema_id": "source_character_events"
           },
           "selectors": [
-            "/payload/global_events",
             "/payload/character_views"
           ],
           "scope_filter": "referenced_entities",
@@ -518,12 +544,26 @@
           "coverage": "complete_scope"
         },
         {
-          "id": "source_details",
+          "id": "source_details_global",
           "source": {
-            "schema_id": "source_views"
+            "schema_id": "source_global_events"
           },
           "selectors": [
-            "/payload/global_events",
+            "/payload/global_events"
+          ],
+          "scope_filter": "referenced_entities",
+          "load": "on_demand",
+          "required": false,
+          "detail": "full",
+          "priority": 30,
+          "coverage": "evidence_only"
+        },
+        {
+          "id": "source_details_character",
+          "source": {
+            "schema_id": "source_character_events"
+          },
+          "selectors": [
             "/payload/character_views"
           ],
           "scope_filter": "referenced_entities",
@@ -574,7 +614,7 @@
         {
           "id": "event_index",
           "source": {
-            "schema_id": "source_views"
+            "schema_id": "source_global_events"
           },
           "selectors": [
             "/payload/source_ref",
@@ -592,7 +632,7 @@
         {
           "id": "source_events",
           "source": {
-            "schema_id": "source_views"
+            "schema_id": "source_global_events"
           },
           "selectors": [
             "/payload/global_events"
@@ -607,7 +647,7 @@
         {
           "id": "player_view",
           "source": {
-            "schema_id": "source_views"
+            "schema_id": "source_character_events"
           },
           "selectors": [
             "/payload/character_views"
@@ -639,7 +679,7 @@
         }
       ],
       "notes": [
-        "游戏事件由 Step5 独立设计并直接锚定固定原作。双视图和两份分析提供创作背景，不作为游戏事件的组成索引；固定原作全文用于核验 UTF-16 区间。"
+        "游戏事件由 Step5 独立设计并直接锚定固定原作。两份独立事件视图和两份分析提供创作背景，不作为游戏事件的组成索引；固定原作全文用于核验 UTF-16 区间。"
       ]
     },
     {
@@ -649,7 +689,7 @@
       "include_common_materials": true,
       "materials": [],
       "notes": [
-        "Step6 使用与 Step5 相同的 interactive_structure Session；Harness 重新装入固定的 Step5 原作双视图、两份分析及游戏事件视图，确保完整输入与输出可见，历史交互和工具结果由 Session 提供。模型仅输出 event ID 与 narrative_function 补丁；Harness 合并到原 game_event_view 并保存新版本。"
+        "Step6 使用与 Step5 相同的 interactive_structure Session；Harness 重新装入固定的 Step5 两份独立的原作事件视图、两份分析及游戏事件视图，确保完整输入与输出可见，历史交互和工具结果由 Session 提供。模型仅输出 event ID 与 narrative_function 补丁；Harness 合并到原 game_event_view 并保存新版本。"
       ]
     },
     {
@@ -976,7 +1016,7 @@
   "readme": [
     "source.schema_id 只指 output-schemas/v2 注册表中的真实业务 Schema；source.builtin 指本文件明确登记的程序投影，二者互斥。runtime.* 不增加业务 output_type 字段，也不允许模型把投影冒充正式产物。",
     "scope_filter 是受控注册处理器名，先按固定身份/范围选取对象，再执行 selectors。HTML 不执行用户填入的 Python/JavaScript。只保留标题/摘要的 index 材料不能用于完整内容验收。",
-    "source_views 的 global_events 与 character_views.events 是独立事件集合，各自以 source_anchors 直接指向固定原作的 UTF-16 区间；游戏事件是 Step5 重新设计的集合，也独立锚定原文。三类事件 ID 不按同名自动互换。",
+    "source_global_events 与 source_character_events 是分别保存的事件集合，各自以 source_anchors 直接指向固定原作的 UTF-16 区间；游戏事件是 Step5 重新设计的集合，也独立锚定原文。三类事件 ID 不按同名自动互换。",
     "payload 保留要求、策略和方案说明不等于人工确认；确认范围来自 runtime.applicable_controls。只有方案中的固定 stage_artifact_refs 生效引用才能提供下游阶段依赖。",
     "Step5–8 确认后由 Harness 写回方案并形成新版本。Step5 产物不含 plan_ref；Step6 复用 Step5 Session 生成仅含事件 ID 和 narrative_function 的补丁；Harness 合并为新版 game_event_view，并将新版本写回 game_events。Step7 独立 Session 仅读取方案引用的固定事件视图，确认后写回 ending_routes；Step8 独立 Session 仅读取方案引用的固定事件视图与已确认结局路线，确认后写回 player_profiles。各阶段另加本阶段 instructions。输入解析按最新获准基线的引用清单协调，不循环要求旧产物改写引用。是否受影响由依赖/范围映射判断。",
     "Step1 使用冻结原作全文或按完整事件边界推进的独立滑动窗口，不创建 batch_manifest；Step2–11 的阶段事件、章节材料及审核批次使用内部 batch_manifest。",

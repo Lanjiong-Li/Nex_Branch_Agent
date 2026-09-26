@@ -1,7 +1,7 @@
 import pytest
 
 from branch_agent.context import tokens
-from branch_agent.source_windows import source_window, validate_window, combine_windows
+from branch_agent.source_windows import source_window, validate_window, combine_windows, combine_view_windows
 from branch_agent.workflow import WorkflowBlocked
 
 
@@ -25,6 +25,12 @@ def window_output(view, start, commit, window_end):
             "covered_source_anchors": [anchor(start, commit)],
             "remaining_source_anchors": [] if commit == window_end else [anchor(commit, window_end)]},
             "questions": [], "evidence_refs": [], "notes": []}
+
+
+def separate_window_output(view, start, commit, window_end):
+    output = window_output(view, start, commit, window_end)
+    output["payload"].pop("character_views" if view == "global" else "global_events")
+    return output
 
 
 def test_window_uses_utf16_boundary_and_restarts_at_committed_event():
@@ -71,14 +77,87 @@ def test_window_refuses_to_advance_without_completed_event_or_second_pass():
     assert error.value.reason == "source_coverage_incomplete"
 
 
-def test_character_pass_can_cover_a_span_without_major_character_event_at_verified_global_boundary():
+def test_character_pass_can_commit_an_explicit_empty_interval_without_global_boundaries():
     source = "甲😀乙丙"
     empty = window_output("character", 0, 3, 5)
     empty["payload"]["character_views"] = []
-    validated, commit = validate_window(empty, source, SOURCE_REF, "character", 0, 5,
-                                        empty_boundaries={3})
+    validated, commit = validate_window(empty, source, SOURCE_REF, "character", 0, 5)
     assert commit == 3
     assert validated["payload"]["character_views"] == []
-    with pytest.raises(WorkflowBlocked):
-        validate_window(empty, source, SOURCE_REF, "character", 0, 5,
-                        empty_boundaries={4})
+
+
+def test_empty_character_interval_must_have_a_contiguous_right_remainder():
+    source = "甲😀乙丙"
+    empty = window_output("character", 0, 3, 5)
+    empty["payload"]["character_views"] = []
+    empty["payload"]["remaining_source_anchors"] = [anchor(4, 5)]
+    with pytest.raises(WorkflowBlocked) as error:
+        validate_window(empty, source, SOURCE_REF, "character", 0, 5)
+    assert error.value.reason == "source_window_coverage_invalid"
+
+
+def test_empty_character_interval_cannot_claim_text_beyond_the_window():
+    source = "甲😀乙丙"
+    empty = window_output("character", 0, 5, 5)
+    empty["payload"]["character_views"] = []
+    with pytest.raises(WorkflowBlocked) as error:
+        validate_window(empty, source, SOURCE_REF, "character", 0, 4)
+    assert error.value.reason == "source_window_coverage_invalid"
+
+
+def test_each_view_can_be_combined_and_saved_independently():
+    source = "甲😀乙丙"
+    first_global, _ = validate_window(window_output("global", 0, 3, 5), source, SOURCE_REF, "global", 0, 5)
+    second_global, _ = validate_window(window_output("global", 3, 5, 5), source, SOURCE_REF, "global", 3, 5)
+    empty_character = window_output("character", 0, 3, 5)
+    empty_character["payload"]["character_views"] = []
+    first_character, _ = validate_window(empty_character, source, SOURCE_REF, "character", 0, 5)
+    second_character, _ = validate_window(window_output("character", 3, 5, 5), source, SOURCE_REF,
+                                          "character", 3, 5)
+    windows = [
+        {"pass": "global", "start_utf16": 0, "commit_utf16": 3, "output": first_global},
+        {"pass": "character", "start_utf16": 0, "commit_utf16": 3, "output": first_character},
+        {"pass": "character", "start_utf16": 3, "commit_utf16": 5, "output": second_character},
+        {"pass": "global", "start_utf16": 3, "commit_utf16": 5, "output": second_global},
+    ]
+    global_result = combine_view_windows(windows, "global", SOURCE_REF, 5)
+    character_result = combine_view_windows(windows, "character", SOURCE_REF, 5)
+    assert len(global_result["payload"]["global_events"]) == 2
+    assert "character_views" not in global_result["payload"]
+    assert "global_events" not in character_result["payload"]
+    assert len(character_result["payload"]["character_views"][0]["events"]) == 1
+    assert character_result["payload"]["character_views"][0]["events"][0]["character_event_id"] == "CEV-00001"
+
+
+def test_character_identity_must_remain_stable_across_windows():
+    source = "甲😀乙丙"
+    first, _ = validate_window(separate_window_output("character", 0, 3, 5),
+                               source, SOURCE_REF, "character", 0, 5)
+    second, _ = validate_window(separate_window_output("character", 3, 5, 5),
+                                source, SOURCE_REF, "character", 3, 5)
+    second["payload"]["character_views"][0]["character_id"] = "CHAR-另一人"
+    with pytest.raises(WorkflowBlocked, match="source_character_id_conflict"):
+        combine_view_windows([
+            {"pass": "character", "start_utf16": 0, "commit_utf16": 3, "output": first},
+            {"pass": "character", "start_utf16": 3, "commit_utf16": 5, "output": second},
+        ], "character", SOURCE_REF, 5)
+
+
+@pytest.mark.parametrize("view,only_field,absent_field", [
+    ("global", "global_events", "character_views"),
+    ("character", "character_views", "global_events"),
+])
+def test_separate_view_schema_validates_and_combines_without_other_view_field(
+        view, only_field, absent_field):
+    source = "甲😀乙丙"
+    first, commit = validate_window(separate_window_output(view, 0, 3, 5),
+                                    source, SOURCE_REF, view, 0, 5)
+    second, final_commit = validate_window(separate_window_output(view, 3, 5, 5),
+                                           source, SOURCE_REF, view, 3, 5)
+    combined = combine_view_windows([
+        {"pass": view, "start_utf16": 0, "commit_utf16": commit, "output": first},
+        {"pass": view, "start_utf16": 3, "commit_utf16": final_commit, "output": second},
+    ], view, SOURCE_REF, 5)
+    assert only_field in combined["payload"]
+    assert absent_field not in combined["payload"]
+    assert len(combined["payload"][only_field]) > 0

@@ -10,21 +10,22 @@ from .records import new_record, scope
 from .graph import SCHEMA_DIR, validate_output
 from .schemas import SchemaCatalog
 
-STAGES = {1: "source_views", 2: "source_global_analysis", 3: "adaptation_strategy",
+STAGES = {1: "source_global_events", 2: "source_global_analysis", 3: "adaptation_strategy",
           4: "adaptation_plan", 5: "game_event_view", 6: "game_event_view",
           7: "ending_routes", 8: "player_profiles", 9: "chapter_design",
           10: "chapter_graph", 11: "review_report"}
 STAGE_OUTPUTS = {
+    1: ("source_global_events", "source_character_events"),
     2: ("source_global_analysis", "source_character_analysis"),
 }
 AGENTS = {1: "source_parser", 2: "adaptation_planner", 3: "adaptation_planner",
           4: "adaptation_planner", 5: "interaction_architect", 6: "interaction_architect",
           7: "interaction_architect", 8: "interaction_architect", 9: "chapter_designer",
           10: "chapter_writer", 11: "validation_agent"}
-REQUIRES = {1: ["source_text"], 2: ["source_views"],
+REQUIRES = {1: ["source_text"], 2: ["source_global_events", "source_character_events"],
             3: ["source_global_analysis", "source_character_analysis"],
             4: ["source_global_analysis", "source_character_analysis", "adaptation_strategy"],
-            5: ["source_views", "source_global_analysis", "source_character_analysis"],
+            5: ["source_global_events", "source_character_events", "source_global_analysis", "source_character_analysis"],
             6: ["game_event_view"],
             7: ["game_event_view"],
             8: ["game_event_view", "ending_routes"],
@@ -126,14 +127,20 @@ class Workflow:
         indexed_events = self.planned_game_events(project_id, plan=plan) if stage in (6, 7, 8, 9) else None
         indexed_routes = self.planned_ending_routes(project_id, plan=plan) if stage in (8, 9) else None
         indexed_profiles = self.planned_player_profiles(project_id, plan=plan) if stage == 9 else None
-        views = self.resolve(project_id, "source_views") if stage == 5 else None
+        global_events = self.resolve(project_id, "source_global_events") if stage in (2, 5) else None
+        character_events = self.resolve(project_id, "source_character_events") if stage in (2, 5) else None
         chapter_design = self.resolve(project_id, "chapter_design", chapter_id) if stage == 10 else None
-        if views:
-            source_views = body(self.store, views)["payload"]
-            if any(not event.get("source_anchors") for event in source_views["global_events"]) or any(
-                    "character_event_id" not in event or not event.get("source_anchors")
-                    for character in source_views["character_views"] for event in character["events"]):
-                raise WorkflowBlocked("source_index_migration_required", {"kind": "source_views"})
+        if global_events:
+            if ref(self.original_for(project_id, global_events)) != ref(self.original_for(project_id, character_events)):
+                raise WorkflowBlocked("source_reference_mismatch", {"kind": "step1_views"})
+        if stage == 5:
+            global_payload = body(self.store, global_events)["payload"]
+            character_payload = body(self.store, character_events)["payload"]
+            if any(not event.get("source_anchors") for event in global_payload["global_events"]):
+                raise WorkflowBlocked("source_index_migration_required", {"kind": "source_global_events"})
+            if any("character_event_id" not in event or not event.get("source_anchors")
+                   for character in character_payload["character_views"] for event in character["events"]):
+                raise WorkflowBlocked("source_index_migration_required", {"kind": "source_character_events"})
         if indexed_events:
             if any("source_anchors" not in event or (event.get("adaptation_kind") != "new" and not event["source_anchors"])
                    for event in body(self.store, indexed_events)["payload"]["events"]):
@@ -169,7 +176,7 @@ class Workflow:
             elif stage == 9 and kind == "player_profiles":
                 version = indexed_profiles
             elif kind == "source_text" and stage == 5:
-                version = self.original_for(project_id, views)
+                version = self.original_for(project_id, global_events)
             elif kind == "source_text" and stage == 9:
                 version = self.original_for(project_id, indexed_events)
             elif kind == "source_text" and stage == 10:
@@ -188,6 +195,19 @@ class Workflow:
                 raise WorkflowBlocked("dependency_changed", {"kind": "adaptation_plan.stage_artifact_refs.game_events"})
             items.append({"ref": ref(version), "kind": kind, "schema_id": kind, "required": True, "record": version,
                           "content": body(self.store, version), "state": self.state(version)})
+        # The current version is a real artifact. Its producing stage may use
+        # it as fixed input without skipping generation of a new version.
+        if stage in (3, 4):
+            current_kind = STAGES[stage]
+            try:
+                current = self.resolve(project_id, current_kind)
+            except WorkflowBlocked as error:
+                if error.reason not in ("missing_material", "confirmation_required", "dependency_changed"):
+                    raise
+            else:
+                items.append({"ref": ref(current), "kind": current_kind, "schema_id": current_kind,
+                              "required": True, "record": current, "content": body(self.store, current),
+                              "state": self.state(current), "material_role": "current_stage_baseline"})
         return items
 
     def original_for(self, project_id, version, _seen=None):
@@ -201,7 +221,7 @@ class Workflow:
         kind = artifact["artifact_kind"]
         if kind == "source_text":
             return version
-        if kind == "source_views":
+        if kind in ("source_views", "source_global_events", "source_character_events"):
             target = body(self.store, version)["payload"]["source_ref"]
             source = self.fixed_version(project_id, target)
             if self.store.get(source["artifact_id"], project_id=project_id)["artifact_kind"] != "source_text":
@@ -212,7 +232,7 @@ class Workflow:
                 continue
             parent = self.fixed_version(project_id, target)
             parent_kind = self.store.get(parent["artifact_id"], project_id=project_id)["artifact_kind"]
-            if parent_kind in ("source_text", "source_views"):
+            if parent_kind in ("source_text", "source_views", "source_global_events", "source_character_events"):
                 return self.original_for(project_id, parent, _seen)
             try:
                 return self.original_for(project_id, parent, _seen)
@@ -280,9 +300,11 @@ class Workflow:
             config_version_id=run["config_version_id"] if run else config["id"] if config else None, origin=origin)
         dependencies = []
         for source in inputs:
-            if source.get("version") and not any(all(source[k] == historical[k] for k in ("record_id", "version")) for historical in historical_inputs):
+            if source.get("version") and source["record_id"] != artifact["id"] and not any(
+                    all(source[k] == historical[k] for k in ("record_id", "version"))
+                    for historical in historical_inputs):
                 dep = new_record("dependency", project_id, consumer_ref=ref(version), producer_ref=source,
-                    relation="source" if kind == "source_views" else "material",
+                    relation="source" if kind in ("source_views", "source_global_events", "source_character_events") else "material",
                     consumer_selections=[WHOLE], producer_selections=[WHOLE], state="valid", assessment_ref=None)
                 dependencies.append(dep)
         version["dependency_ids"] = [d["id"] for d in dependencies]
@@ -500,8 +522,13 @@ class Workflow:
             # legacy slot for old plan versions, but never point it at a new
             # artifact; the enriched game_event_view is the single source.
             value["payload"]["stage_artifact_refs"]["event_functions"] = None
+        # The writeback is a Harness action triggered by the confirmed stage.
+        # Retain that stage's config snapshot so the latest plan version reports
+        # its actual origin and uses the same published schema contract.
+        config = (self.store.get(confirmed["config_version_id"], project_id=project_id)
+                  if confirmed.get("config_version_id") else None)
         return self.save(project_id, "adaptation_plan", value, stage=4, origin="program",
-                         inputs=[ref(previous), ref(confirmed)], effective=True)
+                         inputs=[ref(previous), ref(confirmed)], effective=True, config=config)
 
 
 def _same_selection(a, b, path):

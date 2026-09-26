@@ -36,7 +36,7 @@ DATABASE_URL=postgresql:///branch_agent_local
 5. 在“运行数据”中按项目查看每次 Agent Run 的实际输入、工具调用、模型输出、保存的产物和错误原因。
 6. 完成章节确认与审核后，最终结果卡片提供同一版本 JSON 的查看、复制和下载。
 
-Step1 按“全局默认 → 滑动窗口机制参数”决定全文或逐窗扫描。原作估算 token 数超过触发阈值时，全局事件与主要人物事件各自按固定窗口、完整事件边界和绝对 UTF-16 索引扫描；Harness 保存每窗进度，完整覆盖后合并为一份 `source_views`。窗口无法形成完整事件或请求超预算时暂停，不跳过原文。DeepSeek 的上下文预检暂用带 25% 余量的 `o200k_base` 估算，实际 token 用量以供应商返回值为准。DeepSeek 使用 JSON Schema 非严格模式，Harness 仍对结果执行完整的本地 Schema 校验与返修。测试版暂停费用门禁，仍记录模型用量；达到其他运行上限时保存进度等待继续。
+Step1 按“全局默认 → 滑动窗口机制参数”决定全文或逐窗扫描。全局事件 Agent 与主要人物事件 Agent 并行读取同一固定原作版本，各有独立的 Run、Session、窗口游标和输入输出记录。原作估算 token 数超过触发阈值时，两路分别按固定窗口、完整事件边界和绝对 UTF-16 索引扫描；Harness 保存各自的窗口进度，全篇覆盖后分别生成 `source_global_events` 和 `source_character_events`，供下游阶段共同读取。窗口无法形成安全的完整事件区间或请求超预算时，对应视图暂停，不跳过原文或抹去另一视图已验证的进度。DeepSeek 的上下文预检暂用带 25% 余量的 `o200k_base` 估算，实际 token 用量以供应商返回值为准。DeepSeek 使用 JSON Schema 非严格模式，Harness 仍对结果执行完整的本地 Schema 校验与返修。测试版暂停费用门禁，仍记录模型用量；达到其他运行上限时保存进度等待继续。
 
 真实短篇《一盏灯》曾完成 Step1–11、返修、独立审核和最终 JSON 下载验收。验收脚本模拟用户选择与确认，浏览器只读核对和下载；联调产物保存在本地，不随源码发布。证据及边界见[真实模型记录](docs/live-model-smoke.md)。
 
@@ -68,6 +68,6 @@ node --test tests/runtime-view.test.mjs
 
 ## 服务端部署准备
 
-仓库提供 `Dockerfile` 和 `compose.yaml`。在目标环境配置 `DEEPSEEK_API_KEY`、`BRANCH_DB_PASSWORD`、`BRANCH_LOCAL_PASSWORD` 后使用 `docker compose up -d --build`；使用 OpenAI 模型时额外配置 `OPENAI_API_KEY`。数据库与文件分别使用持久卷；现有测试实例通过 AWS Systems Manager 部署更新。正式平台认证和备份策略仍需单独接入。
+仓库提供 `Dockerfile` 和 `compose.yaml`。在目标环境配置 `DEEPSEEK_API_KEY`、`BRANCH_DB_PASSWORD`、`BRANCH_LOCAL_PASSWORD` 后使用 `docker compose up -d --build`；使用 OpenAI 模型时额外配置 `OPENAI_API_KEY`。数据库与文件分别使用持久卷。现有测试实例位于腾讯云 `/opt/nex-branch-agent`，由 Docker Compose 运行应用和数据库，经 Nginx 提供 HTTPS 入口；更新前备份数据库与持久文件，并在重建应用后验证健康状态。正式平台认证仍需单独接入。
 
 模型价格与容量初值依据官方模型页：[DeepSeek](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/)、[GPT-5.6 Sol](https://developers.openai.com/api/docs/models/gpt-5.6-sol)、[GPT-5 Mini](https://developers.openai.com/api/docs/models/gpt-5-mini)、[GPT-5 Nano](https://developers.openai.com/api/docs/models/gpt-5-nano)。DeepSeek 的美元费用估算暂按官方高峰时段单价计算，因此是保守估算，不是账单金额；更新价格表时生成新的配置版本。Nexo编辑器嵌入、工程自动写入/发布及完整DSL求解不在首版范围；当前仅对受支持表达式执行保守的不可达节点检查。

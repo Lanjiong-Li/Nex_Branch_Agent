@@ -8,7 +8,9 @@ from branch_agent.context import build_materials, fit_input, input_budget, Budge
 
 
 def test_active_schemas_and_strict_json_adapter():
-    catalog=SchemaCatalog();assert len(catalog.schemas)==13
+    catalog=SchemaCatalog();assert len(catalog.schemas)==15
+    assert catalog.schema_for('step1.global')=='source_global_events'
+    assert catalog.schema_for('step1.character')=='source_character_events'
     assert catalog.registry['bindings']['step6']=='game_event_narrative_patch'
     assert 'event_function_map' not in catalog.schemas
     assert 'work_summary' not in catalog.schemas

@@ -50,6 +50,93 @@ def test_project_creation_idempotency_and_csrf(api):
     assert client.post(BASE+'/projects',json={'title':'blocked'}).status_code==403
 
 
+def test_artifact_defaults_seed_new_projects_and_project_edits_share_version_chain(api):
+    client,store,_=api
+    client.headers['Idempotency-Key']=str(uuid.uuid4())
+    older=client.post(BASE+'/projects',json={'title':'旧项目'}).json()['id']
+    defaults=client.get(BASE+'/artifact-defaults').json()
+    assert defaults['adaptation_strategy']['result_kind']=='ready'
+    assert defaults['adaptation_plan'] is None
+    plan=deepcopy(defaults['starters']['adaptation_plan'])
+    plan['payload']['title']='新项目的默认方案'
+    saved=client.put(BASE+'/artifact-defaults',json={'adaptation_plan':plan})
+    assert saved.status_code==200,saved.text
+    client.headers['Idempotency-Key']=str(uuid.uuid4())
+    newer=client.post(BASE+'/projects',json={'title':'新项目'}).json()['id']
+
+    old_items=client.get(BASE+f'/projects/{older}/artifacts?kinds=adaptation_plan').json()['artifacts']
+    old_plan=next(item for item in old_items if item['kind']=='adaptation_plan')
+    assert old_plan['version'] is None
+    old_write=client.put(BASE+f'/projects/{older}/artifacts/adaptation_plan',json={
+        'content':plan,'expected_version':None})
+    assert old_write.status_code==200,old_write.text
+    assert old_write.json()['version']==old_write.json()['effective_version']==1
+    items=client.get(BASE+f'/projects/{newer}/artifacts').json()['artifacts']
+    seeded=next(item for item in items if item['kind']=='adaptation_plan')
+    assert seeded['version']==seeded['effective_version']==1
+    assert seeded['effective'] is True and seeded['origin']=='program'
+    assert seeded['content'] is None and seeded['has_content'] is True
+    assert seeded['stage']==4 and seeded['agent_key'] is None
+    assert seeded['agent_name']=='Harness 写入'
+    selected=client.get(BASE+f'/projects/{newer}/artifacts?kinds=adaptation_strategy,adaptation_plan').json()['artifacts']
+    selected_plan=next(item for item in selected if item['kind']=='adaptation_plan')
+    assert selected_plan['content']['payload']['title']=='新项目的默认方案'
+
+    edited=deepcopy(selected_plan['content'])
+    edited['payload']['title']='项目自己的修改'
+    write=client.put(BASE+f'/projects/{newer}/artifacts/adaptation_plan',json={
+        'content':edited,'expected_version':1})
+    assert write.status_code==200,write.text
+    assert write.json()['version']==write.json()['effective_version']==2
+    assert write.json()['origin']=='user'
+    assert write.json()['agent_name']=='人工编辑'
+    assert write.json()['stage']==4
+    assert client.put(BASE+f'/projects/{newer}/artifacts/adaptation_plan',json={
+        'content':edited,'expected_version':1}).status_code==409
+    assert client.get(BASE+'/artifact-defaults').json()['adaptation_plan']['payload']['title']=='新项目的默认方案'
+
+
+def test_account_artifact_default_rejects_project_fixed_references(api):
+    client,_,_=api
+    plan=client.get(BASE+'/artifact-defaults').json()['starters']['adaptation_plan']
+    plan['payload']['strategy_ref']={'record_id':str(uuid.uuid4()),'version':'1',
+                                     'item_id':None,'json_pointer':None}
+    rejected=client.put(BASE+'/artifact-defaults',json={'adaptation_plan':plan})
+    assert rejected.status_code==400
+
+
+def test_program_artifact_metadata_uses_actual_stage_and_harness_origin(api):
+    from branch_agent.workflow import Workflow
+
+    client,store,_=api
+    project_id=client.post(BASE+'/projects',json={'title':'来源阶段测试'}).json()['id']
+    plan=client.get(BASE+'/artifact-defaults').json()['starters']['adaptation_plan']
+    assert client.put(BASE+f'/projects/{project_id}/artifacts/adaptation_plan',json={
+        'content':plan,'expected_version':None}).status_code==200
+    config=client.app.state.config
+    workflow=Workflow(store)
+    with store.transaction():
+        graph=workflow.save(project_id,'nexo_graph',{
+            'id':project_id,'name':'测试','description':'','prompt':'','revision':0,
+            'updatedAt':'2026-09-26T00:00:00Z','chapters':[],
+            'chapterEdges':[],'variables':[],'scenes':[],
+        },stage=11,origin='program',config=config.resolve(project_id,'step11'),effective=True)
+        events=workflow.save(project_id,'game_event_view',{
+            'result_kind':'ready','payload':{'events':[],'event_links':[],'source_coverage':[]},
+            'questions':[],'evidence_refs':[],'notes':[],
+        },stage=6,origin='model',config=config.resolve(project_id,'step6'),effective=True)
+        workflow.writeback_plan(project_id,events,6)
+
+    workspace=client.app.state.artifact_workspace
+    final=workspace.item(project_id,'nexo_graph')
+    assert final['version']==graph['version']
+    assert final['stage']==11 and final['agent_name']=='Harness 写入'
+    assert final['agent_key'] is None
+    written_plan=workspace.item(project_id,'adaptation_plan')
+    assert written_plan['version']==2
+    assert written_plan['stage']==6 and written_plan['agent_name']=='Harness 写入'
+
+
 def test_account_and_blob_isolation(api):
     client,store,identity=api
     own=client.post(BASE+'/projects',json={'title':'我的项目'}).json();pid=own['id']
@@ -204,6 +291,22 @@ def test_unsaved_instruction_layers_have_server_preview_without_publication(api)
     assert shown['parts']['harness_stage'] == '未发布的阶段协议'
     assert shown['final'].endswith(values['prompts']['harness']['ask_user'])
     assert not store.list(None,'config_version',limit=10)
+
+    source_values=client.get(BASE+'/account/config?stage=step1').json()['values']
+    source_preview=client.post(BASE+'/account/config/instructions-preview',json={
+        'stage':'step1','values':source_values})
+    assert source_preview.status_code==200,source_preview.text
+    branches=source_preview.json()['views']
+    assert '只形成全局事件视图' in branches['global']['final']
+    assert '只形成主要人物事件视图' in branches['character']['final']
+    assert '滑动窗口固定协议' not in branches['global']['final']
+    assert branches['global']['parts']['tool_guidance']==source_values['prompts']['harness']['no_ask_user']
+    window_preview=client.post(BASE+'/account/config/instructions-preview',json={
+        'stage':'step1','values':source_values,'step1_mode':'window','step1_view':'character'})
+    assert window_preview.status_code==200,window_preview.text
+    assert '滑动窗口固定协议' in window_preview.json()['final']
+    assert '当前独立产物：主要人物事件' in window_preview.json()['final']
+    assert '只形成主要人物事件视图' in window_preview.json()['final']
 
 
 def test_account_editor_autosave_keeps_incomplete_schema_without_publishing(api):

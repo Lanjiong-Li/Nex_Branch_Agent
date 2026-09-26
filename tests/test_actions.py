@@ -8,6 +8,7 @@ from branch_agent.actions import ActionService
 from branch_agent.records import new_record
 from branch_agent.workflow import body, ref, update, WorkflowBlocked, WHOLE
 from test_runtime import runtime, source_response
+from test_split_source_workflow import _output as split_source_output
 
 
 def initial_task(runtime, stage=1):
@@ -164,6 +165,31 @@ def test_unknown_remote_disables_restart_without_unholding(runtime):
     assert engine._control(pid,cid)==before
 
 
+def test_recovery_card_lists_both_step1_views_with_source_and_validity(runtime):
+    engine, _, pid, cid = runtime
+    service = ActionService(engine)
+    _, task, _, _ = failed_output(runtime, unknown_cost=False)
+    source = engine.workflow.resolve(pid, 'source_text')
+    with engine.store.transaction():
+        for kind in ('source_global_events', 'source_character_events'):
+            engine.workflow.save(pid, kind, split_source_output(kind, ref(source)),
+                                 stage=1, inputs=[ref(source)], effective=True)
+    shown = card(service, pid, cid, 'task:' + task['id'])
+    details = {item['label']: item['value'] for item in shown['details']}
+    assert '原作 v1' in details['Step1 全局事件']
+    assert '来源仍有效' in details['Step1 全局事件']
+    assert '当前生效' in details['Step1 全局事件']
+    assert '原作 v1' in details['Step1 主要人物事件']
+    assert '来源仍有效' in details['Step1 主要人物事件']
+    assert '历史 Step1 合并分段' not in details
+    with engine.store.transaction():
+        engine.workflow.save(pid, 'source_text', '甲见乙后又见丙。', effective=True)
+    updated = {item['label']: item['value'] for item in card(service, pid, cid,
+               'task:' + task['id'])['details']}
+    assert '上游已变化' in updated['Step1 全局事件']
+    assert '上游已变化' in updated['Step1 主要人物事件']
+
+
 def test_queue_actions_affect_only_selected_request_and_keep_holds(runtime):
     engine,model,pid,cid=runtime;service=ActionService(engine);root,task,_,_=failed_output(runtime,unknown_cost=False)
     engine.submit_message(pid,cid,'先查看进度');engine.submit_message(pid,cid,'稍后处理')
@@ -199,7 +225,7 @@ def test_fresh_restart_rebuilds_step_one_even_when_previous_effective_exists(run
     receipt=submit(service,pid,cid,card(service,pid,cid,'task:'+task['id']),'restart',{'max_cost_usd':'2','max_active_seconds':600})
     model.responses=[source_response]
     asyncio.run(engine.tick(pid,cid))
-    assert model.calls==['step1']
+    assert len(model.calls) == 2 and all(call.startswith('step1') for call in model.calls)
     children=engine.store.list(pid,'task',filters={'parent_task_id':receipt['task_id']})
     assert any(t['scope']['stage']==1 and t['state']=='succeeded' for t in children)
 

@@ -91,16 +91,20 @@ async def test_step2_uses_plain_text_without_output_schema(runtime):
     workflow=Workflow(store)
     with store.transaction():
         source=workflow.save(pid,'source_text','甲见乙。',origin='import',effective=True)
-        views={'result_kind':'ready','payload':{'source_ref':ref(source),'global_events':[],
-            'character_views':[],'covered_source_anchors':[],'remaining_source_anchors':[]},
+        global_events={'result_kind':'ready','payload':{'source_ref':ref(source),'global_events':[],
+            'covered_source_anchors':[],'remaining_source_anchors':[]},
             'questions':[],'evidence_refs':[ref(source)],'notes':[]}
-        view=workflow.save(pid,'source_views',views,stage=1,inputs=[ref(source)],effective=True)
+        character_events={'result_kind':'ready','payload':{'source_ref':ref(source),'character_views':[],
+            'covered_source_anchors':[],'remaining_source_anchors':[]},
+            'questions':[],'evidence_refs':[ref(source)],'notes':[]}
+        global_view=workflow.save(pid,'source_global_events',global_events,stage=1,inputs=[ref(source)],effective=True)
+        character_view=workflow.save(pid,'source_character_events',character_events,stage=1,inputs=[ref(source)],effective=True)
     config=ConfigService(store).resolve(pid,'step2')
     task=store.put(new_record('task',pid,conversation_id=base_task['conversation_id'],
         requested_by_message_id=base_task['requested_by_message_id'],intent='generate',state='running'))
     session=store.put(new_record('work_session',pid,conversation_id=base_task['conversation_id'],session_key='adaptation_direction'))
     run=store.put(new_record('run',pid,task_id=task['id'],agent_key='adaptation_planner',session_id=session['id'],
-        config_version_id=config['id'],state='running',input_refs=[ref(view)]))
+        config_version_id=config['id'],state='running',input_refs=[ref(global_view),ref(character_view)]))
     def handler(request):
         data=json.loads(request.content);requests.append(data)
         assert data.get('text',{}).get('format',{}).get('type')!='json_schema'

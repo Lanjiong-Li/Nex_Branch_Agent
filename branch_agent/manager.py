@@ -97,7 +97,7 @@ def build_manager_tools(engine, coordinator_task, coordinator_run, source_messag
                                 and task["state"] == "succeeded" for task in children)
                 if completed:
                     continue
-                if stage == 11 or data.get("fresh_start"):
+                if stage in (3, 4, 11) or data.get("fresh_start"):
                     raise WorkflowBlocked("manager_workflow_incomplete", {"stage": stage, "chapter_id": chapter})
                 try:
                     versions = [engine.workflow.resolve(project, kind, chapter)

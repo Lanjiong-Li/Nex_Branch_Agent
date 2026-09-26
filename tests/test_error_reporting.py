@@ -71,7 +71,7 @@ def test_output_limit_pauses_once_preserving_safe_error_details(runtime):
         error.details = details
         raise error
 
-    model.responses = [coordinator, source_response, limit]
+    model.responses = [coordinator, source_response, source_response, limit]
     engine.submit_message(pid, cid, "开始改编")
 
     async def drive():
@@ -81,13 +81,14 @@ def test_output_limit_pauses_once_preserving_safe_error_details(runtime):
     task = next(t for t in engine.status(pid)["tasks"] if t["scope"]["stage"] == 2)
     assert task["state"] == "paused" and task["pause_reason"] == "output_limit_exceeded"
     assert task["repair_rounds_used"] == 0
-    assert model.calls == ["coordinator", "step1", "step2"]
+    assert model.calls == ["coordinator", "step1", "step1", "step2"]
     run = next(r for r in engine.status(pid)["runs"] if r["task_id"] == task["id"])
     assert run["error"]["details"] == details
     notices = [h["content"].get("text", "") for h in all_records(engine.store, pid, "history_record")
                if h["visibility"] == "conversation"]
     assert any("8000" in text and "响应未完成" in text for text in notices)
-    assert engine.workflow.resolve(pid, "source_views")
+    assert engine.workflow.resolve(pid, "source_global_events")
+    assert engine.workflow.resolve(pid, "source_character_events")
 
 
 LEGACY_LIMIT_MESSAGE = ("模型输出不符合结构约定：Responses stream ended with terminal event "

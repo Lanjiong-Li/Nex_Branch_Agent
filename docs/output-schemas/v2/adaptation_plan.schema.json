@@ -23,13 +23,22 @@
               "type": "string"
             },
             "source_global_analysis_ref": {
-              "$ref": "#/$defs/EvidenceRef"
+              "anyOf": [
+                {"$ref": "#/$defs/EvidenceRef"},
+                {"type": "null"}
+              ]
             },
             "source_character_analysis_ref": {
-              "$ref": "#/$defs/EvidenceRef"
+              "anyOf": [
+                {"$ref": "#/$defs/EvidenceRef"},
+                {"type": "null"}
+              ]
             },
             "strategy_ref": {
-              "$ref": "#/$defs/EvidenceRef"
+              "anyOf": [
+                {"$ref": "#/$defs/EvidenceRef"},
+                {"type": "null"}
+              ]
             },
             "player_role": {
               "type": "object",

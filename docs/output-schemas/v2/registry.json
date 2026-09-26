@@ -1,5 +1,5 @@
 {
-  "catalog_version": "2.12.0",
+  "catalog_version": "2.14.0",
   "status": "design_draft_not_runtime_implementation",
   "schemas": [
     {
@@ -18,25 +18,43 @@
       "status": "design_draft",
       "root_output": "model_result",
       "ui_editable": true,
-      "sha256": "43218e8ead7d471e27a5f6b3a586fd6fefdd2952698eb245f7edcfb3897f0a7e"
+      "sha256": "8190b57086bd5b52c31f0bd350ad290c69a323541cd2f33f92d2865c7bed552c"
+    },
+    {
+      "schema_id": "source_global_events",
+      "version": "1.0.0",
+      "file": "source_global_events.schema.json",
+      "status": "design_draft",
+      "root_output": "model_result",
+      "ui_editable": true,
+      "sha256": "e302e01cbc78a6d640e8dc66996dc2da08e69d19f01595e92ec8a81a968db771"
+    },
+    {
+      "schema_id": "source_character_events",
+      "version": "1.0.0",
+      "file": "source_character_events.schema.json",
+      "status": "design_draft",
+      "root_output": "model_result",
+      "ui_editable": true,
+      "sha256": "0e946c9f2f807c1c07ccc5adf33fccb31fd800738ee66a145e83d841f74404be"
     },
     {
       "schema_id": "adaptation_strategy",
-      "version": "2.1.0",
+      "version": "2.2.0",
       "file": "adaptation_strategy.schema.json",
       "status": "design_draft",
       "root_output": "model_result",
       "ui_editable": true,
-      "sha256": "751b4f76addfb994012e025497d5de592689293fc4d36b6a901336f3380fb700"
+      "sha256": "9070a32e8444a2020648a808dbfe399f2fab6ae460557c971c5b507c5654d6f2"
     },
     {
       "schema_id": "adaptation_plan",
-      "version": "2.1.0",
+      "version": "2.2.0",
       "file": "adaptation_plan.schema.json",
       "status": "design_draft",
       "root_output": "model_result",
       "ui_editable": true,
-      "sha256": "cd44a7e4db8b6a7bd6d97439e7f30dbdba2ba76624b2e555eb116d48e041d8b5"
+      "sha256": "0197baa5a87fa3bd250822db60ec09f10a027bb4ffb4b750b5c04a5d4bfc9daf"
     },
     {
       "schema_id": "game_event_view",
@@ -124,6 +142,8 @@
   "bindings": {
     "conversation_coordinator": "coordinator_response",
     "step1": "source_views",
+    "step1.global": "source_global_events",
+    "step1.character": "source_character_events",
     "step3": "adaptation_strategy",
     "step4": "adaptation_plan",
     "step5": "game_event_view",

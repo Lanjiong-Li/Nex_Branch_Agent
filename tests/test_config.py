@@ -5,7 +5,9 @@ import pytest
 from branch_agent.configuration import ConfigService, READ_TOOL_NAMES, SESSION_SHARING_DEFAULTS, initial_values
 from branch_agent.model_service import ReadTools
 from branch_agent.prompts import (instructions, instruction_parts, instructions_preview,
-                                  legacy_prompt_overrides, stage_agent)
+                                  legacy_prompt_overrides, stage_agent, step1_agent,
+                                  step1_run_appendix, LEGACY_HARNESS_RUNTIME,
+                                  LEGACY_HARNESS_STAGES)
 from branch_agent.records import new_record
 from branch_agent.workflow import session_key
 
@@ -128,6 +130,42 @@ def test_new_agent_can_be_registered_and_assigned_to_a_stage(runtime):
     assert '\n\n'.join(v for v in view['instruction_parts'].values() if v) == instructions('step5', resolved)
 
 
+def test_step1_branches_resolve_distinct_agent_profiles_and_instructions(runtime):
+    store, task, _, _, _ = runtime
+    pid=task['project_id']
+    service=ConfigService(store)
+    base,_=service.values(pid,'step1')
+    assert step1_agent('global',base)=='source_global_parser'
+    assert step1_agent('character',base)=='source_character_parser'
+    profile=service.draft(pid,{'model':{'reasoning_effort':'low'},
+        'prompts':{'harness':{'agents':{'source_character_parser':'人物分支专属协议'}}}},
+        scope_kind='agent',scope_key='source_character_parser')
+    service.publish(pid,profile['id'])
+    global_snapshot=service.resolve(pid,'step1',agent_key=step1_agent('global',base))['values']
+    character_snapshot=service.resolve(pid,'step1',agent_key=step1_agent('character',base))['values']
+    assert stage_agent('step1',global_snapshot)=='source_global_parser'
+    assert stage_agent('step1',character_snapshot)=='source_character_parser'
+    assert global_snapshot['model']['reasoning_effort']=='high'
+    assert character_snapshot['model']['reasoning_effort']=='low'
+    assert '人物分支专属协议' in instructions('step1',character_snapshot)
+    preview=instructions_preview('step1',base)
+    assert '只形成全局事件视图' in preview['views']['global']['final']
+    assert '只形成主要人物事件视图' in preview['views']['character']['final']
+
+
+def test_step1_requires_two_existing_agents(runtime):
+    store,task,_,_,_=runtime
+    service=ConfigService(store)
+    values,_=service.values(task['project_id'],'step1')
+    schemas=values.pop('schemas')
+    values['prompts']['step1_view_agents']={'global':'source_global_parser'}
+    with pytest.raises(ValueError,match='分别配置'):
+        service.validate_candidate(values,schemas,'step1.global')
+    values['prompts']['step1_view_agents']['character']='missing_agent'
+    with pytest.raises(ValueError,match='不存在的 Agent'):
+        service.validate_candidate(values,schemas,'step1.character')
+
+
 def test_configuration_page_sections_resolve_at_their_runtime_scope(runtime):
     """The four UI sections must change the same values frozen by future Runs."""
     store, task, _, _, _ = runtime
@@ -174,7 +212,8 @@ def test_configuration_page_sections_resolve_at_their_runtime_scope(runtime):
     assert resolved['repair']['max_rounds'] == 5
     assert next(profile for profile in resolved['context']['profiles']['profiles']
                 if profile['stage'] == 'step7')['materials'][0]['enabled'] is False
-    assert resolved['context']['stage_inputs']['step7'] == ['source_views', 'game_event_view']
+    assert resolved['context']['stage_inputs']['step7'] == [
+        'source_global_events', 'source_character_events', 'game_event_view']
     assert resolved['context']['session_sharing']['step7'] == 'step5'
     prompt = instructions('step7', resolved)
     assert '全局调试约束' in prompt
@@ -233,9 +272,9 @@ def test_step3_prompt_only_asks_for_player_role_and_interaction_ideas():
     assert '只允许询问两件事' in prompt
     assert '玩家扮演哪个角色' in prompt
     assert '是否有其他互动设计想法' in prompt
-    assert '不得询问是否采用默认改编策略' in prompt
     assert '不得把Step2中的可选建议、叙事预示或其他待定创作事项扩展成Step3问题' in prompt
-    assert 'Harness静默沿用runtime.default_strategy' in prompt
+    assert 'adaptation_strategy' in prompt
+    assert 'runtime.default_strategy' not in prompt
 
 
 def test_step2_prompt_generates_analysis_without_questions():
@@ -251,7 +290,7 @@ def test_step2_prompt_generates_analysis_without_questions():
 def test_validation_agent_is_configurable_and_disabled_by_default():
     values, _ = initial_values()
     assert values['prompts']['validation'] == ''
-    assert instructions('step11', values).strip().endswith('不得从会话历史猜测或编造数据库身份。')
+    assert instructions('step11', values).count('不得从会话历史猜测或编造数据库身份。') == 1
     values['prompts']['validation'] = '检查最终 Graph 的剧情连续性。'
     prompt = instructions('step11', values)
     assert '检查最终 Graph 的剧情连续性。' in prompt
@@ -276,6 +315,43 @@ def test_creative_and_harness_layers_preview_the_effective_run_prompt():
     assert preview['final'] == instructions('step5', values) + '\n\n' + p['harness']['ask_user']
     p['harness']['ask_user'] = '新提问协议'
     assert instructions_preview('step5', values)['final'].endswith('新提问协议')
+
+
+def test_new_stage_harness_rule_avoids_duplicate_legacy_runtime_text():
+    values, _ = initial_values()
+    harness = values['prompts']['harness']
+    assert harness['runtime'] == {}
+    assert LEGACY_HARNESS_RUNTIME['step5'] in harness['stages']['step5']
+    assert instruction_parts('step5', values)['harness_runtime'] == ''
+    harness['runtime']['step5'] = LEGACY_HARNESS_RUNTIME['step5']
+    assert instruction_parts('step5', values)['harness_runtime'] == ''
+    harness['stages']['step5'] = LEGACY_HARNESS_STAGES['step5']
+    assert instruction_parts('step5', values)['harness_runtime'] == LEGACY_HARNESS_RUNTIME['step5']
+    assert instructions('step5', values).count('不得从会话历史猜测或编造数据库身份。') == 1
+    harness['runtime']['step5'] = '旧配置自定义的运行协议'
+    assert instruction_parts('step5', values)['harness_runtime'] == '旧配置自定义的运行协议'
+    assert '旧配置自定义的运行协议' in instructions('step5', values)
+    harness['stages'] = deepcopy(LEGACY_HARNESS_STAGES)
+    harness['runtime'] = deepcopy(LEGACY_HARNESS_RUNTIME)
+    for stage, rule in LEGACY_HARNESS_RUNTIME.items():
+        assert instruction_parts(stage, values)['harness_runtime'] == rule
+
+
+def test_step1_preview_follows_full_or_window_runtime_and_disables_asking():
+    values, _ = initial_values()
+    harness = values['prompts']['harness']
+    full = instructions_preview('step1', values, step1_mode='full')
+    global_full = full['views']['global']
+    assert global_full['parts']['tool_guidance'] == harness['no_ask_user']
+    assert global_full['parts']['step1_mode'] == step1_run_appendix('global', 'full', values)
+    assert harness['window'] not in global_full['final']
+    assert '窗口模式' not in global_full['final']
+    assert full['window_appendix'] is None
+    window = instructions_preview('step1', values, step1_mode='window')['views']['character']
+    assert harness['window'] in window['parts']['step1_mode']
+    assert '当前独立产物：主要人物事件' in window['final']
+    assert window['parts']['tool_guidance'] == harness['no_ask_user']
+    assert step1_run_appendix('character','window',values,12,56).find('[12,56)') >= 0
 
 
 def test_legacy_mixed_prompt_is_preserved_in_advanced_layer():

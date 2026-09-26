@@ -191,15 +191,37 @@ class ActionService:
                        {'label': '已发布配置输出上限', 'value': str(published['model']['max_output_tokens'])}]
             if cost_gates:
                 details.append({'label': '旧调用费用未知', 'value': ', '.join(c['id'] for c in unknown) or '无'})
-            try:
-                views = self.engine.workflow.resolve(pid, 'source_views', effective=False)
-                dependencies = [d for d in all_records(self.store, pid, 'dependency') if d['consumer_ref']['record_id'] == views['artifact_id'] and d['consumer_ref']['version'] == str(views['version'])]
-                sources = [d['producer_ref']['version'] for d in dependencies if source and d['producer_ref']['record_id'] == source['artifact_id']]
-                details.append({'label': '现有 Step1 分段', 'value': 'v' + str(views['version']) +
-                    ('，依赖原作 v' + '、'.join(sources) if sources else '') + '，' +
-                    ('上游已变化，需重新分段' if self.engine.workflow.state(views)['dependency_status'] != 'valid' else '来源仍有效')})
-            except WorkflowBlocked:
-                pass
+            dependencies = all_records(self.store, pid, 'dependency')
+            def step1_view_detail(kind, label):
+                try:
+                    version = self.engine.workflow.resolve(pid, kind, effective=False)
+                except WorkflowBlocked:
+                    details.append({'label': label, 'value': '未生成'})
+                    return False
+                artifact = self.store.get(version['artifact_id'], project_id=pid)
+                state = self.engine.workflow.state(version)
+                inputs = [d['producer_ref'] for d in dependencies
+                          if d['consumer_ref']['record_id'] == version['artifact_id']
+                          and d['consumer_ref']['version'] == str(version['version'])]
+                source_versions = [item['version'] for item in inputs
+                                   if source and item['record_id'] == source['artifact_id']]
+                origin = ('原作 v' + '、'.join(source_versions)) if source_versions else '未记录原作来源'
+                validity = ('来源仍有效' if state and state['dependency_status'] == 'valid'
+                            else '上游已变化，需重新分段')
+                effective = ('当前生效' if artifact['current_effective_version'] == version['version']
+                             else '未生效')
+                details.append({'label': label, 'value': f"v{version['version']}，{origin}，{validity}，{effective}"})
+                return True
+            has_global = step1_view_detail('source_global_events', 'Step1 全局事件')
+            has_character = step1_view_detail('source_character_events', 'Step1 主要人物事件')
+            if not (has_global or has_character):
+                try:
+                    legacy = self.engine.workflow.resolve(pid, 'source_views', effective=False)
+                except WorkflowBlocked:
+                    pass
+                else:
+                    details.append({'label': '历史 Step1 合并分段',
+                                    'value': f"v{legacy['version']}，仅供旧任务查看"})
             actions = [action('restart', '使用已发布配置从 Step1 重新开始',
                               '保留旧记录，替代此旧流程及其子任务；重新分段并逐阶段生成。' + ('新预算不包含未知旧费用。' if cost_gates else ''), budget_fields,
                               disabled or ('已有交付版本，请按具体阶段修订，或新建改编项目。' if has_delivery else None)),

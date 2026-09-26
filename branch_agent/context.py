@@ -419,9 +419,6 @@ def prepare_runtime_materials(stage,task,run,session,config,materials,store,step
                 selected.append({**material,'builtin':'runtime.source_block',
                                  'content':{'source_ref':material['ref'],'text':excerpt,
                                             'start_utf16':start,'end_utf16':end},'required':True})
-    if stage=='step3':
-        additions.append(('runtime.default_strategy',{'strategy_ref':_ref(config_record,'/values/adaptation/default_strategy'),
-                         'text':config['adaptation']['default_strategy']},[_ref(config_record)]))
     if stage in ('step9','step11'):
         from .schemas import SchemaCatalog
         catalog=SchemaCatalog();schema=(config.get('schemas') or catalog.schemas)['nexo_graph']
@@ -642,6 +639,7 @@ def build_materials(stage,materials,config,store,project_id):
         name=material.get('schema_id',material.get('kind',''));builtin=material.get('builtin')
         logical_name='source_text' if builtin in ('runtime.full_source','runtime.source_index','runtime.source_block') else name
         if (selected_inputs is not None and logical_name in ARTIFACT_PRODUCERS
+                and material.get('material_role')!='current_stage_baseline'
                 and logical_name not in selected_inputs):
             selections.append({'source_ref':deepcopy(reference),'selection':{'item_id':None,'json_pointer':''},
                 'inclusion':'omitted','reason':'disabled by stage input configuration','estimated_tokens':0})

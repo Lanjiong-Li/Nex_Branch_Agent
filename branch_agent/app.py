@@ -27,6 +27,7 @@ from .configuration import ConfigService
 from .context import unwrap, tokens, input_budget, BudgetExceeded
 from .model_service import ModelService, ReadTools
 from .workflow import WorkflowBlocked
+from .artifact_workspace import ArtifactWorkspace
 from .presentation import stage_result_text
 
 BASE='/api/branch-agent/v1'
@@ -54,7 +55,7 @@ def create_app(store=None,engine=None,model_service=None,data_dir=None):
     load_dotenv(ROOT/'.env',override=False)
     data=Path(data_dir or os.environ.get('BRANCH_DATA_DIR',ROOT/'.data'))
     db=store or Store(os.environ.get('DATABASE_URL','postgresql:///branch_agent_local'),data/'blobs')
-    db.migrate();auth=LocalAuth(data);config=ConfigService(db)
+    db.migrate();auth=LocalAuth(data);config=ConfigService(db);artifact_workspace=ArtifactWorkspace(db,config)
     if engine is None:
         from .engine import Engine
         engine=Engine(db,model_service or ModelService(db),config)
@@ -66,6 +67,7 @@ def create_app(store=None,engine=None,model_service=None,data_dir=None):
         if store is None: db.close()
     app=FastAPI(title='Nexo 分支 Agent',version='0.1.0',lifespan=lifespan)
     app.state.store=db;app.state.engine=engine;app.state.config=config;app.state.auth=auth
+    app.state.artifact_workspace=artifact_workspace
     release_hash=hashlib.sha256()
     for path in sorted((ROOT/'branch_agent').rglob('*')):
         if path.is_file() and (path.suffix=='.py' or path.parent.name=='static'):
@@ -201,6 +203,7 @@ def create_app(store=None,engine=None,model_service=None,data_dir=None):
                 if old['sha256']!=digest(body):raise HTTPException(409,'幂等键冲突')
                 return old['result']
             row=db.put(new_record('project',None,id=project_id,title=title,owner_account_id=user['account_id']))
+            artifact_workspace.seed_project(row['id'],user['account_id'])
             db.projection_put(identity,{'project_id':row['id'],'sha256':digest(body),'result':row})
         return row
     @app.get(BASE+'/projects/{p}')
@@ -529,6 +532,25 @@ def create_app(store=None,engine=None,model_service=None,data_dir=None):
         reader=ReadTools(db,p,config.values(p)[0]);row,content=reader.resolve(body['ref'])
         if not row:raise HTTPException(404,'固定引用不存在')
         return public({'ref':body['ref'],'resolved_record_id':row['id'],'record':row,'content':content})
+    @app.get(BASE+'/artifact-defaults')
+    async def get_artifact_defaults(request:Request):
+        user=auth.identity(request)
+        return public(artifact_workspace.defaults_view(user['account_id']))
+    @app.put(BASE+'/artifact-defaults')
+    async def put_artifact_defaults(request:Request):
+        user=auth.identity(request,True);body=await json_body(request)
+        return public(artifact_workspace.save_defaults(user['account_id'],body))
+    @app.get(BASE+'/projects/{p}/artifacts')
+    async def list_project_artifacts(request:Request,p:str,kinds:str=''):
+        access(request,p)
+        selected=tuple(x.strip() for x in kinds.split(',') if x.strip())
+        return public(artifact_workspace.items(p,selected))
+    @app.put(BASE+'/projects/{p}/artifacts/{kind}')
+    async def put_project_artifact(request:Request,p:str,kind:str):
+        access(request,p,True);body=await json_body(request)
+        if set(body)!={'content','expected_version'}:
+            raise HTTPException(400,'请提交 content 和 expected_version')
+        return public(artifact_workspace.save_project(p,kind,body['content'],body['expected_version']))
     @app.get(BASE+'/projects/{p}/artifacts/{artifact_id}/versions')
     async def versions(request:Request,p:str,artifact_id:str):
         access(request,p);return {'items':public(list(records_iter(p,'artifact_version',filters={'artifact_id':artifact_id})))}
@@ -559,12 +581,15 @@ def create_app(store=None,engine=None,model_service=None,data_dir=None):
     async def preview_account_instructions(request:Request):
         auth.identity(request);body=await json_body(request)
         values,stage=body.get('values'),body.get('stage')
+        step1_mode=body.get('step1_mode','full')
+        step1_view=body.get('step1_view')
         if not isinstance(values,dict) or not isinstance(stage,str) or stage not in (
                 'coordinator',*[f'step{i}' for i in range(1,12)],
-                'aux.summary','aux.history_answer','aux.subtask'):
+                'aux.summary','aux.history_answer','aux.subtask') or step1_mode not in ('full','window') or (
+                step1_view is not None and (stage!='step1' or step1_view not in ('global','character'))):
             raise HTTPException(400,'预览需要有效的配置与阶段')
         from .prompts import instructions_preview
-        return public(instructions_preview(stage,values))
+        return public(instructions_preview(stage,values,step1_mode=step1_mode,step1_view=step1_view))
     @app.get(BASE+'/account/config/editor')
     async def get_account_config_editor(request:Request,scope_kind:str='project',scope_key:str|None=None):
         user=auth.identity(request)

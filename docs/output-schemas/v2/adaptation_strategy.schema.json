@@ -14,10 +14,16 @@
           "type": "object",
           "properties": {
             "source_global_analysis_ref": {
-              "$ref": "#/$defs/EvidenceRef"
+              "anyOf": [
+                {"$ref": "#/$defs/EvidenceRef"},
+                {"type": "null"}
+              ]
             },
             "source_character_analysis_ref": {
-              "$ref": "#/$defs/EvidenceRef"
+              "anyOf": [
+                {"$ref": "#/$defs/EvidenceRef"},
+                {"type": "null"}
+              ]
             },
             "player_identity": {
               "type": "object",
