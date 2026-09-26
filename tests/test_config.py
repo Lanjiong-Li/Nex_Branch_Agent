@@ -32,6 +32,57 @@ def test_auxiliary_overrides_are_frozen_with_parent_snapshot(runtime):
     assert any(v['id']==draft['id'] for v in service.view(pid)['versions'])
 
 
+def test_summary_uses_its_own_agent_and_auxiliary_assignment_selects_profile(runtime):
+    store,task,_,_,_=runtime;pid=task['project_id'];service=ConfigService(store)
+    baseline=service.resolve(pid,'coordinator')
+    original=baseline['values']['auxiliary_configs']['aux.summary']
+    assert stage_agent('aux.summary',original)=='context_summarizer'
+    assert '整理便于原 Session 继续工作的简洁摘要' in instruction_parts('aux.summary',original)['creative_agent']
+    assert '与用户讨论改编目标' not in instructions('aux.summary',original)
+
+    profile=service.draft(pid,{'model':{'reasoning_effort':'low'},
+        'prompts':{'harness':{'agents':{'source_global_parser':'摘要专用归档规则'}}}},
+        scope_kind='agent',scope_key='source_global_parser')
+    service.publish(pid,profile['id'])
+    assignment=service.draft(pid,{'prompts':{'layout_version':3,
+        'stage_agents':{'aux.summary':'source_global_parser'}}},
+        scope_kind='auxiliary',scope_key='aux.summary')
+    service.publish(pid,assignment['id'])
+
+    fresh=service.resolve(pid,'coordinator')['values']['auxiliary_configs']['aux.summary']
+    assert stage_agent('aux.summary',fresh)=='source_global_parser'
+    assert fresh['model']['reasoning_effort']=='low'
+    assert '摘要专用归档规则' in instructions('aux.summary',fresh)
+    assert service.view(pid,'aux.summary')['selected_agent']=='source_global_parser'
+    assert baseline['values']['auxiliary_configs']['aux.summary']==original
+
+
+def test_summary_layout_upgrade_changes_only_the_old_default_binding(runtime):
+    store,task,_,_,_=runtime;pid=task['project_id'];service=ConfigService(store)
+    old={'prompts':{'layout_version':2,'stage_agents':{
+        'aux.summary':'conversation_coordinator','step5':'interaction_architect'}}}
+    upgraded=legacy_prompt_overrides(old)
+    assert old['prompts']['stage_agents']['aux.summary']=='conversation_coordinator'
+    assert upgraded['prompts']['layout_version']==3
+    assert upgraded['prompts']['stage_agents']=={
+        'aux.summary':'context_summarizer','step5':'interaction_architect'}
+    legacy=service.draft(pid,old)
+    service.publish(pid,legacy['id'])
+    assert stage_agent('aux.summary',service.resolve(pid,'aux.summary')['values'])=='context_summarizer'
+
+    custom=service.draft(pid,{'prompts':{'layout_version':2,
+        'stage_agents':{'aux.summary':'source_global_parser'}}},
+        scope_kind='auxiliary',scope_key='aux.summary')
+    service.publish(pid,custom['id'])
+    assert stage_agent('aux.summary',service.resolve(pid,'aux.summary')['values'])=='source_global_parser'
+
+    modern=service.draft(pid,{'prompts':{'layout_version':3,
+        'stage_agents':{'aux.summary':'conversation_coordinator'}}},
+        scope_kind='auxiliary',scope_key='aux.summary')
+    service.publish(pid,modern['id'])
+    assert stage_agent('aux.summary',service.resolve(pid,'aux.summary')['values'])=='conversation_coordinator'
+
+
 def test_config_version_assignment_uses_database_max_in_scope(runtime):
     store,task,_,_,_=runtime;pid=task['project_id'];service=ConfigService(store)
     account=store.get(pid,pid)['owner_account_id'];service.values(pid)

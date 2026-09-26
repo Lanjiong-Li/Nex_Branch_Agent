@@ -12,6 +12,7 @@ import uuid
 from .context import BudgetExceeded, input_budget, tokens, unwrap
 from .records import new_record, now_utc
 from .schemas import digest
+from .prompts import stage_agent
 
 
 def event(store, project, name, payload, task=None, run=None, conversation=None):
@@ -253,7 +254,7 @@ async def compact_session(service, persistent, stage, config, instructions, tool
                         resolved_from_ids=[persistent.run['config_version_id']]))
                     session=store.put(new_record('work_session',pid,conversation_id=parent['conversation_id'],
                         session_key=f'summary:{child["id"]}:{suffix}',scope=parent['scope']))
-                    run=store.put(new_record('run',pid,task_id=child['id'],agent_key='context_summarizer',session_id=session['id'],
+                    run=store.put(new_record('run',pid,task_id=child['id'],agent_key=stage_agent('aux.summary',cfg),session_id=session['id'],
                         config_version_id=snapshot['id'],state='running',started_at=now_utc(),max_turns=cfg['run']['max_turns']))
                     live=store.get(child['id'],pid);live['current_run_id']=run['id'];store.update(live,live['row_version'])
                     if repair_key:

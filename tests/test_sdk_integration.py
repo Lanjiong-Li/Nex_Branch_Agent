@@ -252,6 +252,7 @@ async def test_sdk_compaction_is_audited_auxiliary_run(runtime):
         response=provider_response()
         if summary:
             assert output_format.get('type')!='json_schema'
+            assert not data.get('tools')
             response['output'][0]['content'][0]['text']='已讨论人物动机；尚无新增确认。'
         return httpx.Response(200,json=response)
     client=AsyncOpenAI(api_key='local-mock',http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),max_retries=0)
@@ -260,6 +261,8 @@ async def test_sdk_compaction_is_audited_auxiliary_run(runtime):
     assert store.get(session['id'],task['project_id'])['generation']==2
     children=[t for t in store.list(task['project_id'],'task') if t['parent_task_id']==task['id']]
     assert len(children)==1 and children[0]['budget_root_task_id']==task['budget_root_task_id']
+    summary_runs=[r for r in store.list(task['project_id'],'run') if r['task_id']==children[0]['id']]
+    assert len(summary_runs)==1 and summary_runs[0]['agent_key']=='context_summarizer'
     assert len(store.list(task['project_id'],'model_call'))==2
     await client.close()
 

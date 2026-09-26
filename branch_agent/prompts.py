@@ -19,6 +19,7 @@ AGENTS = {
 }
 AGENT_NAMES = {
  'conversation_coordinator': '对话协调 Agent',
+ 'context_summarizer': '上下文摘要 Agent',
  'source_parser': '原作切片 Agent',
  'source_global_parser': '作品事件视图 Agent',
  'source_character_parser': '主要人物事件视图 Agent',
@@ -32,7 +33,7 @@ AGENT_NAMES = {
 STAGE_AGENT = {'coordinator': 'conversation_coordinator', 'aux.history_answer': 'conversation_coordinator',
  'step1': 'source_parser', 'step2': 'source_knowledge_analyst', **{f'step{i}': 'adaptation_planner' for i in range(3,5)},
  **{f'step{i}': 'interaction_architect' for i in range(5,9)}, 'step9':'chapter_designer',
- 'step10':'chapter_writer','step11':'validation_agent', 'aux.summary':'conversation_coordinator',
+ 'step10':'chapter_writer','step11':'validation_agent', 'aux.summary':'context_summarizer',
  'aux.subtask':'conversation_coordinator'}
 STEP1_VIEW_AGENTS = {'global':'source_global_parser', 'character':'source_character_parser'}
 STAGES = {
@@ -62,6 +63,7 @@ BASE = ('使用中文，与用户共同把线性原作改编为互动剧本。�
         '区分原作事实、用户确认和创作建议；人物所知信息与世界规则保持一致。')
 AGENTS = {
  'conversation_coordinator': '与用户讨论改编目标和创作取舍，清楚说明已形成的候选、待决定的问题和实际进度。',
+ 'context_summarizer': '根据本次提供的真实会话归档，整理便于原 Session 继续工作的简洁摘要。保留用户请求、已发生的决定和进度、工具结果与未完成事项；区分候选、确认与实际完成状态，不新增事实。',
  'source_parser': '识别完整的全局事件与主要人物事件，准确把握事件边界、人物行动和因果关系。',
  'source_global_parser': '沿原作顺序切分完整的作品事件，在确认事件边界的同时分析事件内容、因果和叙事作用；完整阅读原作后归纳故事前提、世界规则、主题、核心冲突与保留建议。只负责作品事件视图及其分析。',
  'source_character_parser': '独立阅读固定原作，整理主要人物各自的事件链、行动与认知变化。只输出人物事件视图，不输出独立分析，也不为每条人物事件编造原文位置。',
@@ -97,6 +99,7 @@ HARNESS_BASE = '''你是 Nexo 互动剧本创作系统的一名 Agent。只执�
 不输出私有思维链；解释时只提供简短结论与依据。'''
 HARNESS_AGENTS = {
  'conversation_coordinator': '负责主对话和阶段调度。用户授权改编时调用 Harness 工具；用户提交完整原作时要求 Harness 原样保存，不自行转写，已有可用原作则使用有效版本。以工具回执、任务状态和固定版本为进度依据。Step1 两路生成三份独立产物，Step2 生成一份知识资产并请求用户一次确认；Step2–10 候选就绪后主动调用 ask_user 请求用户确认，确认前不进入下游；用户要求修改时建立新稿。不得代用户确认或跳过必要条件。章节计划先展示并等待确认；历史问题先检索原始来源。',
+ 'context_summarizer': '只概括本次提供的旧 Session 归档；摘要仅供后续工作参考，不改变任务、产物或用户确认状态。不得把工具执行结果当成用户请求已经完成。',
  'source_parser': '仅处理 Harness 固定的原作范围。全文模式读取完整原作；窗口模式只处理当前窗口和指定视图。全局事件以 UTF-16 source_anchors 指向固定原作；人物事件不提供逐事件原文锚点。',
  'source_global_parser': '仅处理 Harness 固定的原作范围和作品事件视图。事件以稳定 ID 与绝对 UTF-16 source_anchors 指向固定原作，跨场次事件保持完整。每次结构化输出同时填写顶层非空 analysis；窗口分析累计前一窗口已校验的分析，仅涵盖当前已提交前缀，不提前声称读完原作。最后一个窗口完成全本结论。不得生成人物事件视图。',
  'source_character_parser': '仅处理 Harness 固定的原作范围和主要人物事件视图。直接阅读原文，保持稳定人物 ID 与事件 ID；跨窗口沿用 Harness 提供的既有人物 ID，不重复输出前窗已完成事件。不生成逐人物事件原文锚点，也不输出顶层 analysis。窗口模式独立报告已检查的连续原文前缀，无主要人物事件的区间须在 notes 具体说明。不得生成作品事件视图。',
@@ -186,7 +189,17 @@ def legacy_prompt_overrides(values):
     from copy import deepcopy
     upgraded = deepcopy(values)
     p = upgraded.get('prompts')
-    if not isinstance(p, dict) or p.get('layout_version') == 2:
+    if not isinstance(p, dict):
+        return upgraded
+    if p.get('layout_version') == 2:
+        # Layout 2 used the coordinator as the default summary role. Migrate
+        # that default binding while retaining every other explicit choice.
+        assignments = p.get('stage_agents')
+        if isinstance(assignments, dict) and assignments.get('aux.summary') == 'conversation_coordinator':
+            assignments['aux.summary'] = 'context_summarizer'
+        p['layout_version'] = 3
+        return upgraded
+    if p.get('layout_version') == 3:
         return upgraded
     harness = p.setdefault('harness', {})
     if p.get('validation') or p.get('agent'):
@@ -212,6 +225,7 @@ def legacy_prompt_overrides(values):
     for field, legacy_field in (('agent', 'legacy_agent'), ('stage', 'legacy_stage')):
         if field in p:
             harness[legacy_field] = p.pop(field)
+    p['layout_version'] = 3
     return upgraded
 
 def defaults():
@@ -219,7 +233,7 @@ def defaults():
             'agent_names':AGENT_NAMES, 'stage_agents':STAGE_AGENT,
             'step1_view_agents':STEP1_VIEW_AGENTS,
             'summary':STAGES['aux.summary'], 'history_answer':STAGES['aux.history_answer'],
-            'validation':'', 'validation_enabled':False, 'layout_version':2,
+            'validation':'', 'validation_enabled':False, 'layout_version':3,
             'harness':{'base':HARNESS_BASE, 'agents':HARNESS_AGENTS,
                        'stages':HARNESS_STAGES, 'runtime':{},
                        'manager':MANAGER_PROTOCOL, 'ask_user':ASK_USER_PROTOCOL,

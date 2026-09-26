@@ -588,11 +588,12 @@ class ConfigService:
             return max(matching,key=lambda r:r['version']) if matching else None
         project_row=latest('project',None)
         stage_row=latest('stage',stage)
+        auxiliary_row=latest('auxiliary',stage)
         # The selected Agent is data, not a hard-coded workflow property.  A
-        # stage override participates in selection before its ordinary values
-        # are applied after the Agent profile.
+        # stage or auxiliary override participates in selection before its
+        # ordinary values are applied after the Agent profile.
         selector=deepcopy(data)
-        for row in (project_row,stage_row):
+        for row in (project_row,stage_row,auxiliary_row):
             if row:
                 value=legacy_prompt_overrides(self._upgrade_context_overrides(row['values']))
                 value.pop('schemas',None)
@@ -600,7 +601,7 @@ class ConfigService:
         selected_agent=agent_key or (step1_agent('global',selector) if stage=='step1' else stage_agent(stage,selector))
         if selected_agent not in selector.get('prompts',{}).get('agents',{}):
             raise ValueError('选择的 Agent 不存在')
-        for chosen in (project_row,latest('agent',selected_agent),stage_row,latest('auxiliary',stage)):
+        for chosen in (project_row,latest('agent',selected_agent),stage_row,auxiliary_row):
             if chosen:
                 ids.append(chosen['id'])
                 v=legacy_prompt_overrides(self._upgrade_context_overrides(chosen['values']))
@@ -616,10 +617,11 @@ class ConfigService:
         # switches so every new Run receives the registered tools.
         data['tools']['enabled']=list(READ_TOOL_NAMES)
         data['tools']['ask_user_enabled']=True
-        if stage=='step1':
+        if stage in ('step1','aux.summary'):
             # Each branch snapshot must resolve its own Agent profile and
-            # instructions while preserving the two configured assignments.
-            data['prompts']['stage_agents']['step1']=selected_agent
+            # instructions. A summary Run must likewise use the Agent profile
+            # selected before the auxiliary override's ordinary values merge.
+            data['prompts']['stage_agents'][stage]=selected_agent
         data['schemas']=schemas
         return data,list(dict.fromkeys(ids))
 

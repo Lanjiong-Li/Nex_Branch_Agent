@@ -734,8 +734,8 @@ class ModelService:
         output=None if plain_text else self.catalog.output_type(
             schema_id,config.get('schemas'),strict=provider!='deepseek')
         # Tool availability follows the selected Agent's resolved profile.
-        # Internal compaction remains tool-free because it is not a user
-        # configurable business stage.
+        # Internal compaction remains tool-free even when its Agent profile is
+        # configured by the user.
         tools=[] if stage=='aux.summary' else ReadTools(self.store,task['project_id'],config).functions()
         if extra_tools:
             tools.extend(extra_tools)

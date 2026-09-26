@@ -338,6 +338,41 @@ def test_unsaved_instruction_layers_have_server_preview_without_publication(api)
     assert '也不输出 analysis' in window_preview.json()['final']
 
 
+def test_summary_agent_configuration_preview_and_publication(api):
+    client, _, _ = api
+    project = client.post(BASE+'/projects', json={'title':'摘要配置验证'}).json()['id']
+    current = client.get(BASE+'/account/config?stage=aux.summary')
+    assert current.status_code == 200, current.text
+    assert current.json()['selected_agent'] == 'context_summarizer'
+
+    values = deepcopy(current.json()['values'])
+    values['prompts']['summary'] = '只归纳已发生的对话与待办。'
+    values['summary']['target_tokens'] = 900
+    preview = client.post(BASE+'/account/config/instructions-preview', json={
+        'stage':'aux.summary', 'values':values})
+    assert preview.status_code == 200, preview.text
+    assert preview.json()['parts']['creative_stage'] == values['prompts']['summary']
+    assert '只归纳已发生的对话与待办' in preview.json()['final']
+    checked = client.post(BASE+'/account/config/validate', json={
+        'stage':'aux.summary', 'values':values, 'schemas':current.json()['schemas']})
+    assert checked.status_code == 200, checked.text
+    assert checked.json()['enabled'] is False
+
+    client.headers['Idempotency-Key'] = str(uuid.uuid4())
+    draft = client.post(BASE+'/account/config', json={
+        'scope_kind':'auxiliary', 'scope_key':'aux.summary',
+        'values':{'prompts':{'layout_version':3,'summary':values['prompts']['summary']},
+                  'summary':{'target_tokens':900}}})
+    assert draft.status_code == 200, draft.text
+    client.headers['Idempotency-Key'] = str(uuid.uuid4())
+    published = client.post(BASE+f'/account/config/{draft.json()["id"]}/publish', json={})
+    assert published.status_code == 200, published.text
+    summary = client.app.state.config.resolve(project, 'coordinator')['values']['auxiliary_configs']['aux.summary']
+    assert summary['summary']['target_tokens'] == 900
+    assert summary['prompts']['summary'] == values['prompts']['summary']
+    assert summary['prompts']['stage_agents']['aux.summary'] == 'context_summarizer'
+
+
 def test_account_editor_autosave_keeps_incomplete_schema_without_publishing(api):
     client,store,identity=api
     original=client.get(BASE+'/account/config?stage=step5').json()

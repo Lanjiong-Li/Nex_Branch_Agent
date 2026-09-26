@@ -132,6 +132,21 @@ async def test_compaction_preserves_archives_and_recent_complete_tool_chain(runt
 
 
 @pytest.mark.asyncio
+async def test_summary_run_records_its_configured_agent_key(runtime):
+    store,task,run,row,cfg=runtime;pid=task['project_id']
+    cfg['context'].update(recent_turns=1,history_token_cap=100)
+    cfg['auxiliary_configs']['aux.summary']['prompts']['stage_agents']['aux.summary']='source_global_parser'
+    session=PersistentSession(store,row,task,run)
+    await session.add_items([{'role':'user','content':'早期真实讨论。'*500},
+                             {'role':'assistant','content':'保留未完成的问题。'*250},
+                             {'role':'user','content':'继续'}])
+    await compact_session(SummaryModel(store),session,'coordinator',cfg,'instructions',[],
+        SchemaCatalog().output_type('coordinator_response'),'继续')
+    summary_runs=[r for r in store.list(pid,'run') if r['task_id']!=task['id']]
+    assert summary_runs and {r['agent_key'] for r in summary_runs}=={'source_global_parser'}
+
+
+@pytest.mark.asyncio
 async def test_invalid_summary_keeps_original_generation(runtime):
     store,task,run,row,cfg=runtime;cfg['context'].update(recent_turns=1,history_token_cap=100)
     session=PersistentSession(store,row,task,run)
