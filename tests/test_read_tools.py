@@ -13,6 +13,7 @@ from branch_agent.context import tokens
 from branch_agent.model_service import ReadTools
 from branch_agent.records import new_record
 from branch_agent.storage import Store
+from branch_agent.workflow import Workflow, ref
 
 
 @pytest.fixture
@@ -45,6 +46,105 @@ async def invoke(reader, name='list_records', **arguments):
     raw = json.dumps(arguments)
     context = ToolContext(context=None, tool_name=name, tool_call_id='test-read-call', tool_arguments=raw)
     return await tool.on_invoke_tool(context, raw)
+
+
+def source_event_case(store, project, original, *, title='相遇', event_id='GEV-1', quotes=None):
+    workflow = Workflow(store)
+    with store.transaction():
+        source = workflow.save(project, 'source_text', original, effective=True)
+    source_ref = ref(source)
+    quotes = quotes or [original]
+    anchors = []
+    for quote in quotes:
+        position = original.index(quote)
+        start = len(original[:position].encode('utf-16-le')) // 2
+        end = start + len(quote.encode('utf-16-le')) // 2
+        anchors.append({'source_ref': source_ref, 'start_utf16': start, 'end_utf16': end,
+                        'exact_quote': quote, 'prefix': None, 'suffix': None})
+    output = {'result_kind': 'ready', 'payload': {
+        'source_ref': source_ref,
+        'global_events': [{'event_id': event_id, 'title': title, 'summary': '事件概要',
+                           'narrative_order': 1, 'story_time': None, 'character_ids': [],
+                           'source_anchors': anchors}],
+        'covered_source_anchors': anchors, 'remaining_source_anchors': []},
+        'questions': [], 'evidence_refs': [source_ref], 'notes': []}
+    with store.transaction():
+        view = workflow.save(project, 'source_global_events', output, stage=1,
+                             inputs=[source_ref], effective=True)
+    return workflow, source, view
+
+
+@pytest.mark.asyncio
+async def test_show_event_source_presents_markdown_outside_model_tool_result(read_case):
+    store, pid, _, config, _ = read_case
+    workflow, source, view = source_event_case(store, pid, '前文。甲🌍乙。后文。',
+                                              quotes=['甲🌍乙。', '后文。'])
+    presented = []
+    reader = ReadTools(store, pid, config, present_event_source=lambda markdown, metadata:
+        (presented.append((markdown, metadata)) or {'message_id': 'visible-message'}))
+    assert 'show_event_source' in {tool.name for tool in reader.functions()}
+    assert 'show_event_source' not in {tool.name for tool in ReadTools(store, pid, config).functions()}
+    receipt = json.loads(await invoke(reader, 'show_event_source', event_query='相遇'))
+    assert receipt['status'] == 'ok' and receipt['message_id'] == 'visible-message'
+    assert receipt['event_ref']['record_id'] == view['artifact_id']
+    assert receipt['source_ref'] == ref(source)
+    assert '甲🌍乙。' not in json.dumps(receipt, ensure_ascii=False)
+    markdown, metadata = presented[0]
+    assert '甲🌍乙。' in markdown and '后文。' in markdown
+    assert 'UTF-16 [3, 8)' in markdown
+    assert metadata['event_id'] == 'GEV-1'
+    workflow.save(pid, 'source_text', '被替换的新原作。', effective=True)
+    old = reader.event_source_page('GEV-1', view['artifact_id'], '1')
+    assert '甲🌍乙。' in old['markdown']
+    assert '被替换' not in old['markdown']
+
+
+@pytest.mark.asyncio
+async def test_show_event_source_paging_and_title_ambiguity(read_case):
+    store, pid, _, config, _ = read_case
+    _, _, view = source_event_case(store, pid, '🌍甲乙丙丁戊己。后段。',
+                                   quotes=['🌍甲乙丙丁戊己。', '后段。'])
+    presented = []
+    reader = ReadTools(store, pid, config, present_event_source=lambda markdown, metadata:
+        (presented.append((markdown, metadata)) or {'message_id': str(len(presented))}))
+    reader.SOURCE_EXCERPT_PAGE_CODEPOINTS = 4
+    first = json.loads(await invoke(reader, 'show_event_source', event_query='GEV-1'))
+    assert first['excerpt_codepoints'] == 4 and first['next_cursor'] == '0:4'
+    assert '🌍甲乙丙' in presented[0][0]
+    second = json.loads(await invoke(reader, 'show_event_source', event_query='相遇',
+                                     artifact_id=view['artifact_id'], version='1',
+                                     cursor=first['next_cursor']))
+    assert second['next_cursor'] == '1:0'
+    assert 'UTF-16 [5, 9)' in presented[1][0]
+    invalid = await invoke(reader, 'show_event_source', event_query='相遇', cursor=first['next_cursor'])
+    assert '续页必须使用' in invalid
+
+    value = store.get(view['id'], pid)['content']['value']
+    value['payload']['global_events'].append({**value['payload']['global_events'][0],
+                                             'event_id': 'GEV-2', 'title': '再次相遇'})
+    with store.transaction():
+        revised = Workflow(store).save(pid, 'source_global_events', value, stage=1,
+                                       inputs=[value['payload']['source_ref']], effective=True)
+    assert revised['version'] == 2
+    ambiguous = json.loads(await invoke(reader, 'show_event_source', event_query='遇'))
+    assert ambiguous['status'] == 'ambiguous_event'
+    assert {item['event_id'] for item in ambiguous['candidates']} == {'GEV-1', 'GEV-2'}
+    assert len(presented) == 2
+    selected = json.loads(await invoke(reader, 'show_event_source', event_query='GEV-1'))
+    assert selected['status'] == 'ok' and selected['event_id'] == 'GEV-1'
+    assert len(presented) == 3
+    missing = json.loads(await invoke(reader, 'show_event_source', event_query='不存在的事件'))
+    assert missing['status'] == 'event_not_found'
+
+
+def test_show_event_source_keeps_original_markdown_literal(read_case):
+    store, pid, _, config, _ = read_case
+    original = '# 第一章\n```\n**原作里的星号**\n````'
+    source_event_case(store, pid, original)
+    reader = ReadTools(store, pid, config)
+    page = reader.event_source_page('GEV-1')
+    assert page['status'] == 'ok'
+    assert '\n`````\n' + original + '\n`````' in page['markdown']
 
 
 @pytest.mark.asyncio
@@ -252,6 +352,8 @@ async def test_list_records_discovers_artifacts_and_read_record_resolves_effecti
     assert item['artifact_kind']=='adaptation_plan'
     assert item['record_ref']['record_id']==artifact['id']
     assert item['latest_version']==2 and item['current_effective_version']==1
+    assert item['markdown_download_url'].endswith(f'/artifacts/{artifact["id"]}/versions/2/download.md')
+    assert item['effective_markdown_download_url'].endswith(f'/artifacts/{artifact["id"]}/versions/1/download.md')
     assert item['confirmation_status']=='unconfirmed'
     assert item['scope']['stage']==4
     assert '未确认新稿' not in json.dumps(listing,ensure_ascii=False)

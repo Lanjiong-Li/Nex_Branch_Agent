@@ -18,6 +18,18 @@ def _json(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True)
 
 
+def _markdown_download_url(project, fixed_ref):
+    if not fixed_ref:
+        return None
+    return (f"/api/branch-agent/v1/projects/{project}/artifacts/{fixed_ref['record_id']}"
+            f"/versions/{fixed_ref['version']}/download.md")
+
+
+def _markdown_download_urls(project, fixed_refs):
+    return {kind: _markdown_download_url(project, fixed_ref)
+            for kind, fixed_ref in fixed_refs.items()}
+
+
 def manager_state(engine, project, conversation):
     """Compact factual state for routing; the model never invents record IDs."""
     tasks = all_records(engine.store, project, "task", conversation_id=conversation)
@@ -153,7 +165,7 @@ def build_manager_tools(engine, coordinator_task, coordinator_run, source_messag
 
     @function_tool(failure_error_function=None)
     async def run_stage(stage: int, chapter_id: str | None = None) -> str:
-        """Run one eligible specialist Agent, then return its saved status to the manager."""
+        """Run one eligible specialist Agent; return saved references and fixed Markdown download links."""
         if stage < 1 or stage > 11:
             raise WorkflowBlocked("invalid_manager_stage")
         # A provider may ignore parallel_tool_calls=False. Serialize dispatch and
@@ -187,7 +199,9 @@ def build_manager_tools(engine, coordinator_task, coordinator_run, source_messag
                 return _json({"status": "candidate_ready", "stage": candidate_data["stage"],
                               "chapter_id": candidate_data.get("chapter_id"), "task_id": candidate["id"],
                               "artifact_ref": candidate_data.get("result_ref"),
-                              "artifact_refs": candidate_data.get("result_refs", {})})
+                              "artifact_refs": candidate_data.get("result_refs", {}),
+                              "markdown_download_url": _markdown_download_url(project, candidate_data.get("result_ref")),
+                              "markdown_download_urls": _markdown_download_urls(project, candidate_data.get("result_refs", {}))})
             matching = [task for task in children if engine._task_data(task).get("stage") == stage
                         and engine._task_data(task).get("chapter_id") == chapter_id]
             matching.sort(key=lambda task: task["created_at"])
@@ -241,6 +255,8 @@ def build_manager_tools(engine, coordinator_task, coordinator_run, source_messag
                           "stage": stage, "chapter_id": chapter_id,
                           "task_id": child["id"], "artifact_ref": data.get("result_ref"),
                           "artifact_refs": data.get("result_refs", {}),
+                          "markdown_download_url": _markdown_download_url(project, data.get("result_ref")),
+                          "markdown_download_urls": _markdown_download_urls(project, data.get("result_refs", {})),
                           "pending_item_ids": open_items,
                           "reason": "stage_waiting_without_pending_item" if status == "prerequisite_pending" else None,
                           "pause_reason": child.get("pause_reason")})

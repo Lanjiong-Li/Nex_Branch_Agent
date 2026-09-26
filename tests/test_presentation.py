@@ -1,4 +1,4 @@
-from branch_agent.presentation import stage_result_text
+from branch_agent.presentation import artifact_to_markdown, stage_result_text
 
 
 def test_stage_result_is_presented_as_readable_prose_without_json_envelope():
@@ -35,6 +35,8 @@ def test_stage_result_is_presented_as_readable_prose_without_json_envelope():
     assert '"result_kind"' not in text
     assert '"payload"' not in text
     assert "{" not in text
+    assert text.startswith("# Step 2 · 原作知识资产（v3）")
+    assert "## 世界规则" in text
 
 
 def test_chapter_graph_presentation_contains_model_written_story_and_choices():
@@ -67,3 +69,24 @@ def test_chapter_graph_presentation_contains_model_written_story_and_choices():
     assert "立即回信" in text
     assert "暴露自己的位置" in text
     assert '"choiceGroups"' not in text
+
+
+def test_step1_markdown_keeps_event_id_but_not_source_anchor_and_escapes_html():
+    result = {"payload": {"global_events": [{"event_id": "EVT-01", "title": "第一次相遇",
+        "summary": "<script>alert(1)</script>",
+        "source_anchors": [{"start_utf16": 0, "end_utf16": 5}]}],
+        "remaining_source_anchors": []}}
+    document = artifact_to_markdown(result, stage=1,
+        artifact_kind="source_global_events", version=2)
+    assert document.startswith("# Step 1 · 作品事件视图（v2）")
+    assert "EVT-01" in document
+    assert "source_anchors" not in document
+    assert "\\<script\\>" in document
+    assert "请确认以上结果" not in document
+
+
+def test_non_envelope_fixed_artifact_is_not_rendered_as_empty_markdown():
+    document = artifact_to_markdown({"chapters": [{"id": "ch-1"}]},
+        artifact_kind="nexo_graph", version=1)
+    assert "```json" in document
+    assert '"ch-1"' in document

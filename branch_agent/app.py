@@ -7,7 +7,6 @@ import json
 import os
 import logging
 import hashlib
-import re
 from datetime import datetime, timezone
 from zipfile import ZipFile
 from urllib.parse import quote
@@ -29,12 +28,11 @@ from .prompts import step1_agent
 from .model_service import ModelService, ReadTools
 from .workflow import WorkflowBlocked
 from .artifact_workspace import ArtifactWorkspace
-from .presentation import stage_result_text
+from .presentation import artifact_to_markdown
 
 BASE='/api/branch-agent/v1'
 MAX_SOURCE_BYTES=10*1024*1024
 LOG=logging.getLogger(__name__)
-LEGACY_STAGE_NOTICE=re.compile(r'^Step(\d+) 已生成草稿 v(\d+)')
 
 
 def public(value):
@@ -246,23 +244,40 @@ def create_app(store=None,engine=None,model_service=None,data_dir=None):
         count=connection.execute("SELECT COUNT(*) AS n FROM history_records WHERE project_id=%s AND conversation_id=%s AND visibility='conversation' AND sequence>%s AND sequence<=%s",(p,c,lower,upper)).fetchone()['n']
         if tail:cursor=max(0,count-limit)
         page=[r['data'] for r in connection.execute("SELECT data FROM history_records WHERE project_id=%s AND conversation_id=%s AND visibility='conversation' AND sequence>%s AND sequence<=%s ORDER BY sequence LIMIT %s OFFSET %s",(p,c,lower,upper,limit,cursor)).fetchall()]
-        legacy={row['id']:LEGACY_STAGE_NOTICE.match(row.get('content',{}).get('text','')) for row in page
-                if row.get('role')=='assistant' and row.get('content',{}).get('storage')=='inline_text'}
-        legacy={identity:match for identity,match in legacy.items() if match and 2<=int(match.group(1))<=10}
-        if legacy:
-            events=connection.execute("SELECT data FROM runtime_events WHERE project_id=%s AND event_name='artifact.presented' AND data->'payload'->>'message_id'=ANY(%s)",
-                (p,list(legacy))).fetchall()
-            by_message={row['data']['payload']['message_id']:row['data']['payload'].get('artifact_ref') for row in events}
-            reader=ReadTools(db,p,config.values(p)[0])
+        if page:
+            ids=[row['id'] for row in page]
+            events=connection.execute(
+                "SELECT data FROM runtime_events WHERE project_id=%s AND event_name=ANY(%s) AND data->'payload'->>'message_id'=ANY(%s)",
+                (p,['artifact.presented','event_source.presented'],ids)).fetchall()
+            presented={event['data']['payload']['message_id']:event['data'] for event in events}
+            projected={}
             for row in page:
-                match=legacy.get(row['id']);target=by_message.get(row['id'])
-                if not match or not target or str(target.get('version'))!=match.group(2):continue
+                event=presented.get(row['id'])
+                if not event:continue
+                if event['event_name']=='event_source.presented':
+                    row['display_format']='markdown'
+                    continue
+                target=event['payload'].get('artifact_ref')
+                if not isinstance(target,dict) or not isinstance(target.get('record_id'),str):
+                    continue
                 try:
-                    _,content=reader.resolve(target)
-                    row['display_text']=stage_result_text(int(match.group(1)),content,
-                        version=int(match.group(2)),confirmation=True)
-                except (KeyError,TypeError,ValueError):
-                    LOG.warning('Could not project legacy stage presentation for message %s',row['id'],exc_info=True)
+                    identity=(target['record_id'],int(target['version']))
+                    if identity not in projected:
+                        artifact=db.get(identity[0],project_id=p)
+                        if not artifact or artifact['record_type']!='artifact':
+                            continue
+                        value=version_content(p,*identity)
+                        stage=artifact_stage(p,artifact,value['version'])
+                        projected[identity]=(artifact_to_markdown(value['content'],stage=stage,
+                            artifact_kind=artifact['artifact_kind'],version=identity[1]),target)
+                    row['display_text']=projected[identity][0]
+                    row['display_format']='markdown'
+                    row['artifact_ref']=target
+                    row['markdown_download_url']=(f"{BASE}/projects/{quote(p,safe='')}/artifacts/"
+                        f"{quote(identity[0],safe='')}/versions/{identity[1]}/download.md")
+                except (HTTPException,KeyError,TypeError,ValueError):
+                    LOG.warning('Could not project artifact presentation for message %s',
+                                row['id'],exc_info=True)
         more=count>cursor+limit
         return {'items':public(page),'next_cursor':str(cursor+limit) if more else None,'has_more':more,
             'start_cursor':cursor,'previous_cursor':str(max(0,cursor-limit)) if cursor>0 else None}
@@ -584,10 +599,34 @@ def create_app(store=None,engine=None,model_service=None,data_dir=None):
         if not row:raise HTTPException(404,'产物版本不存在')
         states=db.list(p,'artifact_state',limit=1,filters={'artifact_version_id':row['id']})
         return {'version':row,'state':states[0] if states else None,'content':content}
+    def artifact_stage(p,artifact,version):
+        run_id=version.get('producer_run_id')
+        if run_id:
+            run=db.get(run_id,project_id=p)
+            task=db.get(run['task_id'],project_id=p) if run and run.get('task_id') else None
+            stage=(task or {}).get('scope',{}).get('stage')
+            if isinstance(stage,int):return stage
+        stage=artifact.get('scope',{}).get('stage')
+        return stage if isinstance(stage,int) else None
     @app.get(BASE+'/projects/{p}/artifacts/{artifact_id}/versions/{version}/download')
     async def download(request:Request,p:str,artifact_id:str,version:int):
         access(request,p);value=version_content(p,artifact_id,version)
         return Response(canonical_bytes(value['content']),media_type='application/json',headers={'Content-Disposition':f'attachment; filename="nexo-{artifact_id}-v{version}.json"'})
+    @app.get(BASE+'/projects/{p}/artifacts/{artifact_id}/versions/{version}/download.md')
+    async def download_markdown(request:Request,p:str,artifact_id:str,version:int):
+        access(request,p)
+        artifact=db.get(artifact_id,project_id=p)
+        if not artifact or artifact['record_type']!='artifact':
+            raise HTTPException(404,'产物不存在')
+        value=version_content(p,artifact_id,version)
+        if value['version']['artifact_id']!=artifact_id:
+            raise HTTPException(404,'产物版本不存在')
+        document=artifact_to_markdown(value['content'],
+            stage=artifact_stage(p,artifact,value['version']),
+            artifact_kind=artifact['artifact_kind'],version=version)
+        return Response(document.encode('utf-8'),media_type='text/markdown; charset=utf-8',
+            headers={'Content-Disposition':f'attachment; filename="nexo-{artifact_id}-v{version}.md"',
+                     'X-Content-Type-Options':'nosniff'})
     @app.get(BASE+'/projects/{p}/artifacts/{artifact_id}/versions/{version}')
     async def artifact_version(request:Request,p:str,artifact_id:str,version:int):access(request,p);return public(version_content(p,artifact_id,version))
     @app.get(BASE+'/projects/{p}/config')

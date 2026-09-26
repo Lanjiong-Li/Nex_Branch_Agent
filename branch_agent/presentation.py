@@ -1,11 +1,12 @@
-"""Turn validated model payloads into readable conversation messages.
+"""Project fixed structured artifacts into readable Markdown.
 
-The structured value remains the authoritative artifact.  This module only
-projects the model-authored semantic fields for the conversation UI; audit
-references and raw JSON remain available through runtime data.
+The structured value remains authoritative. The same projection is used by
+the conversation UI and the downloadable .md file; confirmation controls are
+separate from the document.
 """
 from __future__ import annotations
 
+import json
 import re
 
 
@@ -23,6 +24,13 @@ STAGE_TITLES = {
     11: "质量审核",
 }
 
+ARTIFACT_TITLES = {
+    "source_text": "原作全文",
+    "source_global_events": "作品事件视图",
+    "source_global_analysis": "作品事件分析",
+    "source_character_events": "主要人物事件视图",
+}
+
 LABELS = {
     "title": "标题", "name": "名称", "summary": "概要", "description": "说明",
     "premise": "故事前提", "premise_and_scope": "故事前提与改编范围", "logline": "一句话故事",
@@ -38,6 +46,7 @@ LABELS = {
     "world_and_character_changes": "世界与人物调整", "entity_specs": "人物与地点设定",
     "writing_style": "写作风格", "events": "事件", "event_links": "事件关系",
     "global_events": "全局事件", "character_views": "主要人物视角", "aliases": "别名",
+    "event_id": "事件 ID", "character_event_id": "人物事件 ID",
     "involvement": "参与方式", "narrative_order": "叙事顺序", "story_time": "故事时间",
     "event_annotations": "事件功能与玩家意图", "narrative_function": "叙事功能",
     "updates": "事件叙事功能补充", "game_event_id": "事件 ID",
@@ -78,6 +87,8 @@ SKIP_KEYS = {
 
 
 def _technical(key: str) -> bool:
+    if key in {"event_id", "character_event_id", "game_event_id"}:
+        return False
     return (key in SKIP_KEYS or key == "id" or key.endswith("_id") or key.endswith("_ids")
             or key.endswith("_ref") or key.endswith("_refs") or key in {"characterIds", "locationIds", "sceneId"})
 
@@ -107,60 +118,85 @@ def _headline(value: dict):
     return None, None
 
 
-def _render_mapping(value: dict, indent=0, omit=frozenset()) -> list[str]:
-    lines = []
-    pad = "  " * indent
+def _markdown_scalar(value) -> str:
+    """Keep model text literal even when it contains Markdown or HTML syntax."""
+    text = _scalar(value).replace("\\", "\\\\")
+    text = re.sub(r"([*`_\[\]{}()!#|<>])", r"\\\1", text)
+    text = re.sub(r"(?m)^(\s*)([-+])(?=\s)", r"\1\\\2", text)
+    return re.sub(r"(?m)^(\s*)(\d+)\.(?=\s)", r"\1\2\\.", text)
+
+
+def _section(lines: list[str], label: str, depth: int):
+    if lines and lines[-1] != "":
+        lines.append("")
+    lines.extend([f"{'#' * min(depth, 6)} {_markdown_scalar(label)}", ""])
+
+
+def _render_mapping(value: dict, lines: list[str], depth=2, omit=frozenset()):
     for key, item in value.items():
         if key in omit or _technical(key) or _empty(item):
             continue
         label = _label(key)
         if isinstance(item, (str, int, float, bool)):
-            lines.append(f"{pad}{label}：{_scalar(item)}")
+            _section(lines, label, depth)
+            lines.append(_markdown_scalar(item))
         elif isinstance(item, dict):
-            nested = _render_mapping(item, indent + 1)
-            if nested:
-                lines.append(f"{pad}{label}")
-                lines.extend(nested)
+            _section(lines, label, depth)
+            _render_mapping(item, lines, depth + 1)
         elif isinstance(item, list):
             visible = [entry for entry in item if not _empty(entry)]
             if not visible:
                 continue
-            lines.append(f"{pad}{label}")
+            _section(lines, label, depth)
             for index, entry in enumerate(visible, 1):
                 if isinstance(entry, dict):
                     headline_key, headline = _headline(entry)
-                    lines.append(f"{pad}{index}. {headline or ''}".rstrip())
-                    lines.extend(_render_mapping(entry, indent + 1, {headline_key} if headline_key else frozenset()))
+                    _section(lines, f"{index}. {headline or label}", depth + 1)
+                    _render_mapping(entry, lines, depth + 2,
+                                    {headline_key} if headline_key else frozenset())
                 else:
-                    lines.append(f"{pad}{index}. {_scalar(entry)}")
-    return lines
+                    lines.append(f"{index}. {_markdown_scalar(entry)}")
+
+
+def artifact_to_markdown(content: dict | str, *, stage: int | str | None = None,
+                         artifact_kind: str | None = None, version: int | None = None) -> str:
+    """Render one fixed artifact version. This document is independent of chat."""
+    number = int(str(stage).removeprefix("step")) if stage is not None else None
+    title = ARTIFACT_TITLES.get(artifact_kind) or STAGE_TITLES.get(number, "阶段产物")
+    heading = f"Step {number} · {title}" if number is not None else title
+    if version is not None:
+        heading += f"（v{version}）"
+    lines = [f"# {heading}"]
+    if isinstance(content, str):
+        if content.strip():
+            lines.extend(["", content.strip()])
+        return "\n".join(lines).rstrip() + "\n"
+    payload = content.get("payload") if isinstance(content, dict) else None
+    if isinstance(content, dict) and not isinstance(payload, dict):
+        # Generic fixed artifacts such as the final graph have no model
+        # envelope. Preserve every field instead of producing an empty file.
+        lines.extend(["", "```json", json.dumps(content, ensure_ascii=False, indent=2),
+                      "```"])
+        return "\n".join(lines).rstrip() + "\n"
+    if number == 1 and isinstance(payload, dict):
+        remaining = payload.get("remaining_source_anchors")
+        lines.extend(["", "> 处理范围：已通读并覆盖完整原作。" if remaining == []
+                      else "> 处理范围：仍有原作范围需要补充处理。"])
+    if isinstance(payload, dict):
+        _render_mapping(payload, lines)
+    notes = content.get("notes", []) if isinstance(content, dict) else []
+    if notes:
+        _section(lines, "模型说明", 2)
+        for index, note in enumerate(notes, 1):
+            lines.append(f"{index}. {_markdown_scalar(note)}")
+    if len(lines) == 1:
+        lines.extend(["", "该阶段产物已生成并保存。"])
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def stage_result_text(stage: int | str, result: dict | str, *, version: int | None = None,
-                      confirmation: bool = False) -> str:
-    """Render exact semantic model fields without exposing the JSON envelope."""
-    number = int(str(stage).removeprefix("step"))
-    heading = f"Step {number} · {STAGE_TITLES.get(number, '阶段结果')}"
-    if version is not None:
-        heading += f"（v{version}）"
-    lines = [heading]
-    if isinstance(result, str) and result.strip():
-        lines.extend(["", result.strip()])
-        if confirmation:
-            lines.extend(["", "请确认以上结果，或直接提出需要修改的内容。"])
-        return "\n".join(lines)
-    payload = result.get("payload") if isinstance(result, dict) else None
-    if number == 1 and isinstance(payload, dict):
-        remaining = payload.get("remaining_source_anchors")
-        lines.append("处理范围：已通读并覆盖完整原作。" if remaining == [] else "处理范围：仍有原作范围需要补充处理。")
-    if isinstance(payload, dict):
-        lines.extend(["", *_render_mapping(payload)])
-    notes = result.get("notes", []) if isinstance(result, dict) else []
-    if notes:
-        lines.extend(["", "模型说明"])
-        lines.extend(f"{index}. {_scalar(note)}" for index, note in enumerate(notes, 1))
-    if len(lines) <= 2:
-        lines.extend(["", "该阶段产物已生成并保存。"])
-    if confirmation:
-        lines.extend(["", "请确认以上结果，或直接提出需要修改的内容。"])
-    return "\n".join(lines)
+                      confirmation: bool = False, artifact_kind: str | None = None) -> str:
+    """Compatibility entry point for stage presentation and confirmation cards."""
+    document = artifact_to_markdown(result, stage=stage, artifact_kind=artifact_kind,
+                                    version=version).rstrip()
+    return document + ("\n\n请确认以上结果，或直接提出需要修改的内容。" if confirmation else "")

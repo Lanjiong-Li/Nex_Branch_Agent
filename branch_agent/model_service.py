@@ -5,6 +5,7 @@ from copy import deepcopy
 from decimal import Decimal
 import json
 import os
+import re
 import time
 import uuid
 from dataclasses import asdict
@@ -233,7 +234,11 @@ class PersistentSession:
 
 
 class ReadTools:
-    def __init__(self,store,project_id,config): self.store,self.project_id,self.config=store,project_id,config
+    SOURCE_EXCERPT_PAGE_CODEPOINTS = 8000
+
+    def __init__(self,store,project_id,config,*,present_event_source=None):
+        self.store,self.project_id,self.config=store,project_id,config
+        self.present_event_source=present_event_source
     def _record_ref(self,row):
         target=ref(row)
         if row['record_type'] not in ('artifact_version','decision'):target['record_id']=row['id']
@@ -392,6 +397,14 @@ class ReadTools:
                             confirmation_status=status,
                             dependency_status=state['dependency_status'] if state else None,
                             quality_status=state['quality_status'] if state else None)
+                def markdown_url(number):
+                    return (f'/api/branch-agent/v1/projects/{self.project_id}/artifacts/'
+                            f'{row["id"]}/versions/{number}/download.md')
+                if latest:
+                    item['markdown_download_url']=markdown_url(latest)
+                effective=row['current_effective_version']
+                if effective and effective!=latest:
+                    item['effective_markdown_download_url']=markdown_url(effective)
             elif kind=='history_record':
                 item.update({key:row.get(key) for key in ('conversation_id','sequence','role','kind')})
             entries.append(item)
@@ -431,6 +444,126 @@ class ReadTools:
             extra['effective_selections_ref']={**extra['state_ref'],'json_pointer':'/effective_selections'}
             page=self.page(content,target,int(cursor or 0),extra)
         return page
+    def event_source_page(self,event_query,artifact_id=None,version='current_effective',cursor=None):
+        """Resolve a global event and its original text from two fixed versions.
+
+        The Markdown is for a conversation presenter, never a model tool result.
+        """
+        query=event_query.strip() if isinstance(event_query,str) else ''
+        if not query or len(query)>200:
+            raise ValueError('事件查询必须是 1–200 个字符')
+        if version not in ('current_effective','latest_draft') and (not isinstance(version,str) or not version.isdecimal() or int(version)<1):
+            raise ValueError('事件版本必须是 current_effective、latest_draft 或正整数')
+        if cursor is not None and version in ('current_effective','latest_draft'):
+            raise ValueError('续页必须使用上一页返回的固定数字版本')
+        if cursor is not None and not re.fullmatch(r'[0-9]+:[0-9]+',cursor):
+            raise ValueError('原文分页游标无效')
+        if artifact_id:
+            artifact=self.store.get(artifact_id,self.project_id)
+            if not artifact or artifact['record_type']!='artifact' or artifact['artifact_kind']!='source_global_events':
+                return {'status':'artifact_not_found'}
+            artifacts=[artifact]
+        else:
+            artifacts=all_records(self.store,self.project_id,'artifact',{'artifact_kind':'source_global_events'})
+        if not artifacts:
+            return {'status':'artifact_not_found'}
+        if len(artifacts)!=1:
+            return {'status':'ambiguous_artifact','candidates':[row['id'] for row in artifacts[:8]],
+                    'more_candidates':len(artifacts)>8}
+        artifact=artifacts[0]
+        resolved=artifact['current_effective_version'] if version=='current_effective' else (
+            artifact['latest_version'] if version=='latest_draft' else int(version))
+        if resolved is None or resolved<1:
+            return {'status':'no_effective_version' if version=='current_effective' else 'artifact_not_found'}
+        rows=self.store.list(self.project_id,'artifact_version',limit=2,
+                             filters={'artifact_id':artifact['id'],'version':resolved})
+        if len(rows)!=1:
+            return {'status':'artifact_not_found'}
+        event_version=rows[0]
+        value=unwrap(event_version['content'],self.store,self.project_id)
+        payload=value.get('payload') if isinstance(value,dict) else None
+        if not isinstance(payload,dict) or not isinstance(payload.get('global_events'),list):
+            raise ValueError('固定作品事件视图缺少事件列表')
+        events=payload['global_events']
+        query_fold=query.casefold()
+        matches=[event for event in events if event.get('event_id','').casefold()==query_fold]
+        if not matches:
+            matches=[event for event in events if event.get('title','').casefold()==query_fold]
+        if not matches:
+            matches=[event for event in events if query_fold in event.get('title','').casefold()]
+        event_ref={'record_id':artifact['id'],'version':str(resolved),'item_id':None,'json_pointer':None}
+        if not matches:
+            return {'status':'event_not_found','event_ref':event_ref}
+        if len(matches)!=1:
+            return {'status':'ambiguous_event','event_ref':event_ref,
+                    'candidates':[{'event_id':item['event_id'],'title':item['title'][:80]}
+                                  for item in matches[:8]],'more_candidates':len(matches)>8}
+        event=matches[0]
+        source_ref=payload.get('source_ref')
+        if not isinstance(source_ref,dict) or not isinstance(source_ref.get('record_id'),str) or not isinstance(source_ref.get('version'),str):
+            raise ValueError('固定事件视图缺少原作版本引用')
+        source_artifact=self.store.get(source_ref['record_id'],self.project_id)
+        if not source_artifact or source_artifact['record_type']!='artifact' or source_artifact['artifact_kind']!='source_text':
+            raise ValueError('事件视图的原作引用无效')
+        if not source_ref['version'].isdecimal() or int(source_ref['version'])<1:
+            raise ValueError('事件视图的原作版本无效')
+        source_versions=self.store.list(self.project_id,'artifact_version',limit=2,
+            filters={'artifact_id':source_artifact['id'],'version':int(source_ref['version'])})
+        if len(source_versions)!=1:
+            raise ValueError('事件视图引用的固定原作版本不存在')
+        source=unwrap(source_versions[0]['content'],self.store,self.project_id)
+        if not isinstance(source,str):
+            raise ValueError('固定原作不是文本')
+        source_bytes=source.encode('utf-16-le')
+        anchors=event.get('source_anchors')
+        if not isinstance(anchors,list) or not anchors:
+            raise ValueError('事件缺少原文索引')
+        spans=[]
+        for anchor in anchors:
+            if not isinstance(anchor,dict) or not isinstance(anchor.get('source_ref'),dict) or any(
+                anchor['source_ref'].get(key)!=source_ref[key] for key in ('record_id','version')):
+                raise ValueError('事件原文索引引用了不同的原作版本')
+            start,end=anchor.get('start_utf16'),anchor.get('end_utf16')
+            if type(start) is not int or type(end) is not int or not 0<=start<end<=len(source_bytes)//2:
+                raise ValueError('事件原文索引区间无效')
+            try:
+                excerpt=source_bytes[start*2:end*2].decode('utf-16-le')
+            except UnicodeError as error:
+                raise ValueError('事件原文索引截断了 Unicode 字符') from error
+            if anchor.get('exact_quote') is not None and excerpt!=anchor['exact_quote']:
+                raise ValueError('事件原文索引与摘录不一致')
+            spans.append((start,end,excerpt))
+        spans.sort(key=lambda part:(part[0],part[1]))
+        index,position=(map(int,cursor.split(':')) if cursor is not None else (0,0))
+        if index>=len(spans) or position<0 or position>=len(spans[index][2]):
+            raise ValueError('原文分页游标超出事件索引范围')
+        parts=[];remaining=self.SOURCE_EXCERPT_PAGE_CODEPOINTS
+        while index<len(spans) and remaining:
+            start,end,excerpt=spans[index]
+            taken=excerpt[position:position+remaining]
+            part_start=start+len(excerpt[:position].encode('utf-16-le'))//2
+            part_end=part_start+len(taken.encode('utf-16-le'))//2
+            parts.append({'index':index+1,'total':len(spans),'start_utf16':part_start,
+                          'end_utf16':part_end,'text':taken})
+            remaining-=len(taken)
+            position+=len(taken)
+            if position==len(excerpt):
+                index+=1;position=0
+        next_cursor=f'{index}:{position}' if index<len(spans) else None
+        safe_title=re.sub(r'([\\`*_{}\[\]()#+.!|>~-])',r'\\\1',event['title'])
+        lines=[f'### 事件原文：{safe_title}',f'事件 ID：`{event["event_id"]}`',
+               f'原作版本：`{source_ref["record_id"]}` v{source_ref["version"]}']
+        for part in parts:
+            lines.extend(['',f'#### 片段 {part["index"]}/{part["total"]} · UTF-16 [{part["start_utf16"]}, {part["end_utf16"]})',''])
+            longest=max((len(run.group(0)) for run in re.finditer(r'`+',part['text'])),default=0)
+            fence='`'*max(3,longest+1)
+            lines.extend([fence,part['text'],fence])
+        if next_cursor:
+            lines.extend(['','原文未显示完，可继续查看下一页。'])
+        return {'status':'ok','event_id':event['event_id'],'title':event['title'],
+                'event_ref':event_ref,'source_ref':source_ref,'next_cursor':next_cursor,
+                'excerpt_codepoints':sum(len(part['text']) for part in parts),
+                'markdown':'\n'.join(lines)}
     def functions(self):
         @function_tool
         async def read_record(record_id:str|None=None, artifact_kind:str|None=None, version:str|None=None,
@@ -468,6 +601,20 @@ class ReadTools:
                 return json.dumps(self.search(query,record_type,cursor),ensure_ascii=False)
             return json.dumps(self.catalog(record_type,artifact_kind,stage,chapter_id,confirmation_status,cursor),ensure_ascii=False)
         available=[list_records,read_record]
+        if self.present_event_source is not None:
+            @function_tool
+            async def show_event_source(event_query:str, artifact_id:str|None=None,
+                                        version:str='current_effective', cursor:str|None=None)->str:
+                """按事件 ID 或标题查看作品事件的原文。精确 ID 优先；标题有歧义时返回候选。可指定作品事件产物 ID、固定版本及续页游标。原文由 Harness 直接展示给用户，工具只返回简短回执；不要再读取或复述原文。"""
+                page=self.event_source_page(event_query,artifact_id,version,cursor)
+                if page['status']!='ok':
+                    return json.dumps(page,ensure_ascii=False)
+                markdown=page.pop('markdown')
+                shown=self.present_event_source(markdown,page)
+                if not isinstance(shown,dict) or not isinstance(shown.get('message_id'),str):
+                    raise ValueError('原文展示未返回消息 ID')
+                return json.dumps({**page,'message_id':shown['message_id']},ensure_ascii=False)
+            available.append(show_event_source)
         for tool in available:
             if tool.name in self.config['tools'].get('descriptions',{}): tool.description=self.config['tools']['descriptions'][tool.name]
         enabled=set(self.config['tools']['enabled'])
@@ -475,7 +622,7 @@ class ReadTools:
         # Expose their replacements when that Run resumes.
         if 'search_records' in enabled:enabled.add('list_records')
         if 'get_artifact' in enabled:enabled.add('read_record')
-        return [t for t in available if t.name in enabled]
+        return [t for t in available if t.name in enabled or t.name=='show_event_source']
 
 
 class AuditHooks(RunHooksBase):
@@ -714,7 +861,8 @@ class ModelService:
         return self._provider_clients[provider]
 
     async def run(self,stage,task,run,session,config,materials,message,control=None,
-                  extra_tools=None,instructions_override=None,step1_window=None,step1_view=None):
+                  extra_tools=None,instructions_override=None,step1_window=None,step1_view=None,
+                  event_source_presenter=None):
         if stage=='step1' and step1_view not in ('global','character'):
             raise ValueError('Step1 必须指定全局事件或主要人物事件分支')
         client=self._client_for(config['model']['name'])
@@ -736,7 +884,8 @@ class ModelService:
         # Tool availability follows the selected Agent's resolved profile.
         # Internal compaction remains tool-free even when its Agent profile is
         # configured by the user.
-        tools=[] if stage=='aux.summary' else ReadTools(self.store,task['project_id'],config).functions()
+        tools=[] if stage=='aux.summary' else ReadTools(self.store,task['project_id'],config,
+            present_event_source=event_source_presenter if stage=='coordinator' else None).functions()
         if extra_tools:
             tools.extend(extra_tools)
         can_ask=stage not in ('step2','aux.summary','aux.subtask') and step1_window is None and step1_view is None and config.get('tools',{}).get('ask_user_enabled',True)

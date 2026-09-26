@@ -1044,6 +1044,20 @@ class Engine:
             kwargs["step1_window"] = step1_window
         if step1_view is not None:
             kwargs["step1_view"] = step1_view
+        if stage == "coordinator" and getattr(self.model_service, "supports_manager", False):
+            def present_event_source(markdown, metadata):
+                # This is a user-facing projection of a fixed source range.  It
+                # belongs in conversation history, never in the Agent Session.
+                with self.store.transaction():
+                    self.store.advisory_lock(f"{task['project_id']}:conversation:{task['conversation_id']}")
+                    self._assert_run(task, run, token)
+                    shown = self._message(task["project_id"], task["conversation_id"], markdown,
+                                          task=task["id"], run=run["id"])
+                    self._event(task["project_id"], "event_source.presented",
+                                {**metadata, "message_id": shown["id"]},
+                                conversation=task["conversation_id"], task=task["id"], run=run["id"])
+                    return {"message_id": shown["id"]}
+            kwargs["event_source_presenter"] = present_event_source
         model = asyncio.create_task(self.model_service.run(stage if isinstance(stage, str) else f"step{stage}", task, run, session, config, materials, message, control=control, **kwargs))
         self._calls[run["id"]] = model
         forced = asyncio.get_running_loop().create_future()
@@ -1999,13 +2013,14 @@ class Engine:
             return
         agent_confirmation = bool(getattr(self.model_service, "supports_manager", False)
                                   and data.get("parent_owned"))
-        text = stage_result_text(stage, display_result if stage == 6 else result,
+        text = stage_result_text(stage, result,
                                  version=version["version"], confirmation=not agent_confirmation)
         message = self._message(task["project_id"], task["conversation_id"], text, task=task["id"], run=run["id"])
         targets = [{"subject": ref(version), "selections": [WHOLE]}]
         data = self._task_data(task)
         data["pending_user_items"] = ([] if agent_confirmation else
-                                      [self._wait_item(task, "confirmation", message, text, targets)])
+                                      [self._wait_item(task, "confirmation", message,
+                                                       f"请确认 Step {stage} 已展示的固定版本，或提出修改。", targets)])
         self._save_task_data(task, data)
         presentations = self._projection(task["project_id"], "presentations", task["conversation_id"], targets=[])
         presentations["targets"].append({**targets[0], "message_id": message["id"], "task_id": task["id"]})
@@ -2749,6 +2764,9 @@ class Engine:
             raise WorkflowBlocked("unexecuted_check_claimed_pass")
         review_message = self._message(task["project_id"], task["conversation_id"],
             stage_result_text(11, report, version=version["version"]), task=task["id"], run=run["id"])
+        self._event(task["project_id"], "artifact.presented",
+                    {"artifact_ref": ref(version), "message_id": review_message["id"], "selections": [WHOLE]},
+                    conversation=task["conversation_id"], task=task["id"], run=run["id"])
         if blocking or payload["proposed_verdict"] != "pass":
             self._checkpoint(task, run, "await_user")
             self._close_run(task, run, "succeeded")

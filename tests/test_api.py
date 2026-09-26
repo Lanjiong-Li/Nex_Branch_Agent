@@ -594,6 +594,56 @@ def test_history_projects_knowledge_asset_to_readable_model_content(api):
     assert '"payload"' not in shown['display_text']
 
 
+def test_markdown_history_and_download_are_bound_to_the_presented_version(api):
+    from branch_agent.workflow import Workflow, ref
+    from test_runtime import step2_response
+    client,store,_=api;pid,cid=create_space(client)
+    workflow=Workflow(store)
+    source=workflow.save(pid,'source_text','甲在雾港寻找妹妹。',origin='import',effective=True)
+    result=step2_response('旧版前提。','保留兄妹关系。')
+    for key in ('source_global_events_ref','source_global_analysis_ref','source_character_events_ref'):
+        result['payload'][key]=ref(source)
+    first=workflow.save(pid,'source_knowledge_asset',result,stage=2)
+    conversation=store.get(cid,pid);conversation['last_message_seq']=1
+    store.update(conversation,conversation['row_version'])
+    message=store.put(new_record('history_record',pid,conversation_id=cid,sequence=1,role='assistant',
+        visibility='conversation',content={'storage':'inline_text','text':'旧的展示文本'}))
+    store.put(new_record('runtime_event',pid,sequence=1,event_name='artifact.presented',conversation_id=cid,
+        payload={'artifact_ref':ref(first),'message_id':message['id'],'selections':[{'item_id':None,'json_pointer':''}]}))
+    newer=deepcopy(result);newer['payload']['premise']='新版前提。'
+    workflow.save(pid,'source_knowledge_asset',newer,stage=2)
+
+    shown=client.get(BASE+f'/projects/{pid}/conversations/{cid}/history').json()['items'][0]
+    assert shown['display_format']=='markdown'
+    assert shown['artifact_ref']==ref(first)
+    assert shown['markdown_download_url'].endswith(f'/artifacts/{first["artifact_id"]}/versions/1/download.md')
+    download=client.get(shown['markdown_download_url'])
+    assert download.status_code==200
+    assert download.headers['content-type'].startswith('text/markdown')
+    assert 'attachment;' in download.headers['content-disposition']
+    assert download.headers['x-content-type-options']=='nosniff'
+    assert download.text==shown['display_text']
+    assert '# Step 2 · 原作知识资产（v1）' in download.text
+    assert '旧版前提。' in download.text and '新版前提。' not in download.text
+    assert '请确认以上结果' not in download.text
+    assert client.get(BASE+f'/projects/{pid}/artifacts/{first["artifact_id"]}/versions/1/download').status_code==200
+
+
+def test_event_source_excerpt_uses_markdown_display_without_artifact_download(api):
+    client,store,_=api;pid,cid=create_space(client)
+    conversation=store.get(cid,pid);conversation['last_message_seq']=1
+    store.update(conversation,conversation['row_version'])
+    excerpt='# 事件原文\n\n````text\n甲 <script>见乙</script>。\n````'
+    message=store.put(new_record('history_record',pid,conversation_id=cid,sequence=1,role='assistant',
+        visibility='conversation',content={'storage':'inline_text','text':excerpt}))
+    store.put(new_record('runtime_event',pid,sequence=1,event_name='event_source.presented',
+        conversation_id=cid,payload={'message_id':message['id']}))
+    shown=client.get(BASE+f'/projects/{pid}/conversations/{cid}/history').json()['items'][0]
+    assert shown['display_format']=='markdown'
+    assert shown['content']['text']==excerpt
+    assert 'markdown_download_url' not in shown
+
+
 def test_history_records_and_sse_continue_after_ten_thousand(api):
     client,store,identity=api;pid,cid=create_space(client)
     connection=store._connection();count=10007

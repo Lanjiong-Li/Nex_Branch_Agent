@@ -200,6 +200,8 @@ def test_full_workflow_builds_step1_events_and_step2_knowledge_asset(runtime):
     shown = [h["content"]["text"] for h in all_records(engine.store, pid, "history_record")
              if h["visibility"] == "conversation" and h["role"] == "assistant"]
     assert any("Step 1 · 作品事件视图" in text and "甲见乙。" in text for text in shown)
+    assert any("Step 1 · 作品事件分析" in text and "全局事件分析" in text for text in shown)
+    assert any("Step 1 · 主要人物事件视图" in text for text in shown)
     assert any("Step 2 · 原作知识资产" in text for text in shown)
     assert any("甲与乙相遇" in text for text in shown)
     assert all('"global_events"' not in text for text in shown)

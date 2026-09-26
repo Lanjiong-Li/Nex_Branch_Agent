@@ -20,6 +20,7 @@ from branch_agent.records import new_record
 from branch_agent.storage import Store
 from branch_agent.workflow import all_records, ref, update
 from test_runtime import step2_response
+from test_read_tools import source_event_case
 
 
 @pytest.fixture
@@ -57,6 +58,45 @@ def message(value):
     return response([{"id": "msg_" + uuid4().hex, "type": "message", "role": "assistant",
                       "status": "completed", "content": [{"type": "output_text",
                       "text": json.dumps(value, ensure_ascii=False), "annotations": []}]}])
+
+
+@pytest.mark.asyncio
+async def test_coordinator_shows_fixed_event_source_without_inserting_excerpt_into_session(runtime):
+    store, project, conversation = runtime
+    _, _, view = source_event_case(store, project, "开头。甲🌍乙相遇。结尾。",
+                                   quotes=["甲🌍乙相遇。"])
+    calls = []
+
+    def handler(request):
+        data = json.loads(request.content)
+        calls.append(data)
+        if len(calls) == 1:
+            assert "show_event_source" in {tool["name"] for tool in data["tools"]}
+            return httpx.Response(200, json=call("show_event_source", {"event_query": "GEV-1"}, 1))
+        receipt = next(item for item in data["input"]
+                       if item.get("type") == "function_call_output" and item["call_id"] == "call_1")
+        value = json.loads(receipt["output"])
+        assert value["status"] == "ok" and value["message_id"]
+        assert "甲🌍乙相遇。" not in receipt["output"]
+        return httpx.Response(200, json=message({"result_kind": "ready", "payload": {
+            "reply": "已展示该事件的原文。", "source_message_kind": "request", "task_requests": []},
+            "questions": [], "evidence_refs": [], "notes": []}))
+
+    client = AsyncOpenAI(api_key="local-mock", http_client=httpx.AsyncClient(
+        transport=httpx.MockTransport(handler)), max_retries=0)
+    engine = Engine(store, ModelService(store, client), ConfigService(store))
+    engine.submit_message(project, conversation, "查看相遇事件的原文")
+    await engine.tick(project, conversation)
+
+    events = [row for row in all_records(store, project, "runtime_event")
+              if row["event_name"] == "event_source.presented"]
+    assert len(events) == 1
+    assert events[0]["payload"]["event_ref"]["record_id"] == view["artifact_id"]
+    shown = store.get(events[0]["payload"]["message_id"], project_id=project)
+    assert "甲🌍乙相遇。" in shown["content"]["text"]
+    assert shown["session_id"] is None
+    assert len(calls) == 2
+    await client.close()
 
 
 def plain_message(value):
@@ -339,8 +379,12 @@ async def test_manager_dispatches_stage_with_separate_audited_run(runtime, struc
                                   if structured else plain_message("等待继续。"))
         assert len(calls) == 5
         if len(calls) == 5:
-            assert any(item.get("type") == "function_call_output" and item["call_id"] == "call_2"
-                       for item in data["input"])
+            stage_result = next(item for item in data["input"]
+                                if item.get("type") == "function_call_output" and item["call_id"] == "call_2")
+            receipt = json.loads(stage_result["output"])
+            assert receipt["markdown_download_urls"]["source_global_events"].endswith("/download.md")
+            assert receipt["markdown_download_urls"]["source_global_analysis"].endswith("/download.md")
+            assert original not in stage_result["output"]
         final = {"result_kind": "ready", "payload": {"reply": "Step1 已完成。",
                  "source_message_kind": "request", "task_requests": []},
                  "questions": [], "evidence_refs": [], "notes": []}

@@ -104,3 +104,21 @@
 .instruction-group h5{font-size:11px;margin:0 0 7px;color:#557263}
 .instruction-group .code-box{max-height:230px;margin:0}
 .instruction-sources{margin-top:10px}
+
+.message-body.markdown{white-space:normal}
+.message-body.markdown h1,.message-body.markdown h2,.message-body.markdown h3,.message-body.markdown h4,.message-body.markdown h5,.message-body.markdown h6{line-height:1.45;color:#26483b;overflow-wrap:anywhere}
+.message-body.markdown h1{font-size:18px;margin:0 0 16px}
+.message-body.markdown h2{font-size:15px;margin:22px 0 8px}
+.message-body.markdown h3{font-size:13px;margin:17px 0 7px}
+.message-body.markdown h4,.message-body.markdown h5,.message-body.markdown h6{font-size:12px;margin:14px 0 6px}
+.message-body.markdown p{margin:0 0 12px}
+.message-body.markdown ul,.message-body.markdown ol{padding-left:23px;margin:0 0 13px}
+.message-body.markdown li{padding:2px 0}
+.message-body.markdown blockquote{margin:12px 0;padding:7px 12px;border-left:3px solid #a8c7af;background:#f2f7f0;white-space:pre-wrap}
+.message-body.markdown code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:.92em;background:#eef3ec;padding:1px 3px;border-radius:3px}
+.message-body.markdown pre{padding:12px;overflow:auto;white-space:pre;background:#f1f5ef;border:1px solid #e0e9dd;border-radius:8px;max-height:65vh}
+.message-body.markdown pre code{padding:0;background:none;white-space:pre}
+.message-body.markdown table{display:block;max-width:100%;overflow-x:auto;border-collapse:collapse;margin:12px 0}
+.message-body.markdown th,.message-body.markdown td{border:1px solid #dce8d7;padding:6px 9px;text-align:left;vertical-align:top}
+.message-body.markdown th{background:#f2f7f0;font-weight:600}
+.markdown-download{margin:4px 0 2px;font-size:11px}

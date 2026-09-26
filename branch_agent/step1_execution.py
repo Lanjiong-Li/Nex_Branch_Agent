@@ -435,12 +435,12 @@ async def drive_step1_views(engine, task, token, source_version, source_text):
             data = engine._task_data(task)
             data["result_refs"] = refs
             engine._save_task_data(task, data)
-            for view, kind in VIEW_KINDS.items():
+            for kind in ("source_global_events", "source_global_analysis",
+                         "source_character_events"):
                 fixed_ref = refs[kind]
                 version = engine.workflow.fixed_version(project, fixed_ref)
                 presented = stage_result_text(1, body(engine.store, version),
-                    version=version["version"]).replace("Step 1 · 原作切分",
-                    f"Step 1 · {VIEW_LABELS[view]}视图", 1)
+                    version=version["version"], artifact_kind=kind)
                 message = engine._message(project, cid, presented, task=task["id"])
                 engine._event(project, "artifact.presented",
                     {"artifact_ref": fixed_ref, "message_id": message["id"], "selections": [{"item_id": None, "json_pointer": ""}]},
