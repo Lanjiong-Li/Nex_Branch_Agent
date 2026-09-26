@@ -251,6 +251,35 @@ def test_account_config_endpoints_apply_to_all_owned_projects(api):
     assert imported.json()['source_mode']=='full_text'
 
 
+def test_source_import_reports_independent_step1_branch_modes(api):
+    client,_,_=api
+    project=client.post(BASE+'/projects',json={'title':'双分支预估'}).json()['id']
+    client.headers['Idempotency-Key']=str(uuid.uuid4())
+    conversation=client.post(BASE+f'/projects/{project}/conversations',json={'title':'原作导入'}).json()['id']
+    client.headers['Idempotency-Key']=str(uuid.uuid4())
+    draft=client.post(BASE+'/account/config',json={
+        'values':{'context':{'step1_source':{'trigger_tokens':1}}},
+        'scope_kind':'agent','scope_key':'source_character_parser',
+    })
+    assert draft.status_code==200,draft.text
+    client.headers['Idempotency-Key']=str(uuid.uuid4())
+    published=client.post(BASE+f'/account/config/{draft.json()["id"]}/publish',json={})
+    assert published.status_code==200,published.text
+    client.headers['Idempotency-Key']=str(uuid.uuid4())
+    imported=client.post(BASE+f'/projects/{project}/source',json={
+        'conversation_id':conversation,'text':'韩立走出山村，踏上修行之路。',
+    })
+    assert imported.status_code==200,imported.text
+    receipt=imported.json()
+    assert receipt['source_mode']=='mixed'
+    assert receipt['step1_branches']['global']['source_mode']=='full_text'
+    assert receipt['step1_branches']['character']['source_mode']=='sliding_window'
+    assert receipt['step1_branches']['global']['agent_key']=='source_global_parser'
+    assert receipt['step1_branches']['character']['agent_key']=='source_character_parser'
+    assert receipt['step1_branches']['character']['source_window_threshold']==1
+    assert receipt['step1_branches']['global']['input_budget']>receipt['step1_branches']['global']['source_tokens']
+
+
 def test_account_config_schema_validation_is_read_only_and_reports_strict_errors(api):
     client,store,identity=api
     view=client.get(BASE+'/account/config?stage=step5').json()
@@ -297,8 +326,8 @@ def test_unsaved_instruction_layers_have_server_preview_without_publication(api)
         'stage':'step1','values':source_values})
     assert source_preview.status_code==200,source_preview.text
     branches=source_preview.json()['views']
-    assert '只形成全局事件视图' in branches['global']['final']
-    assert '只形成主要人物事件视图' in branches['character']['final']
+    assert '只负责作品事件视图及其分析' in branches['global']['final']
+    assert '人物分支不输出顶层 analysis' in branches['character']['final']
     assert '滑动窗口固定协议' not in branches['global']['final']
     assert branches['global']['parts']['tool_guidance']==source_values['prompts']['harness']['no_ask_user']
     window_preview=client.post(BASE+'/account/config/instructions-preview',json={
@@ -306,7 +335,7 @@ def test_unsaved_instruction_layers_have_server_preview_without_publication(api)
     assert window_preview.status_code==200,window_preview.text
     assert '滑动窗口固定协议' in window_preview.json()['final']
     assert '当前独立产物：主要人物事件' in window_preview.json()['final']
-    assert '只形成主要人物事件视图' in window_preview.json()['final']
+    assert '也不输出 analysis' in window_preview.json()['final']
 
 
 def test_account_editor_autosave_keeps_incomplete_schema_without_publishing(api):
@@ -504,16 +533,17 @@ def test_relations_use_fixed_projection_not_uuid_text_substrings(api):
     assert all(x['source']!=decoy['id'] for x in incoming)
 
 
-def test_history_projects_legacy_stage_notice_to_readable_model_content(api):
+def test_history_projects_knowledge_asset_to_readable_model_content(api):
     from branch_agent.workflow import Workflow, ref
     client,store,identity=api;pid,cid=create_space(client)
     workflow=Workflow(store)
     source=workflow.save(pid,'source_text','甲在雾港寻找失踪的妹妹。',origin='import',effective=True)
-    result={'result_kind':'ready','payload':{'source_views_ref':ref(source),
-        'premise':'甲必须在风暴抵达前找到妹妹。','world_rules':[],'themes':[],'conflicts':[],
-        'characters':[],'key_event_refs':[],'preservation_items':[]},
-        'questions':[],'evidence_refs':[],'notes':['保留兄妹关系。']}
-    version=workflow.save(pid,'source_analysis',result,stage=2)
+    from test_runtime import step2_response
+    result=step2_response('甲必须在风暴抵达前找到妹妹。','保留兄妹关系。')
+    for key in ('source_global_events_ref','source_global_analysis_ref','source_character_events_ref'):
+        result['payload'][key]=ref(source)
+    result['notes']=['保留兄妹关系。']
+    version=workflow.save(pid,'source_knowledge_asset',result,stage=2)
     conversation=store.get(cid,pid);conversation['last_message_seq']=1;store.update(conversation,conversation['row_version'])
     message=store.put(new_record('history_record',pid,conversation_id=cid,sequence=1,role='assistant',
         visibility='conversation',content={'storage':'inline_text','text':'Step2 已生成草稿 v1，请查看后确认，或提出具体修改。'}))
@@ -523,7 +553,7 @@ def test_history_projects_legacy_stage_notice_to_readable_model_content(api):
     shown=client.get(BASE+f'/projects/{pid}/conversations/{cid}/history').json()['items'][0]
 
     assert shown['content']['text'].startswith('Step2 已生成草稿')
-    assert 'Step 2 · 原作分析' in shown['display_text']
+    assert 'Step 2 · 原作知识资产' in shown['display_text']
     assert '甲必须在风暴抵达前找到妹妹。' in shown['display_text']
     assert '保留兄妹关系。' in shown['display_text']
     assert '"payload"' not in shown['display_text']

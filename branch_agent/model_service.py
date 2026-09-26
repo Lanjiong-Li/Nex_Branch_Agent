@@ -715,13 +715,15 @@ class ModelService:
 
     async def run(self,stage,task,run,session,config,materials,message,control=None,
                   extra_tools=None,instructions_override=None,step1_window=None,step1_view=None):
+        if stage=='step1' and step1_view not in ('global','character'):
+            raise ValueError('Step1 必须指定全局事件或主要人物事件分支')
         client=self._client_for(config['model']['name'])
         original_materials=materials
         materials=prepare_runtime_materials(stage,task,run,session,config,materials,self.store,step1_window=step1_window)
         packed,source,selections=build_materials(stage,materials,config,self.store,task['project_id'])
         output_key=f'step1.{step1_view}' if stage=='step1' and step1_view else stage
         structured=config.get('output',{}).get('structured',{}).get(
-            output_key, output_key not in ('aux.summary','step2'))
+            output_key, output_key != 'aux.summary')
         plain_text=not structured
         schema_id=None if plain_text else self.catalog.schema_for(output_key,config)
         from .configuration import MODELS

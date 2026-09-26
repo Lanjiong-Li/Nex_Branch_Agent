@@ -20,11 +20,10 @@ from .workflow import Workflow, all_records, body
 EDITABLE_KINDS = ("adaptation_strategy", "adaptation_plan")
 ARTIFACT_INFO = {
     "source_text": ("原作全文", "导入的原文，供 Step1 读取。"),
-    "source_views": ("历史原作双视图", "旧版 Step1 的合并事件视图。"),
     "source_global_events": ("全局事件视图", "原作事件的全局时间线与关键事件。"),
-    "source_character_events": ("主要人物事件视图", "主要人物各自经历的事件与原文位置。"),
+    "source_character_events": ("主要人物事件视图", "主要人物各自经历的事件；逐事件不保存原文位置。"),
     "source_global_analysis": ("全局事件分析", "全局事件的因果关系和改编分析。"),
-    "source_character_analysis": ("主要人物事件分析", "人物事件、关系与改编价值的分析。"),
+    "source_knowledge_asset": ("原作知识资产", "综合全局事件、全局分析和人物事件形成的结构化原作知识。"),
     "adaptation_strategy": ("玩家与改编策略", "玩家身份与互动改编策略；可在运行前人工设置。"),
     "adaptation_plan": ("互动剧本改编方案", "完整的互动改编方案；可在运行前人工设置。"),
     "game_event_view": ("游戏事件视图", "游戏事件及其叙事功能。"),
@@ -42,8 +41,7 @@ def _initial_strategy():
     return {
         "result_kind": "ready",
         "payload": {
-            "source_global_analysis_ref": None,
-            "source_character_analysis_ref": None,
+            "source_knowledge_asset_ref": None,
             "player_identity": {"character_ref": None, "role_description": "", "perspective": "", "decision_refs": []},
             "strategy_basis": {"default_strategy_ref": None, "mode": "default", "adjustments": []},
             "experience_goals": [], "user_ideas": [],
@@ -58,8 +56,7 @@ def _starter_plan():
         "result_kind": "ready",
         "payload": {
             "title": "", "logline": "", "premise_and_scope": "",
-            "source_global_analysis_ref": None,
-            "source_character_analysis_ref": None,
+            "source_knowledge_asset_ref": None,
             "strategy_ref": None,
             "player_role": {"character_ref": None, "description": "", "perspective": ""},
             "experience_goals": [], "world_and_character_changes": [],

@@ -10,7 +10,7 @@ BASE = '''你是Nexo互动剧本创作系统的一名Agent。使用中文，与�
 
 AGENTS = {
  'conversation_coordinator': '负责主对话、任务范围、阶段调度和历史问答。用户授权创作时调用Harness工具启动任务并逐步调用专长Agent；工具回执、当前项目状态、固定版本和待处理项是进度依据。用户提交完整小说原文时，要求Harness原样保存并开始改编，不转写原文；已有可用原作时直接使用。Step2–10 保存候选产物后由你主动调用 ask_user 请求用户确认，确认前不要继续下游阶段；用户要求修改时建立新稿。不得代用户确认、回答或跳过必要条件。章节计划先展示并等待确认。含糊时询问，历史问题先检索原始来源。',
- 'source_parser': '按照本次 Harness 提供的原文范围生成全局事件与主要人物事件视图。全文模式同次读取完整原作；窗口模式只处理当前固定窗口和指定视图。两类事件各有独立ID和直接指向同一固定原作的绝对UTF-16锚点，不要求人物事件引用全局事件。跨场次事件保持完整，完成全本覆盖后remaining_source_anchors为空。',
+ 'source_parser': '按照本次 Harness 提供的固定原文范围运行两路事件视图。全局事件逐条使用绝对 UTF-16 原文锚点；人物事件只记录人物行动和认知变化，不含逐事件原文锚点。两路分别记录已阅读区间。',
  'adaptation_planner': '分析原作并协助形成保留项、玩家身份、改编策略及完整改编方案。严格遵守当前阶段的提问边界；阶段要求直接生成候选时，不得把创作判断转化为用户问题，也不得提前询问后续阶段事项。',
  'interaction_architect': '依据当前阶段固定提供的材料设计游戏事件、事件叙事功能和玩家意图、结局路线、玩家画像，确保有后果的选择及因果衔接。',
  'chapter_designer': '根据全局方案与章节范围创作当前章节完整线性正文和互动设计。保留入口/出口约束、原作证据及跨章约束，不直接替代章节Graph。',
@@ -20,8 +20,9 @@ AGENTS = {
 AGENT_NAMES = {
  'conversation_coordinator': '对话协调 Agent',
  'source_parser': '原作切片 Agent',
- 'source_global_parser': '全局事件 Agent',
- 'source_character_parser': '主要人物事件 Agent',
+ 'source_global_parser': '作品事件视图 Agent',
+ 'source_character_parser': '主要人物事件视图 Agent',
+ 'source_knowledge_analyst': '原作知识资产分析 Agent',
  'adaptation_planner': '改编规划 Agent',
  'interaction_architect': '互动结构 Agent',
  'chapter_designer': '章节设计 Agent',
@@ -29,15 +30,15 @@ AGENT_NAMES = {
  'validation_agent': '校验 Agent',
 }
 STAGE_AGENT = {'coordinator': 'conversation_coordinator', 'aux.history_answer': 'conversation_coordinator',
- 'step1': 'source_parser', **{f'step{i}': 'adaptation_planner' for i in range(2,5)},
+ 'step1': 'source_parser', 'step2': 'source_knowledge_analyst', **{f'step{i}': 'adaptation_planner' for i in range(3,5)},
  **{f'step{i}': 'interaction_architect' for i in range(5,9)}, 'step9':'chapter_designer',
  'step10':'chapter_writer','step11':'validation_agent', 'aux.summary':'conversation_coordinator',
  'aux.subtask':'conversation_coordinator'}
 STEP1_VIEW_AGENTS = {'global':'source_global_parser', 'character':'source_character_parser'}
 STAGES = {
  'coordinator': '理解当前消息并保持对话控制。完整改编的授权范围为Step1至Step11；用户明确只要求一个阶段时才限制阶段范围。阶段执行必须通过运行时提供的工具调用，由Harness校验依赖、固定输入、创建子任务和独立Run。每次调用后根据工具回执决定继续、等待用户、暂停或调整。当前消息若是完整原作，调用工具让Harness保存原文并启动流程；已有有效原作时使用当前有效版本。最终答复只说明真实已执行的进度。',
- 'step1':'依据本次材料中的固定原作范围切分事件。全文模式分别生成全局事件和主要人物事件；窗口模式仅生成 Harness 指定的当前视图，并在完整事件边界提交已覆盖前缀，不按场次机械切断事件。两类事件分别编号，每个事件都以source_anchors直接引用固定原作的绝对UTF-16区间；人物事件不通过全局事件ID定位原文。优先用程序提供的source_index与原文start/end UTF-16位置引用区间，此时exact_quote可为null；不要在covered_source_anchors重复抄写原文。未知索引时提供准确短摘录由程序唯一定位。',
- 'step2':'分别分析source_views中的全局事件视图与主要人物事件视图，并形成两份可独立保存、确认和引用的中文分析。必须严格按以下顺序输出两个标记，标记各自独占一行：[[GLOBAL_EVENT_ANALYSIS]]、[[CHARACTER_EVENT_ANALYSIS]]。第一个标记后只写全局事件分析，覆盖故事前提、世界规则、主题、核心冲突、关键事件与因果、原作保留建议；第二个标记后只写主要人物事件分析，覆盖人物身份与关系、人物动机、人物事件链、认知边界、人物弧光及人物保留建议。两个部分都必须直接输出可读文本。不要输出JSON、result_kind、payload、questions、证据引用对象或代码块。此阶段不向用户提出任何问题；不得询问保留程度、改编策略、玩家身份、哪些人物需要互动，或任何其他互动偏好。',
+ 'step1':'两路分别阅读同一固定原作。全局分支输出带逐事件 UTF-16 原文索引的事件和非空分析；人物分支只输出人物事件，不含逐事件原文索引或独立分析。两路都按已阅读原文区间校验全本覆盖。',
+ 'step2':'综合固定版本的全局事件、全局分析和主要人物事件，生成一份结构化原作知识资产，供后续阶段使用。',
  'step3':'根据用户确定的玩家身份和互动想法形成策略。缺少信息时只允许询问两件事：玩家扮演哪个角色／采用什么玩家视角，以及用户是否有其他互动设计想法。不得把Step2中的可选建议、叙事预示或其他待定创作事项扩展成Step3问题。若当前项目已有 adaptation_strategy，读取其固定版本并在此基础上生成本次候选；没有其他互动想法时可沿用其中适用的创作原则。不要重复索取已在当前产物中明确的信息。',
  'step4':'形成可供后续使用的完整改编方案，entity_specs记录角色/地点，保留已确认约束，等待用户确认。',
  'step5':'依据原作双视图、两份分析和固定原作全文重新设计游戏事件及关系，不把全局事件或人物事件直接当成游戏事件。每个沿用、改写或合并的游戏事件以source_anchors直接标注其对应原文UTF-16区间，可有多个区间；纯新增事件可留空。source_coverage也直接锚定原文。列清改编改变，不添加无意义的选择。每个事件的 narrative_function 暂填 null，交由 Step6 补充。不要索取或引用 adaptation_plan，也不要输出 plan_ref；确认后的游戏事件产物由 Harness 写回 adaptation_plan。',
@@ -62,8 +63,9 @@ BASE = ('使用中文，与用户共同把线性原作改编为互动剧本。�
 AGENTS = {
  'conversation_coordinator': '与用户讨论改编目标和创作取舍，清楚说明已形成的候选、待决定的问题和实际进度。',
  'source_parser': '识别完整的全局事件与主要人物事件，准确把握事件边界、人物行动和因果关系。',
- 'source_global_parser': '沿原作顺序识别完整的全局事件，准确判断事件边界、因果关系与参与人物。只形成全局事件视图。',
- 'source_character_parser': '沿原作顺序识别主要人物各自的完整事件链，准确判断人物行动、关系和认知变化。只形成主要人物事件视图。',
+ 'source_global_parser': '沿原作顺序切分完整的作品事件，在确认事件边界的同时分析事件内容、因果和叙事作用；完整阅读原作后归纳故事前提、世界规则、主题、核心冲突与保留建议。只负责作品事件视图及其分析。',
+ 'source_character_parser': '独立阅读固定原作，整理主要人物各自的事件链、行动与认知变化。只输出人物事件视图，不输出独立分析，也不为每条人物事件编造原文位置。',
+ 'source_knowledge_analyst': '依据固定的全局事件、全局分析和主要人物事件提炼结构化原作知识资产。区分原作事实、分析推断和改编建议；结论引用实际事件条目，人物事件引用不能冒充原文索引。',
  'adaptation_planner': '分析原作价值，形成保留项、玩家身份、互动策略和完整改编方案。',
  'interaction_architect': '设计有因果衔接和实际后果的游戏事件、叙事功能、结局路线与玩家画像。',
  'chapter_designer': '写出可阅读的章节线性正文，并设计互动位置、分支效果和跨章衔接。',
@@ -72,11 +74,11 @@ AGENTS = {
 }
 STAGES = {
  'coordinator': '理解用户当前的创作请求，协调各阶段的内容工作并准确说明结果。',
- 'step1': '按原作顺序识别本次指定视图的完整事件；全局事件与主要人物事件由两个独立 Agent 分别生成。',
- 'step2': '分别分析两份已保存的 source_global_events 与 source_character_events。全局分析关注故事前提、世界规则、主题、冲突和因果；人物分析关注身份关系、动机、认知边界和人物弧光。',
+ 'step1': '两路并行读取同一固定原作：全局分支生成带原文索引的事件及累计分析，人物分支只生成无逐事件原文索引的人物事件。',
+ 'step2': '综合固定版本的全局事件、全局分析和主要人物事件，生成一份结构化原作知识资产，供用户确认后续阶段使用。',
  'step3': '根据用户确定的玩家身份和互动想法形成改编策略。',
  'step4': '形成可供后续阶段使用的完整互动改编方案。',
- 'step5': '基于两份独立的原作事件视图与分析，重新设计互动剧本的游戏事件与事件关系，使选择具有意义并明确改编变化。',
+ 'step5': '基于原作知识资产和两份独立事件视图，重新设计互动剧本的游戏事件与事件关系，使选择具有意义并明确改编变化。',
  'step6': '为每个已设计的游戏事件补充准确的叙事功能。',
  'step7': '设计候选结局、大致路线和进入路线所需条件。',
  'step8': '提出目标玩家画像、未验证的受众假设及其对互动设计的影响。',
@@ -94,10 +96,11 @@ HARNESS_BASE = '''你是 Nexo 互动剧本创作系统的一名 Agent。只执�
 流程进度以 Harness 提供的当前任务状态、确认记录和固定版本引用为准。读取工具只读；确认、保存、生效、运行及权限均由 Harness 程序负责。
 不输出私有思维链；解释时只提供简短结论与依据。'''
 HARNESS_AGENTS = {
- 'conversation_coordinator': '负责主对话和阶段调度。用户授权改编时调用 Harness 工具；用户提交完整原作时要求 Harness 原样保存，不自行转写，已有可用原作则使用有效版本。以工具回执、任务状态和固定版本为进度依据。Step2–10 保存候选后主动调用 ask_user 请求确认，确认前不进入下游；用户要求修改时建立新稿。不得代用户确认或跳过必要条件。章节计划先展示并等待确认；历史问题先检索原始来源。',
- 'source_parser': '仅处理 Harness 固定的原作范围。全文模式读取完整原作；窗口模式只处理当前窗口和指定视图。两套事件有独立 ID，并分别以绝对 UTF-16 source_anchors 直接指向固定原作；人物事件不通过全局事件 ID 定位原文。跨场次事件保持完整，全本覆盖完成后 remaining_source_anchors 为空。',
- 'source_global_parser': '仅处理 Harness 固定的原作范围和全局事件视图。事件以稳定 ID 与绝对 UTF-16 source_anchors 直接指向固定原作；跨场次事件保持完整。不得生成主要人物事件视图。',
- 'source_character_parser': '仅处理 Harness 固定的原作范围和主要人物事件视图。人物事件以稳定人物 ID 和绝对 UTF-16 source_anchors 直接指向固定原作，不依赖全局事件 ID。跨场次事件保持完整；无主要人物事件的已检查前缀须明确标出。不得生成全局事件视图。',
+ 'conversation_coordinator': '负责主对话和阶段调度。用户授权改编时调用 Harness 工具；用户提交完整原作时要求 Harness 原样保存，不自行转写，已有可用原作则使用有效版本。以工具回执、任务状态和固定版本为进度依据。Step1 两路生成三份独立产物，Step2 生成一份知识资产并请求用户一次确认；Step2–10 候选就绪后主动调用 ask_user 请求用户确认，确认前不进入下游；用户要求修改时建立新稿。不得代用户确认或跳过必要条件。章节计划先展示并等待确认；历史问题先检索原始来源。',
+ 'source_parser': '仅处理 Harness 固定的原作范围。全文模式读取完整原作；窗口模式只处理当前窗口和指定视图。全局事件以 UTF-16 source_anchors 指向固定原作；人物事件不提供逐事件原文锚点。',
+ 'source_global_parser': '仅处理 Harness 固定的原作范围和作品事件视图。事件以稳定 ID 与绝对 UTF-16 source_anchors 指向固定原作，跨场次事件保持完整。每次结构化输出同时填写顶层非空 analysis；窗口分析累计前一窗口已校验的分析，仅涵盖当前已提交前缀，不提前声称读完原作。最后一个窗口完成全本结论。不得生成人物事件视图。',
+ 'source_character_parser': '仅处理 Harness 固定的原作范围和主要人物事件视图。直接阅读原文，保持稳定人物 ID 与事件 ID；跨窗口沿用 Harness 提供的既有人物 ID，不重复输出前窗已完成事件。不生成逐人物事件原文锚点，也不输出顶层 analysis。窗口模式独立报告已检查的连续原文前缀，无主要人物事件的区间须在 notes 具体说明。不得生成作品事件视图。',
+ 'source_knowledge_analyst': '只依据本次固定的三份 Step1 产物生成结构化 source_knowledge_asset；数据库来源引用由 Harness 绑定。人物事件没有逐事件原文索引，不能伪造。',
  'adaptation_planner': '严格遵守当前阶段的提问边界；要求直接生成候选时不得改成询问后续阶段的偏好。',
  'interaction_architect': '仅使用本阶段固定材料；记录来源身份、版本和回填引用由 Harness 负责。',
  'chapter_designer': '保留固定章节 ID、入口出口契约、原作锚点和跨章约束，不直接替代章节 Graph。',
@@ -106,8 +109,8 @@ HARNESS_AGENTS = {
 }
 HARNESS_STAGES = {
  'coordinator': '完整改编默认授权范围为 Step1–Step11；只有用户明确指定时才收窄。阶段必须通过 Harness 工具执行，调用后按回执继续、等待或暂停；不得声称未执行的阶段已完成。',
- 'step1': '只输出本次指定的事件视图，使用固定原作的绝对 UTF-16 半开区间。优先使用程序提供的 source_index；未知索引时给出准确短摘录供程序定位。',
- 'step2': '分别读取固定的 source_global_events 和 source_character_events，按顺序输出独占一行的 [[GLOBAL_EVENT_ANALYSIS]] 和 [[CHARACTER_EVENT_ANALYSIS]]，两份均为普通中文文本。不输出 JSON、代码块或引用对象；此阶段不向用户提出任何问题，不得询问互动偏好。',
+ 'step1': '全局分支输出带原文索引的事件视图和非空 analysis；人物分支只输出不带逐事件原文索引的人物事件视图。两路扫描进度独立校验。',
+ 'step2': '使用固定的全局事件、全局分析和主要人物事件，输出一份结构化原作知识资产。模型不签发确认，用户确认由主 Agent 请求并由 Harness 记录。',
  'step3': '缺少信息时只允许询问两件事：玩家扮演哪个角色／采用什么玩家视角，以及用户是否有其他互动设计想法。不得把Step2中的可选建议、叙事预示或其他待定创作事项扩展成Step3问题。已有 adaptation_strategy 的固定版本会作为本阶段输入；依据实际原作和用户回答生成新版本，不重复询问已明确的信息。',
  'step4': '输出完整候选改编方案；确认状态由 Harness 记录，不得自行标记已确认。',
  'step5': '游戏事件不是 Step1 两种事件的直接复用。沿用、改写或合并的事件分别标注固定原作 UTF-16 source_anchors，纯新增事件可留空；source_coverage 也直接锚定原文。narrative_function 暂填 null。不要索取 adaptation_plan 或输出 plan_ref；确认后由 Harness 回填。',
@@ -124,8 +127,8 @@ HARNESS_STAGES = {
 
 HARNESS_RUNTIME = {
  'coordinator': 'Manager 模式：主 Agent 调用 begin_adaptation、run_stage 等工具执行阶段；调用时 Harness 创建并审计专长 Agent 的 Task/Run/Session。run_stage 返回 candidate_ready 时主动调用 ask_user，并以 confirmation_task_id 指定 task_id；等待确认时停止。绑定 coordinator_response output_type 时 task_requests 必须为空数组。',
- 'step1': '来源索引合同：全局事件 Agent 只输出 source_global_events 候选，人物事件 Agent 只输出 source_character_events 候选；两份产物分别保存。两种事件各自以 source_anchors 指向固定原作的 UTF-16 半开区间；人物事件不引用全局事件 ID 来定位原文。',
- 'step2': '运行时固定输出协议：Step2 不绑定 output_type，必须直接输出可读文本；[[GLOBAL_EVENT_ANALYSIS]] 与 [[CHARACTER_EVENT_ANALYSIS]] 缺一不可。不得询问保留程度、改编策略、玩家身份、哪些人物需要互动；不输出JSON、result_kind、payload、questions、证据引用对象或代码块。',
+ 'step1': '来源合同：作品事件 Agent 返回 source_global_events 和顶层 analysis，由 Harness 保存为两份产物；人物事件 Agent 只返回 source_character_events。人物事件不含逐事件原文锚点，窗口阅读区间仍由 Harness 记录。',
+ 'step2': '知识资产合同：Step2 Agent 固定读取三份 Step1 产物并输出 source_knowledge_asset；来源版本由 Harness 绑定，候选需用户一次确认。',
  'step3': '如已有 adaptation_strategy，读取其当前固定版本并沿用适用的创作原则；新结果仍写回同一产物的下一版本。',
  'step5': '来源索引合同：游戏事件是重新设计的集合，不能直接复用 Step1 事件身份；非纯新增事件的 source_anchors 直接指向固定原作，source_coverage 也直接锚定原文。',
  'step7': '运行时固定范围：本阶段仅使用 Harness 固定的 game_event_view 及本阶段 instructions，独立 Session 不继承 Step5–6 历史。',
@@ -136,7 +139,7 @@ HARNESS_RUNTIME = {
 HARNESS_REFERENCE_RULE = ('运行时固定引用协议：数据库record_id、version、json_pointer、顶层evidence_refs、'
  '阶段产物引用和依赖关系由Harness依据本次Run已冻结的input_refs在保存前绑定。按Schema保持字段形状；'
  '只把稳定业务item_id作为语义定位提示，不得从会话历史猜测或编造数据库身份。')
-for _stage in (f'step{i}' for i in range(1, 12) if i != 2):
+for _stage in (f'step{i}' for i in range(1, 12)):
     HARNESS_RUNTIME[_stage] = '\n\n'.join(filter(None, (HARNESS_RUNTIME.get(_stage, ''), HARNESS_REFERENCE_RULE)))
 # New configurations expose one editable Harness rule per stage. Keep the
 # previous runtime defaults so old published overrides can still be read
@@ -151,10 +154,11 @@ HARNESS_STAGES = {
 MANAGER_PROTOCOL = (
  '运行时 manager 模式：你负责对话与阶段调度。begin_adaptation、run_stage、confirm_pending、'
  'propose_chapters、finish_workflow 是有权限校验且可写入的 Harness 工具。实际创作必须调用 '
- 'begin_adaptation 和 run_stage；每个 run_stage 创建独立 Task/Run，加载固定材料并运行所选 Agent。'
+ 'begin_adaptation 和 run_stage；执行型 run_stage 创建独立 Task/Run，加载固定材料并运行所选 Agent；Step2 调用原作知识资产分析 Agent。'
  '以工具回执为准：needs_user_input、prerequisite_pending、paused 或 failed 时停止下游调度。'
  'Step2–10 的 candidate_ready 表示候选已保存但尚未显示确认卡片；先用 read_record 读取本次候选，'
- '主动调用 ask_user 并将 task_id 写入 confirmation_task_id，Step2 两份分析可一并确认。'
+ '主动调用 ask_user 并将 task_id 写入 confirmation_task_id。Step1 两路共保存三份产物，'
+ 'Step2 生成一份知识资产候选，并请求用户确认一次。'
  '用户确认后调用 confirm_pending，回答问题用 answer_pending，提出修改用 revise_pending；'
  '不得代用户作出决定。缺章节计划时调用 propose_chapters；授权工作完成后调用 finish_workflow。'
  '每次调用后可用 get_workflow_state 查询最新进度。项目存在 recovery_stage 时优先恢复，'
@@ -162,17 +166,19 @@ MANAGER_PROTOCOL = (
  '尚未实际调用工具，不得声称阶段已执行。')
 ASK_USER_PROTOCOL = ('运行时提问规则：需要用户决定时调用 ask_user；不要用 output_type 的 '
  'needs_input/questions 字段提问。不能询问 Harness 已有的进度、记录 ID 或版本。主 Agent '
- '收到候选产物后必须以 ask_user 和 confirmation_task_id 请求确认；专长 Agent 不询问自身尚未'
+ '收到需要确认的候选产物后必须以 ask_user 和 confirmation_task_id 请求确认；专长 Agent 不询问自身尚未'
  '保存的产物。调用后停止本轮，等待用户回答。')
 NO_ASK_USER_PROTOCOL = ('本次 Run 未提供 ask_user 工具；不得主动向用户提问，也不要以 '
  'needs_input/questions 绕过此权限。')
 WINDOW_PROTOCOL = ('滑动窗口固定协议：本次只阅读 runtime.full_source 中的当前窗口，'
- '它是固定原作的片段，不是全文。按原文顺序识别当前窗口内已完整结束的本视图事件，'
- '未完成事件留给下一窗口。covered_source_anchors 从窗口起点写至最后一个完整事件结束处；'
- '主要人物事件视图若当前前缀没有完整人物事件，也可明确声明已检查且确实没有主要人物事件的连续前缀，'
- '并将该前缀写入 covered_source_anchors；不得仅为推进游标而猜测空区间。remaining_source_anchors 写剩余区间。'
+ '它是固定原作的片段，不是全文。作品事件视图按原文顺序切分完整事件，只提交已完整结束的事件；'
+ '未完成事件留给下一窗口，全局 analysis 继承前窗结论并累计分析已提交事件。人物事件视图独立阅读当前原文窗口，'
+ '按人物梳理行动、关系和认知变化，不采用作品事件视图的边界或 ID，不输出 analysis 或逐事件原文锚点。'
+ 'covered_source_anchors 记录本路实际读完且校验通过的连续前缀。'
+ '人物视图若前缀确无主要人物事件，须在 notes 写一条以“空人物事件区间：”开头的具体说明；'
+ '不得把尚未结束的人物事件冒充空区间，亦不得猜测或跳过未读原文。remaining_source_anchors 写剩余区间。'
  '所有锚点使用整份原作的绝对 UTF-16 索引，不得越过已完成区间。'
- 'character_id 使用稳定的 CHAR-人物姓名；全局事件的 character_ids 指向同名人物 ID。此窗口不向用户提问。')
+ 'character_id 使用稳定的 CHAR-人物姓名；作品事件的 character_ids 指向同名人物 ID。此窗口不向用户提问。')
 
 def legacy_prompt_overrides(values):
     """Preserve unclassified edited pre-split instructions in the advanced layer."""
@@ -196,6 +202,8 @@ def legacy_prompt_overrides(values):
             continue
         old_values = p.pop(field)
         for key, value in old_values.items():
+            if field == 'stages' and key in ('step1', 'step2'):
+                continue
             if key not in defaults:
                 p.setdefault(field, {})[key] = value
             elif value != defaults[key]:
@@ -258,8 +266,9 @@ def instruction_parts(stage, values, agent_key=None):
     if stage == 'aux.summary': step = p.get('summary',step)
     if stage == 'aux.history_answer': step = p.get('history_answer',step)
     legacy='\n\n'.join(filter(None,(h.get('legacy_base',''),h.get('legacy_agent',''),
-        h.get('legacy_agents',{}).get(key,''),h.get('legacy_stage',''),
-        h.get('legacy_stages',{}).get(stage,''))))
+        h.get('legacy_agents',{}).get(key,''),
+        h.get('legacy_stage','') if stage not in ('step1','step2') else '',
+        h.get('legacy_stages',{}).get(stage,'') if stage not in ('step1','step2') else '')))
     stage_rule=h.get('stages',{}).get(stage,'')
     runtime=h.get('runtime',{}).get(stage,'')
     if runtime and runtime in stage_rule:
@@ -283,17 +292,20 @@ def step1_run_appendix(view, mode, values, start_utf16=None, end_utf16=None):
         end = end_utf16 if end_utf16 is not None else '<当前窗口终点>'
         rule = (harness_prompts(values)['window'] +
                 f'\n本窗口绝对 UTF-16 范围 [{start},{end})。'
-                '只填写本视图的事件数组；covered_source_anchors 从游标开始，'
-                'remaining_source_anchors 只覆盖本窗口尚未确认的区间。'
-                '仅在完整事件边界提交；若本窗口确实没有主要人物事件，'
-                '人物视图可声明经检查无事件的完整前缀，不能越过未完成事件。')
+                'covered_source_anchors 从本路游标开始，remaining_source_anchors 只覆盖本窗口尚未确认的区间。')
+        rule += ('作品事件只在完整事件边界提交，并输出累计 analysis。' if view == 'global' else
+                 '人物事件不提供逐事件原文锚点，也不输出 analysis；独立提交已检查的连续原文前缀。'
+                 '无人物事件的区间须在 notes 具体说明“空人物事件区间：”。')
     else:
-        rule = ('本次为全文模式，只填写本视图的事件数组。'
+        rule = ('本次为全文模式，直接阅读完整原作，只填写本视图的事件数组。'
                 'covered_source_anchors 必须连续覆盖整篇原作，'
                 'remaining_source_anchors 必须为空。')
-    label = {'global':'全局事件','character':'主要人物事件'}[view]
+        rule += ('全局分支另输出顶层非空 analysis。' if view == 'global' else
+                 '人物分支不输出顶层 analysis，也不提供逐人物事件原文锚点。')
+    label = {'global':'作品事件','character':'主要人物事件'}[view]
     kind = {'global':'source_global_events','character':'source_character_events'}[view]
-    return rule + f'\n当前独立产物：{label}（{kind}）。'
+    result = rule + f'\n当前独立产物：{label}视图（{kind}）。'
+    return result + ('全局分析由 Harness 另存为 source_global_analysis。' if view == 'global' else '')
 
 
 def instructions_preview(stage, values, agent_key=None, *, step1_mode='full', step1_view=None):

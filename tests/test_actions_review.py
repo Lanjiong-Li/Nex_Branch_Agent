@@ -7,7 +7,7 @@ import pytest
 from branch_agent.actions import ActionService
 from branch_agent.workflow import WorkflowBlocked, ref, update
 from test_actions import card, failed_output, initial_task, pending_confirmation, pending_question, submit
-from test_runtime import runtime, source_response, step2_response
+from test_runtime import runtime, source_response
 
 
 @pytest.mark.parametrize("field,value", [
@@ -94,8 +94,8 @@ def test_review_real_stage_needs_input_retains_options(runtime):
     engine, model, pid, cid = runtime
     _, task = initial_task(runtime, stage=3)
     with engine.store.transaction():
-        for kind in ("source_global_analysis", "source_character_analysis"):
-            engine.workflow.save(pid, kind, "已确认的原作分析", stage=2, effective=True)
+        from test_runtime import seed_knowledge_asset
+        seed_knowledge_asset(engine, pid)
     question = {"question_id": "choice-1", "prompt": "保留哪条路线？", "reason": "决定后续范围",
                 "target_field": "/payload/route", "suggested_answers": ["保留甲", "保留乙"], "blocking_scope": "step3"}
     model.responses = [{"result_kind": "needs_input", "payload": None, "questions": [question], "evidence_refs": [], "notes": []}]
@@ -209,7 +209,7 @@ def test_manager_chapter_confirmation_queues_resume_without_stale_root(runtime):
     assert model.calls == []
 
 
-def test_review_changed_source_and_old_unknown_step2_restart_from_step1_with_new_config(runtime):
+def test_review_changed_source_restart_regenerates_step1_and_step2_with_new_config(runtime):
     from test_error_reporting import failed_operation
 
     engine, model, pid, cid = runtime
@@ -245,9 +245,7 @@ def test_review_changed_source_and_old_unknown_step2_restart_from_step1_with_new
     snapshot = engine.store.get(engine._task_data(child)["config_version_id"], pid)
     assert snapshot["values"]["model"]["max_output_tokens"] == 100000
     assert published["id"] in snapshot["resolved_from_ids"]
-    analysis = step2_response("故事前提\n甲乙分别。\n保留分别事件及其因果。",
-                              "人物关系\n保留甲乙原有人物关系。")
-    model.responses = [source_response, source_response, analysis]
+    model.responses = [source_response, source_response]
     async def drive():
         for _ in range(3):
             await engine.tick(pid, cid)
@@ -256,13 +254,16 @@ def test_review_changed_source_and_old_unknown_step2_restart_from_step1_with_new
     children = engine.store.list(pid, "task", filters={"parent_task_id": root["id"]})
     step2 = next(t for t in children if t["scope"]["stage"] == 2)
     assert step2["state"] == "waiting_user"
-    step2_config = engine.store.get(engine._task_data(step2)["config_version_id"], pid)
-    assert step2_config["values"]["model"]["max_output_tokens"] == 100000
+    assert engine.store.list(pid, "run", filters={"task_id": step2["id"]})
+    assert engine._task_data(step2)["result_ref"] == ref(engine.workflow.resolve(
+        pid, "source_knowledge_asset", effective=False))
     view_children = engine.store.list(pid, "task", filters={"parent_task_id": child["id"]})
     assert {engine._task_data(view)["step1_view"] for view in view_children} == {"global", "character"}
     view_runs = [run for view in view_children
                  for run in engine.store.list(pid, "run", filters={"task_id": view["id"]})]
     assert len(view_runs) == 2
+    assert all(engine.store.get(run["config_version_id"], pid)["values"]["model"]["max_output_tokens"] == 100000
+               for run in view_runs)
     assert all(ref(source_v2) in run["input_refs"] and ref(source_v1) not in run["input_refs"]
                for run in view_runs)
 

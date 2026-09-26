@@ -16,77 +16,54 @@
             "source_ref": {
               "$ref": "#/$defs/EvidenceRef"
             },
-            "character_views": {
+            "global_events": {
               "type": "array",
               "items": {
                 "type": "object",
                 "properties": {
-                  "character_id": {
+                  "event_id": {
                     "type": "string"
                   },
-                  "name": {
+                  "title": {
                     "type": "string"
                   },
-                  "aliases": {
+                  "summary": {
+                    "type": "string"
+                  },
+                  "narrative_order": {
+                    "type": "integer"
+                  },
+                  "story_time": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "character_ids": {
                     "type": "array",
                     "items": {
                       "type": "string"
                     }
                   },
-                  "description": {
-                    "type": "string"
-                  },
-                  "events": {
+                  "source_anchors": {
                     "type": "array",
                     "items": {
-                      "type": "object",
-                      "properties": {
-                        "character_event_id": {
-                          "type": "string",
-                          "description": "人物视图内的独立事件身份，不引用全局事件 ID。"
-                        },
-                        "title": {
-                          "type": "string"
-                        },
-                        "summary": {
-                          "type": "string"
-                        },
-                        "narrative_order": {
-                          "type": "integer"
-                        },
-                        "story_time": {
-                          "anyOf": [
-                            {
-                              "type": "string"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
-                        "involvement": {
-                          "type": "string"
-                        }
-                      },
-                      "required": [
-                        "character_event_id",
-                        "title",
-                        "summary",
-                        "narrative_order",
-                        "story_time",
-                        "involvement"
-                      ],
-                      "additionalProperties": false,
-                      "description": "按人物整理的经历和变化；不保存逐事件原文位置。"
+                      "$ref": "#/$defs/SourceAnchor"
                     }
                   }
                 },
                 "required": [
-                  "character_id",
-                  "name",
-                  "aliases",
-                  "description",
-                  "events"
+                  "event_id",
+                  "title",
+                  "summary",
+                  "narrative_order",
+                  "story_time",
+                  "character_ids",
+                  "source_anchors"
                 ],
                 "additionalProperties": false
               }
@@ -106,12 +83,12 @@
           },
           "required": [
             "source_ref",
-            "character_views",
+            "global_events",
             "covered_source_anchors",
             "remaining_source_anchors"
           ],
           "additionalProperties": false,
-          "description": "Step1 主要人物事件视图：事件无逐项原文锚点；原文阅读覆盖由 Harness 独立核对。"
+          "description": "Step1 全局事件视图：独立锚定固定原作，窗口覆盖与完整事件边界由 Harness 校验。"
         },
         {
           "type": "null"
@@ -135,6 +112,10 @@
       "items": {
         "type": "string"
       }
+    },
+    "analysis": {
+      "type": "string",
+      "description": "作品事件视图截至本次已确认原文前缀的累计分析；滑窗的下一窗口必须继承并更新此分析，末窗成为全本分析。ready 时须非空；Harness 将其单独保存为分析产物。"
     }
   },
   "required": [
@@ -142,12 +123,13 @@
     "payload",
     "questions",
     "evidence_refs",
-    "notes"
+    "notes",
+    "analysis"
   ],
   "additionalProperties": false,
-  "description": "模型输出合同：ready 表示有待验证产物；needs_input 返回具体缺项。此字段不决定保存、确认、完成或生效状态。",
+  "description": "Step1 作品事件 Agent 一次运行返回独立事件视图和分析；模型结果由 Harness 拆存两份产物。",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "BranchAgent_source_character_events_v1_0",
+  "title": "BranchAgent_source_global_step1_result_v1_0",
   "$defs": {
     "EvidenceRef": {
       "type": "object",

@@ -149,8 +149,10 @@ def test_step1_branches_resolve_distinct_agent_profiles_and_instructions(runtime
     assert character_snapshot['model']['reasoning_effort']=='low'
     assert '人物分支专属协议' in instructions('step1',character_snapshot)
     preview=instructions_preview('step1',base)
-    assert '只形成全局事件视图' in preview['views']['global']['final']
-    assert '只形成主要人物事件视图' in preview['views']['character']['final']
+    assert '作品事件视图' in preview['views']['global']['final']
+    assert '顶层非空 analysis' in preview['views']['global']['final']
+    assert '不生成逐人物事件原文锚点' in preview['views']['character']['final']
+    assert '不输出顶层 analysis' in preview['views']['character']['final']
 
 
 def test_step1_requires_two_existing_agents(runtime):
@@ -192,7 +194,7 @@ def test_configuration_page_sections_resolve_at_their_runtime_scope(runtime):
         'prompts': {'stage': 'Step7 调试指令'},
         'output': {'structured': {'step7': False}},
         'context': {'profiles': profiles,
-                    'stage_inputs': {'step7': ['source_views', 'game_event_view']},
+                    'stage_inputs': {'step7': ['source_global_events', 'game_event_view']},
                     'session_sharing': {'step7': 'step5'}},
         'repair': {'max_rounds': 5},
     }, scope_kind='stage', scope_key='step7')
@@ -213,7 +215,7 @@ def test_configuration_page_sections_resolve_at_their_runtime_scope(runtime):
     assert next(profile for profile in resolved['context']['profiles']['profiles']
                 if profile['stage'] == 'step7')['materials'][0]['enabled'] is False
     assert resolved['context']['stage_inputs']['step7'] == [
-        'source_global_events', 'source_character_events', 'game_event_view']
+        'source_global_events', 'game_event_view']
     assert resolved['context']['session_sharing']['step7'] == 'step5'
     prompt = instructions('step7', resolved)
     assert '全局调试约束' in prompt
@@ -228,8 +230,8 @@ def test_configuration_page_sections_resolve_at_their_runtime_scope(runtime):
 
 def test_session_sharing_configuration_controls_real_session_keys():
     sharing = deepcopy(SESSION_SHARING_DEFAULTS)
-    assert session_key(3, sharing=sharing) == session_key(2, sharing=sharing)
-    sharing['step3'] = None
+    assert sharing['step3'] is None
+    assert sharing['step4'] is None
     assert session_key(3, sharing=sharing) != session_key(2, sharing=sharing)
     sharing['step10'] = 'step9'
     assert session_key(10, 'chapter-one', sharing) == session_key(9, 'chapter-one', sharing)
@@ -277,14 +279,15 @@ def test_step3_prompt_only_asks_for_player_role_and_interaction_ideas():
     assert 'runtime.default_strategy' not in prompt
 
 
-def test_step2_prompt_generates_analysis_without_questions():
+def test_step2_has_dedicated_knowledge_asset_agent():
     values, _ = initial_values()
     prompt = instructions('step2', values)
-    assert '此阶段不向用户提出任何问题' in prompt
-    assert '直接输出可读文本' in prompt
-    assert '不输出JSON' in prompt
-    assert 'Step2 不绑定 output_type' in prompt
-    assert '不得询问保留程度、改编策略、玩家身份、哪些人物需要互动' in prompt
+    assert values['prompts']['stage_agents']['step2']=='source_knowledge_analyst'
+    assert values['output']['bindings']['step2']=='source_knowledge_asset'
+    assert values['output']['structured']['step2'] is True
+    assert values['context']['stage_inputs']['step2']==[
+        'source_global_events','source_global_analysis','source_character_events']
+    assert '结构化原作知识资产' in prompt
 
 
 def test_validation_agent_is_configurable_and_disabled_by_default():
@@ -399,7 +402,7 @@ def test_legacy_published_schema_is_upgraded_with_source_message_classification(
     assert 'source_message_kind' in upgraded['required']
 
 
-def test_legacy_plain_text_output_types_are_removed_from_resolved_configuration(runtime):
+def test_obsolete_step2_output_binding_is_rejected(runtime):
     store, task, _, _, _ = runtime
     pid = task['project_id']
     account = store.get(pid, pid)['owner_account_id']
@@ -417,8 +420,5 @@ def test_legacy_plain_text_output_types_are_removed_from_resolved_configuration(
             'output': {'bindings': {**service.catalog.registry['bindings'],
                 'aux.summary': 'work_summary', 'step2': 'source_analysis'}}}))
 
-    resolved = service.resolve(pid, 'coordinator')['values']
-    assert 'work_summary' not in resolved['schemas']
-    assert 'source_analysis' not in resolved['schemas']
-    assert 'aux.summary' not in resolved['output']['bindings']
-    assert 'step2' not in resolved['output']['bindings']
+    with pytest.raises(ValueError, match='必须保留全部|输出类型绑定不存在|语义绑定不能互换'):
+        service.resolve(pid, 'coordinator')

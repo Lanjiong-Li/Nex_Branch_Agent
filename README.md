@@ -36,7 +36,7 @@ DATABASE_URL=postgresql:///branch_agent_local
 5. 在“运行数据”中按项目查看每次 Agent Run 的实际输入、工具调用、模型输出、保存的产物和错误原因。
 6. 完成章节确认与审核后，最终结果卡片提供同一版本 JSON 的查看、复制和下载。
 
-Step1 按“全局默认 → 滑动窗口机制参数”决定全文或逐窗扫描。全局事件 Agent 与主要人物事件 Agent 并行读取同一固定原作版本，各有独立的 Run、Session、窗口游标和输入输出记录。原作估算 token 数超过触发阈值时，两路分别按固定窗口、完整事件边界和绝对 UTF-16 索引扫描；Harness 保存各自的窗口进度，全篇覆盖后分别生成 `source_global_events` 和 `source_character_events`，供下游阶段共同读取。窗口无法形成安全的完整事件区间或请求超预算时，对应视图暂停，不跳过原文或抹去另一视图已验证的进度。DeepSeek 的上下文预检暂用带 25% 余量的 `o200k_base` 估算，实际 token 用量以供应商返回值为准。DeepSeek 使用 JSON Schema 非严格模式，Harness 仍对结果执行完整的本地 Schema 校验与返修。测试版暂停费用门禁，仍记录模型用量；达到其他运行上限时保存进度等待继续。
+当前工作区的 Step1 按“全局默认 → 滑动窗口机制参数”决定每路全文或逐窗扫描。作品事件 Agent 与主要人物事件 Agent 并行读取同一固定原作版本，各有独立的 Run、Session、窗口游标和输入输出记录。全局分支生成带逐事件原文索引的 `source_global_events` 和 `source_global_analysis`；人物分支只生成不带逐事件索引的 `source_character_events`。Step2 的原作知识资产分析 Agent 读取这三份固定产物，生成结构化 `source_knowledge_asset`，保存后请求一次确认。估算超过阈值或全文请求放不进该路输入预算时独立滑窗，按绝对 UTF-16 索引校验全篇覆盖；作品事件在完整事件边界推进，人物事件按独立核实的连续区间推进。窗口无法安全推进或请求超预算时暂停对应分支，不跳过原文或抹去另一分支已验证的进度。DeepSeek 的上下文预检暂用带 25% 余量的 `o200k_base` 估算，实际 token 用量以供应商返回值为准。DeepSeek 使用 JSON Schema 非严格模式，Harness 仍对结果执行完整的本地 Schema 校验与返修。测试版暂停费用门禁，仍记录模型用量；达到其他运行上限时保存进度等待继续。
 
 真实短篇《一盏灯》曾完成 Step1–11、返修、独立审核和最终 JSON 下载验收。验收脚本模拟用户选择与确认，浏览器只读核对和下载；联调产物保存在本地，不随源码发布。证据及边界见[真实模型记录](docs/live-model-smoke.md)。
 
@@ -64,7 +64,7 @@ node --test tests/runtime-view.test.mjs
 
 数据库测试使用独立临时schema；不会将合成产物作为生产模型结果。SDK适配测试使用真实Agents SDK与本地模拟HTTP供应商；真实API联调单独记录，不用模拟成功替代真实成功。
 
-详细范围见 [开发文档](docs/分支Agent开发文档.md)、[实施计划](docs/implementation-plan.md)；实际验证与当前边界见 [交付状态](docs/implementation-status.md)。
+接手当前开发请先读 [开发交接手册](docs/开发交接手册.md)。早期设计范围见 [开发文档](docs/分支Agent开发文档.md)、[实施计划](docs/implementation-plan.md)；历史验证记录见 [交付状态](docs/implementation-status.md)。
 
 ## 服务端部署准备
 

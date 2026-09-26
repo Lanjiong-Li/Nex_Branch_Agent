@@ -4,18 +4,6 @@
     "title": "雨夜车站：钥匙的去向",
     "logline": "旅人林安在雨夜帮助乔乔寻找钥匙，玩家的信任与取舍决定两人如何离开车站。",
     "premise_and_scope": "围绕车站相遇、寻找钥匙和离开的短篇互动改编，保留原作人物与场景。",
-    "source_global_analysis_ref": {
-      "record_id": "demo:source_global_analysis",
-      "version": "v1",
-      "item_id": null,
-      "json_pointer": null
-    },
-    "source_character_analysis_ref": {
-      "record_id": "demo:source_character_analysis",
-      "version": "v1",
-      "item_id": null,
-      "json_pointer": null
-    },
     "strategy_ref": {
       "record_id": "demo:adaptation_strategy",
       "version": "v1",
@@ -24,7 +12,7 @@
     },
     "player_role": {
       "character_ref": {
-        "record_id": "demo:source_views",
+        "record_id": "demo:source_character_events",
         "version": "v1",
         "item_id": "source_character_lin",
         "json_pointer": null
@@ -46,7 +34,7 @@
         "description": "习惯观察细节，但对陌生人的请求保持谨慎。",
         "source_refs": [
           {
-            "record_id": "demo:source_views",
+            "record_id": "demo:source_character_events",
             "version": "v1",
             "item_id": "source_character_lin",
             "json_pointer": null
@@ -61,7 +49,7 @@
         "description": "因遗失钥匙而焦急，得到帮助后愿意解释缘由。",
         "source_refs": [
           {
-            "record_id": "demo:source_views",
+            "record_id": "demo:source_character_events",
             "version": "v1",
             "item_id": "source_character_qiao",
             "json_pointer": null
@@ -76,7 +64,7 @@
         "description": "旧钟、长椅和微亮的出口构成主要空间。",
         "source_refs": [
           {
-            "record_id": "demo:source_views",
+            "record_id": "demo:source_global_events",
             "version": "v1",
             "item_id": null,
             "json_pointer": null
@@ -112,18 +100,24 @@
       "event_functions": null,
       "ending_routes": null,
       "player_profiles": null
+    },
+    "source_knowledge_asset_ref": {
+      "record_id": "demo:source_knowledge_asset",
+      "version": "v1",
+      "item_id": null,
+      "json_pointer": null
     }
   },
   "questions": [],
   "evidence_refs": [
     {
-      "record_id": "demo:source_global_analysis",
+      "record_id": "demo:source_knowledge_asset",
       "version": "v1",
       "item_id": null,
       "json_pointer": null
     },
     {
-      "record_id": "demo:source_character_analysis",
+      "record_id": "demo:source_character_events",
       "version": "v1",
       "item_id": null,
       "json_pointer": null

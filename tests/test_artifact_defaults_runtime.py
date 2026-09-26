@@ -44,8 +44,7 @@ def _plan_default():
             "title": "人工设置的默认改编方案",
             "logline": "",
             "premise_and_scope": "",
-            "source_global_analysis_ref": None,
-            "source_character_analysis_ref": None,
+            "source_knowledge_asset_ref": None,
             "strategy_ref": None,
             "player_role": {"character_ref": None, "description": "", "perspective": ""},
             "experience_goals": [],
@@ -128,10 +127,8 @@ def test_step3_run_freezes_the_current_strategy_as_an_input(runtime):
     strategy = engine.workflow.resolve(project_id, "adaptation_strategy")
 
     with store.transaction():
-        engine.workflow.save(project_id, "source_global_analysis", "全局事件分析", stage=2,
-                             origin="program", effective=True)
-        engine.workflow.save(project_id, "source_character_analysis", "人物事件分析", stage=2,
-                             origin="program", effective=True)
+        from test_runtime import seed_knowledge_asset
+        knowledge = seed_knowledge_asset(engine, project_id)
         message = engine._message(project_id, conversation_id, "生成互动策略", role="user")
         task = engine._new_task(project_id, conversation_id, message, "generate", stage=3)
         materials = engine.workflow.materials(project_id, 3)
@@ -140,6 +137,8 @@ def test_step3_run_freezes_the_current_strategy_as_an_input(runtime):
         assert baseline[0]["schema_id"] == "adaptation_strategy"
         assert baseline[0]["ref"] == ref(strategy)
         assert baseline[0]["content"] == body(store, strategy)
+        assert any(item["schema_id"] == "source_knowledge_asset" and item["ref"] == ref(knowledge)
+                   for item in materials)
 
         task, run, session, values = engine._start_run(task, 3, materials)
         assert ref(strategy) in run["input_refs"]

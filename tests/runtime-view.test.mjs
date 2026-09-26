@@ -10,9 +10,9 @@ test('Run 调试视图展示实际输入、模型输出与工具结果',()=>{
     snapshots:[{id:'snapshot-1',model:'gpt-5.6-luna',instructions:{storage:'inline_text',text:'分析原作'},input_items:{storage:'inline_json',value:[{role:'user',content:'原作正文'}]}}],
     outputs:[{model_call_id:'call-1',history:{content:{storage:'inline_json',value:{output:[{type:'message',text:'分析完成'}]}}}}],
     tools:[{model_call_id:'call-1',tool_name:'get_artifact',state:'succeeded',arguments:{storage:'inline_json',value:{kind:'source_text'}},result:{storage:'inline_text',text:'读取成功'}}],
-    artifacts:[{artifact:{artifact_kind:'source_views'},version:{version:1},content:{events:[]}}]};
+    artifacts:[{artifact:{artifact_kind:'source_global_events'},version:{version:1},content:{events:[]}}]};
   const html=runtimeHTML(data,run.id,detail);
-  for(const text of ['Step 1 · 原作切分 · 原作切片 Agent','gpt-5.6-luna','分析原作','原作正文','分析完成','get_artifact','读取成功','source_views'])assert.ok(html.includes(text),text);
+  for(const text of ['Step 1 · 原作事件整理 · 原作切片 Agent','gpt-5.6-luna','分析原作','原作正文','分析完成','get_artifact','读取成功','source_global_events'])assert.ok(html.includes(text),text);
   assert.ok(!html.includes('Session、上下文与压缩'));
   assert.ok(html.includes('过程视图'));
   assert.ok(html.includes('历史 Run：根据审计记录重建'));

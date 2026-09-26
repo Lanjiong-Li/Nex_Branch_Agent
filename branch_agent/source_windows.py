@@ -33,13 +33,12 @@ def _anchor(source_ref, start, end):
             "exact_quote": None, "prefix": None, "suffix": None}
 
 
-def validate_window(output, source, source_ref, pass_name, start, end, empty_boundaries=()):
+def validate_window(output, source, source_ref, pass_name, start, end):
     """Validate one view's independently committed prefix of a source window.
 
-    A character pass may explicitly attest that a covered prefix has no
-    completed main-character event. Its cursor does not depend on the global
-    pass's event boundaries. ``empty_boundaries`` is retained for callers of
-    the earlier interface, but is deliberately ignored.
+    A character pass certifies what it has read, whether or not a character
+    event ends at that position. It never borrows the global pass's event
+    boundaries.
     """
     if pass_name not in ("global", "character"):
         raise WorkflowBlocked("source_window_wrong_view")
@@ -69,21 +68,27 @@ def validate_window(output, source, source_ref, pass_name, start, end, empty_bou
     if actual_remaining != expected_remaining:
         raise WorkflowBlocked("source_window_coverage_invalid",
                               {"view": pass_name, "commit_utf16": commit, "window_end_utf16": end})
-    if not events and (pass_name != "character" or payload["character_views"]):
+    if not events and pass_name == "global":
         raise WorkflowBlocked("source_window_no_complete_event",
                               {"view": pass_name, "start_utf16": start, "end_utf16": end})
-    terminal = 0
-    for event in events:
-        if not event["source_anchors"]:
-            raise WorkflowBlocked("source_anchor_invalid", {"view": pass_name})
-        for anchor in event["source_anchors"]:
-            a, b = anchor["start_utf16"], anchor["end_utf16"]
-            if not start <= a < b <= commit:
-                raise WorkflowBlocked("source_window_event_outside_commit", {"view": pass_name})
-            terminal = max(terminal, b)
-    if events and terminal != commit:
-        raise WorkflowBlocked("source_window_boundary_invalid",
-                              {"view": pass_name, "last_event_end_utf16": terminal, "commit_utf16": commit})
+    if pass_name == "global":
+        terminal = 0
+        for event in events:
+            if not event["source_anchors"]:
+                raise WorkflowBlocked("source_anchor_invalid", {"view": pass_name})
+            for anchor in event["source_anchors"]:
+                a, b = anchor["start_utf16"], anchor["end_utf16"]
+                if not start <= a < b <= commit:
+                    raise WorkflowBlocked("source_window_event_outside_commit", {"view": pass_name})
+                terminal = max(terminal, b)
+        if events and terminal != commit:
+            raise WorkflowBlocked("source_window_boundary_invalid",
+                                  {"view": pass_name, "last_event_end_utf16": terminal, "commit_utf16": commit})
+    if pass_name == "character" and not events and not any(
+            isinstance(note, str) and note.startswith("空人物事件区间：") and note.removeprefix("空人物事件区间：").strip()
+            for note in value.get("notes", [])):
+        raise WorkflowBlocked("source_window_empty_interval_unverified",
+                              {"view": pass_name, "start_utf16": start, "commit_utf16": commit})
     payload["remaining_source_anchors"] = [] if commit == end else [_anchor(source_ref, commit, end)]
     return value, commit
 
@@ -147,11 +152,3 @@ def combine_view_windows(windows, pass_name, source_ref, source_length):
             event["character_event_id"] = f"CEV-{index:05d}"
             event["narrative_order"] = index
     return result
-
-
-def combine_windows(windows, source_ref, source_length):
-    """Compatibility merger for older single-artifact Step 1 runs."""
-    global_result = combine_view_windows(windows, "global", source_ref, source_length)
-    character_result = combine_view_windows(windows, "character", source_ref, source_length)
-    global_result["payload"]["character_views"] = character_result["payload"]["character_views"]
-    return global_result

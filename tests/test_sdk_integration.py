@@ -86,7 +86,7 @@ async def test_provider_routing_uses_isolated_clients_and_keeps_openai_available
 
 
 @pytest.mark.asyncio
-async def test_step2_uses_plain_text_without_output_schema(runtime):
+async def test_step2_uses_structured_knowledge_asset_schema(runtime):
     store,base_task,_,_,_=runtime;pid=base_task['project_id'];requests=[]
     workflow=Workflow(store)
     with store.transaction():
@@ -99,22 +99,24 @@ async def test_step2_uses_plain_text_without_output_schema(runtime):
             'questions':[],'evidence_refs':[ref(source)],'notes':[]}
         global_view=workflow.save(pid,'source_global_events',global_events,stage=1,inputs=[ref(source)],effective=True)
         character_view=workflow.save(pid,'source_character_events',character_events,stage=1,inputs=[ref(source)],effective=True)
+        global_analysis=workflow.save(pid,'source_global_analysis','甲与乙相遇。',stage=1,
+            inputs=[ref(source),ref(global_view)],effective=True)
     config=ConfigService(store).resolve(pid,'step2')
     task=store.put(new_record('task',pid,conversation_id=base_task['conversation_id'],
         requested_by_message_id=base_task['requested_by_message_id'],intent='generate',state='running'))
-    session=store.put(new_record('work_session',pid,conversation_id=base_task['conversation_id'],session_key='adaptation_direction'))
-    run=store.put(new_record('run',pid,task_id=task['id'],agent_key='adaptation_planner',session_id=session['id'],
-        config_version_id=config['id'],state='running',input_refs=[ref(global_view),ref(character_view)]))
+    session=store.put(new_record('work_session',pid,conversation_id=base_task['conversation_id'],session_key='source_knowledge_asset'))
+    run=store.put(new_record('run',pid,task_id=task['id'],agent_key='source_knowledge_analyst',session_id=session['id'],
+        config_version_id=config['id'],state='running',input_refs=[ref(global_view),ref(global_analysis),ref(character_view)]))
     def handler(request):
         data=json.loads(request.content);requests.append(data)
-        assert data.get('text',{}).get('format',{}).get('type')!='json_schema'
-        return httpx.Response(200,json=plain_provider_response('故事前提\n甲与乙相遇。'))
+        from test_runtime import step2_response
+        return httpx.Response(200,json=plain_provider_response(json.dumps(step2_response(),ensure_ascii=False)))
     client=AsyncOpenAI(api_key='local-mock-not-real',http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),max_retries=0)
     result=await ModelService(store,client).run('step2',task,run,session,config['values'],workflow.materials(pid,2),'分析原作')
-    assert result=='故事前提\n甲与乙相遇。'
+    assert result['payload']['premise']=='甲与乙相遇。'
     snapshot=store.list(pid,'context_snapshot')[-1]
-    assert snapshot['output_schema'] is None
-    assert requests
+    assert snapshot['output_schema']['schema_id']=='source_knowledge_asset'
+    assert requests and requests[0]['text']['format']['type']=='json_schema'
     await client.close()
 
 
@@ -125,7 +127,7 @@ async def test_disabling_stage_output_type_changes_real_sdk_request(runtime):
     with store.transaction():
         source=workflow.save(pid,'source_text','甲见乙。',origin='import',effective=True)
     config=ConfigService(store).resolve(pid,'step1')
-    config['values']['output']['structured']['step1']=False
+    config['values']['output']['structured']['step1.global']=False
     config['values']['model'].update(name='gpt-5.6-luna',reasoning_effort='high',max_output_tokens=32000)
     config['values']['tools']['enabled']=['read_record']
     task=store.put(new_record('task',pid,conversation_id=base_task['conversation_id'],
@@ -139,10 +141,10 @@ async def test_disabling_stage_output_type_changes_real_sdk_request(runtime):
         assert data['reasoning']['effort']=='high'
         assert data['max_output_tokens']==32000
         assert data.get('text',{}).get('format',{}).get('type')!='json_schema'
-        assert [tool['name'] for tool in data['tools']]==['read_record','ask_user']
+        assert [tool['name'] for tool in data['tools']]==['read_record']
         return httpx.Response(200,json=plain_provider_response('原始文本调试输出'))
     client=AsyncOpenAI(api_key='local-mock-not-real',http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),max_retries=0)
-    result=await ModelService(store,client).run('step1',task,run,session,config['values'],workflow.materials(pid,1),'切片')
+    result=await ModelService(store,client).run('step1',task,run,session,config['values'],workflow.materials(pid,1),'切片',step1_view='global')
     assert result=='原始文本调试输出'
     assert store.list(pid,'context_snapshot')[-1]['output_schema'] is None
     assert requests

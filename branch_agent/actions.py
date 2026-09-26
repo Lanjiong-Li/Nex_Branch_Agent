@@ -214,14 +214,6 @@ class ActionService:
                 return True
             has_global = step1_view_detail('source_global_events', 'Step1 全局事件')
             has_character = step1_view_detail('source_character_events', 'Step1 主要人物事件')
-            if not (has_global or has_character):
-                try:
-                    legacy = self.engine.workflow.resolve(pid, 'source_views', effective=False)
-                except WorkflowBlocked:
-                    pass
-                else:
-                    details.append({'label': '历史 Step1 合并分段',
-                                    'value': f"v{legacy['version']}，仅供旧任务查看"})
             actions = [action('restart', '使用已发布配置从 Step1 重新开始',
                               '保留旧记录，替代此旧流程及其子任务；重新分段并逐阶段生成。' + ('新预算不包含未知旧费用。' if cost_gates else ''), budget_fields,
                               disabled or ('已有交付版本，请按具体阶段修订，或新建改编项目。' if has_delivery else None)),

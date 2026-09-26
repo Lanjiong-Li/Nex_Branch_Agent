@@ -22,22 +22,24 @@
             "premise_and_scope": {
               "type": "string"
             },
-            "source_global_analysis_ref": {
+            "source_knowledge_asset_ref": {
               "anyOf": [
-                {"$ref": "#/$defs/EvidenceRef"},
-                {"type": "null"}
-              ]
-            },
-            "source_character_analysis_ref": {
-              "anyOf": [
-                {"$ref": "#/$defs/EvidenceRef"},
-                {"type": "null"}
+                {
+                  "$ref": "#/$defs/EvidenceRef"
+                },
+                {
+                  "type": "null"
+                }
               ]
             },
             "strategy_ref": {
               "anyOf": [
-                {"$ref": "#/$defs/EvidenceRef"},
-                {"type": "null"}
+                {
+                  "$ref": "#/$defs/EvidenceRef"
+                },
+                {
+                  "type": "null"
+                }
               ]
             },
             "player_role": {
@@ -216,8 +218,7 @@
             "title",
             "logline",
             "premise_and_scope",
-            "source_global_analysis_ref",
-            "source_character_analysis_ref",
+            "source_knowledge_asset_ref",
             "strategy_ref",
             "player_role",
             "experience_goals",

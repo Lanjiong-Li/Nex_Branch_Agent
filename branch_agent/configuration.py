@@ -33,11 +33,10 @@ MODELS = {
 # available to a stage before those selectors are applied.
 ARTIFACT_PRODUCERS = {
     'source_text': 0,
-    'source_views': 1,
     'source_global_events': 1,
     'source_character_events': 1,
-    'source_global_analysis': 2,
-    'source_character_analysis': 2,
+    'source_global_analysis': 1,
+    'source_knowledge_asset': 2,
     'adaptation_strategy': 3,
     'adaptation_plan': 4,
     'game_event_view': 5,
@@ -49,10 +48,10 @@ ARTIFACT_PRODUCERS = {
 }
 STAGE_INPUT_DEFAULTS = {
     'step1': ['source_text'],
-    'step2': ['source_global_events', 'source_character_events'],
-    'step3': ['source_global_analysis', 'source_character_analysis'],
-    'step4': ['source_global_analysis', 'source_character_analysis', 'adaptation_strategy'],
-    'step5': ['source_global_events', 'source_character_events', 'source_global_analysis', 'source_character_analysis'],
+    'step2': ['source_global_events', 'source_global_analysis', 'source_character_events'],
+    'step3': ['source_knowledge_asset'],
+    'step4': ['source_knowledge_asset', 'adaptation_strategy'],
+    'step5': ['source_global_events', 'source_character_events', 'source_knowledge_asset'],
     'step6': ['game_event_view'],
     'step7': ['game_event_view'],
     'step8': ['game_event_view', 'ending_routes'],
@@ -63,8 +62,8 @@ STAGE_INPUT_DEFAULTS = {
 SESSION_SHARING_DEFAULTS = {
     'step1': None,
     'step2': None,
-    'step3': 'step2',
-    'step4': 'step2',
+    'step3': None,
+    'step4': None,
     'step5': None,
     'step6': 'step5',
     'step7': None,
@@ -110,7 +109,7 @@ def initial_values():
         # artifact is committed or a downstream stage is started.
         'output':{'bindings':SchemaCatalog().registry['bindings'],
                   'structured':{'coordinator':True,
-                      **{f'step{i}': i != 2 for i in range(1,12)},
+                      **{f'step{i}': True for i in range(2,12)},
                       'step1.global':True,'step1.character':True,
                       'aux.summary':False,'aux.history_answer':True,'aux.subtask':True}},
         'model':{'temperature':None}, 'pricing':{'version':'multi-provider-2026-09-25-peak-usd',
@@ -185,13 +184,14 @@ def validate_values(values, schemas):
     structured=values.get('output',{}).get('structured',{})
     if not isinstance(structured,dict) or any(type(value) is not bool for value in structured.values()):
         raise ValueError('output.structured 必须是阶段到布尔值的映射')
-    if not {'step1.global','step1.character'} <= set(structured):
+    step1_outputs={'step1.global','step1.character'}
+    if not step1_outputs <= set(structured):
         raise ValueError('Step1 两路必须分别配置 output_type 开关')
-    allowed=executable|{'step1.global','step1.character'}
+    allowed=executable|step1_outputs
     if set(structured)-set(allowed):
         raise ValueError('存在未注册的 output_type 阶段开关')
-    if structured.get('step2') is True or structured.get('aux.summary') is True:
-        raise ValueError('Step2 与压缩摘要是内部纯文本产物，不绑定 output_type')
+    if structured.get('aux.summary') is True:
+        raise ValueError('压缩摘要是内部纯文本产物，不绑定 output_type')
     if values['summary']['checkpoint_events']!=['confirmation','stage.completed']:
         raise ValueError('当前运行适配器固定在关键确认和阶段完成保存检查点，尚未注册其他检查点事件配置')
     if values['context']['version_mapping']!={'field_mappings':[],'dependency_scope':'selected_with_guards','extra_guard_paths':[],'transforms':[]}:
@@ -286,45 +286,23 @@ class ConfigService:
         """Add required runtime fields introduced after a saved editable schema."""
         upgraded=deepcopy(schemas)
         upgraded.pop('work_summary',None)
-        upgraded.pop('source_analysis',None)
+        # Keep the editable event view and its Step1 model output aligned.
+        # Only the global branch has a top-level analysis.
+        for view,result in (('source_global_events','source_global_step1_result'),
+                            ('source_character_events','source_character_step1_result')):
+            if view in upgraded and result not in upgraded:
+                combined=deepcopy(upgraded[view])
+                if view == 'source_global_events':
+                    combined['properties']['analysis']=deepcopy(
+                        self.catalog.schemas[result]['properties']['analysis'])
+                    if 'analysis' not in combined['required']:
+                        combined['required'].append('analysis')
+                combined['title']=self.catalog.schemas[result]['title']
+                upgraded[result]=combined
         # Step6 now returns a small patch; the enriched game_event_view is
         # assembled by the Harness. The old standalone event_function_map
         # remains readable only as a historical artifact.
         upgraded.pop('event_function_map',None)
-        source_views=upgraded.get('source_views')
-        if source_views:
-            try:
-                current=self.catalog.schemas['source_views']['properties']['payload']['anyOf'][0]
-                event=source_views['properties']['payload']['anyOf'][0]['properties']['character_views']['items']['properties']['events']
-                if 'event_id' in event['items']['properties']:
-                    event['items']=deepcopy(current['properties']['character_views']['items']['properties']['events']['items'])
-            except (KeyError,IndexError,TypeError):
-                pass
-        for name in ('adaptation_strategy','adaptation_plan'):
-            contract=upgraded.get(name)
-            if not contract:
-                continue
-            try:
-                payload=contract['properties']['payload']['anyOf'][0]
-                current=self.catalog.schemas[name]['properties']['payload']['anyOf'][0]
-                properties=payload['properties']
-                properties.pop('source_analysis_ref',None)
-                for field in ('source_global_analysis_ref','source_character_analysis_ref'):
-                    properties[field]=deepcopy(current['properties'][field])
-                if name=='adaptation_plan':
-                    properties['strategy_ref']=deepcopy(current['properties']['strategy_ref'])
-                required=[]
-                for field in payload['required']:
-                    if field=='source_analysis_ref':
-                        required.extend(('source_global_analysis_ref','source_character_analysis_ref'))
-                    else:
-                        required.append(field)
-                for field in ('source_global_analysis_ref','source_character_analysis_ref'):
-                    if field not in required:
-                        required.append(field)
-                payload['required']=required
-            except (KeyError,IndexError,TypeError):
-                continue
         game_events=upgraded.get('game_event_view')
         if game_events:
             try:
@@ -419,26 +397,10 @@ class ConfigService:
 
     @staticmethod
     def _upgrade_context_overrides(values):
-        """Map saved single-analysis material profiles to the active split artifacts."""
+        """Upgrade saved material profiles for the supported later stages."""
         upgraded=deepcopy(values)
-        prompts=upgraded.get('prompts',{})
-        if isinstance(prompts,dict) and 'step1_view_agents' not in prompts:
-            old_agent=prompts.get('stage_agents',{}).get('step1')
-            if old_agent and old_agent!='source_parser':
-                # An explicitly assigned legacy Step1 Agent stays selected
-                # for both views until the editor chooses two new roles.
-                prompts['step1_view_agents']={'global':old_agent,'character':old_agent}
-        stage_inputs=upgraded.get('context',{}).get('stage_inputs')
-        if isinstance(stage_inputs,dict):
-            for stage,selected in stage_inputs.items():
-                if isinstance(selected,list) and 'source_views' in selected:
-                    replacement=[]
-                    for kind in selected:
-                        replacement.extend(('source_global_events','source_character_events')
-                                           if kind=='source_views' else (kind,))
-                    stage_inputs[stage]=list(dict.fromkeys(replacement))
         bindings=upgraded.get('output',{}).get('bindings',{})
-        if bindings.get('step6') in ('event_function_map', 'game_event_view'):
+        if isinstance(bindings,dict) and bindings.get('step6') in ('event_function_map', 'game_event_view'):
             bindings['step6']='game_event_narrative_patch'
         profiles=upgraded.get('context',{}).get('profiles',{}).get('profiles')
         if not isinstance(profiles,list):
@@ -465,49 +427,18 @@ class ConfigService:
                 profile['materials']=[]
                 continue
             expanded=[]
-            existing={m.get('source',{}).get('schema_id') for m in materials if isinstance(m,dict)}
-            if 'source_views' in existing:
-                # Old profiles selected nested pointers from the combined
-                # source_views artifact. Use the registered split selectors
-                # for each view, retaining unrelated user-selected materials.
-                for canonical_material in current['materials']:
-                    kind=canonical_material.get('source',{}).get('schema_id')
-                    if kind in ('source_global_events','source_character_events') and kind not in existing:
-                        expanded.append(deepcopy(canonical_material))
             for material in materials:
                 if material.get('source',{}).get('builtin')=='runtime.default_strategy':
-                    continue
-                if material.get('source',{}).get('schema_id')=='source_views':
                     continue
                 if profile.get('stage')=='step5' and material.get('source',{}).get('schema_id')=='adaptation_plan':
                     continue
                 if profile.get('stage') in ('step7','step8') and material.get('source',{}).get('schema_id')=='event_function_map':
-                    continue
-                if material.get('source',{}).get('schema_id')=='source_analysis':
-                    for kind,identity in (('source_global_analysis','global_event_analysis'),
-                                          ('source_character_analysis','character_event_analysis')):
-                        if kind in existing:
-                            continue
-                        replacement=deepcopy(material)
-                        replacement['id']=identity
-                        replacement['source']['schema_id']=kind
-                        replacement['selectors']=['']
-                        expanded.append(replacement)
                     continue
                 selectors=material.get('selectors')
                 if profile.get('stage')=='step6' and material.get('source',{}).get('schema_id')=='game_event_view' \
                         and isinstance(selectors,list):
                     selectors=[selector for selector in selectors if selector!='/payload/plan_ref']
                     material['selectors']=selectors
-                if isinstance(selectors,list) and '/payload/source_analysis_ref' in selectors:
-                    rewritten=[]
-                    for selector in selectors:
-                        if selector=='/payload/source_analysis_ref':
-                            rewritten.extend(('/payload/source_global_analysis_ref',
-                                               '/payload/source_character_analysis_ref'))
-                        else:
-                            rewritten.append(selector)
-                    material['selectors']=list(dict.fromkeys(rewritten))
                 expanded.append(material)
             profile['materials']=expanded
         return upgraded
@@ -678,9 +609,7 @@ class ConfigService:
         # Internal plain-text artifacts are not Agent structured outputs.
         # Remove legacy published schemas and bindings.
         schemas.pop('work_summary',None)
-        schemas.pop('source_analysis',None)
         data.get('output',{}).get('bindings',{}).pop('aux.summary',None)
-        data.get('output',{}).get('bindings',{}).pop('step2',None)
         data.get('summary',{}).pop('extra_fields',None)
         # Tool permissions are no longer configurable. Keep the legacy fields
         # in resolved snapshots for compatibility, but override old per-Agent

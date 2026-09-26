@@ -1,0 +1,345 @@
+{
+  "type": "object",
+  "properties": {
+    "result_kind": {
+      "type": "string",
+      "enum": [
+        "ready",
+        "needs_input"
+      ]
+    },
+    "payload": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "source_global_events_ref": {
+              "$ref": "#/$defs/EvidenceRef"
+            },
+            "source_global_analysis_ref": {
+              "$ref": "#/$defs/EvidenceRef"
+            },
+            "source_character_events_ref": {
+              "$ref": "#/$defs/EvidenceRef"
+            },
+            "premise": {
+              "type": "string"
+            },
+            "world_rules": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Finding"
+              }
+            },
+            "themes": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Finding"
+              }
+            },
+            "conflicts": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Finding"
+              }
+            },
+            "characters": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "character_ref": {
+                    "$ref": "#/$defs/EvidenceRef"
+                  },
+                  "motivation": {
+                    "type": "string"
+                  },
+                  "arc": {
+                    "type": "string"
+                  },
+                  "relationships": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "other_character_ref": {
+                          "$ref": "#/$defs/EvidenceRef"
+                        },
+                        "description": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "other_character_ref",
+                        "description"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "evidence_refs": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/$defs/EvidenceRef"
+                    }
+                  }
+                },
+                "required": [
+                  "character_ref",
+                  "motivation",
+                  "arc",
+                  "relationships",
+                  "evidence_refs"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "key_event_refs": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/EvidenceRef"
+              }
+            },
+            "preservation_items": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "item_id": {
+                    "type": "string"
+                  },
+                  "category": {
+                    "type": "string"
+                  },
+                  "content": {
+                    "type": "string"
+                  },
+                  "suggested_retention": {
+                    "type": "string",
+                    "enum": [
+                      "preserve",
+                      "adapt",
+                      "optional",
+                      "exclude"
+                    ]
+                  },
+                  "rationale": {
+                    "type": "string"
+                  },
+                  "evidence_refs": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/$defs/EvidenceRef"
+                    }
+                  }
+                },
+                "required": [
+                  "item_id",
+                  "category",
+                  "content",
+                  "suggested_retention",
+                  "rationale",
+                  "evidence_refs"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "event_causality": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Finding"
+              }
+            },
+            "canon_constraints": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Finding"
+              }
+            },
+            "uncertainties": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Finding"
+              }
+            }
+          },
+          "required": [
+            "source_global_events_ref",
+            "source_global_analysis_ref",
+            "source_character_events_ref",
+            "premise",
+            "world_rules",
+            "themes",
+            "conflicts",
+            "characters",
+            "key_event_refs",
+            "preservation_items",
+            "event_causality",
+            "canon_constraints",
+            "uncertainties"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "questions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Question"
+      }
+    },
+    "evidence_refs": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/EvidenceRef"
+      }
+    },
+    "notes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "result_kind",
+    "payload",
+    "questions",
+    "evidence_refs",
+    "notes"
+  ],
+  "additionalProperties": false,
+  "description": "Step2 原作知识资产；依据固定的全局事件、全局分析和人物事件形成结构化候选。",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "BranchAgent_source_knowledge_asset_v1_0",
+  "$defs": {
+    "EvidenceRef": {
+      "type": "object",
+      "properties": {
+        "record_id": {
+          "type": "string",
+          "description": "真实来源记录或产物 ID；由 Harness 验证存在性与项目归属。"
+        },
+        "version": {
+          "anyOf": [
+            {
+              "type": "string",
+              "description": "版本化记录必须提供固定版本；普通消息可为 null。"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "item_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "description": "记录内部的稳定条目 ID。"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "json_pointer": {
+          "anyOf": [
+            {
+              "type": "string",
+              "description": "需要定位字段时使用 JSON Pointer。"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "record_id",
+        "version",
+        "item_id",
+        "json_pointer"
+      ],
+      "additionalProperties": false,
+      "description": "模型引用已存在记录，不由模型签发确认、版本或审计身份。"
+    },
+    "Finding": {
+      "type": "object",
+      "properties": {
+        "finding_id": {
+          "type": "string"
+        },
+        "statement": {
+          "type": "string"
+        },
+        "evidence_refs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EvidenceRef"
+          }
+        },
+        "knowledge_type": {
+          "type": "string",
+          "enum": [
+            "fact",
+            "inference",
+            "adaptation_suggestion"
+          ]
+        }
+      },
+      "required": [
+        "finding_id",
+        "statement",
+        "evidence_refs",
+        "knowledge_type"
+      ],
+      "additionalProperties": false
+    },
+    "Question": {
+      "type": "object",
+      "properties": {
+        "question_id": {
+          "type": "string"
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "target_field": {
+          "anyOf": [
+            {
+              "type": "string",
+              "description": "当前 payload 内的 JSON Pointer。"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "suggested_answers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "blocking_scope": {
+          "type": "string",
+          "description": "明确说明哪些工作依赖此回答。"
+        }
+      },
+      "required": [
+        "question_id",
+        "prompt",
+        "reason",
+        "target_field",
+        "suggested_answers",
+        "blocking_scope"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

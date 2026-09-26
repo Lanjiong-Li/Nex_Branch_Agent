@@ -108,7 +108,7 @@ def validate_profiles(profiles,schemas):
         if m['load'] not in ('auto','on_demand') or m['detail'] not in ('full','index','ref'): raise ValueError('无效材料加载模式')
         name=m['source'].get('schema_id')
         for path in m['selectors']:
-            if name in ('work_summary','source_analysis','source_global_analysis','source_character_analysis') and path=='':
+            if name in ('work_summary','source_global_analysis') and path=='':
                 continue  # Internal plain-text artifacts.
             if name and not schema_path(schemas[name],path): raise ValueError(f'材料字段不存在: {name}{path}')
             if not name and path[1:] not in builtin[m['source']['builtin']]['fields']: raise ValueError('投影字段不存在')

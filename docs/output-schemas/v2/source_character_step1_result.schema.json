@@ -16,58 +16,6 @@
             "source_ref": {
               "$ref": "#/$defs/EvidenceRef"
             },
-            "global_events": {
-              "type": "array",
-              "items": {
-                "type": "object",
-                "properties": {
-                  "event_id": {
-                    "type": "string"
-                  },
-                  "title": {
-                    "type": "string"
-                  },
-                  "summary": {
-                    "type": "string"
-                  },
-                  "narrative_order": {
-                    "type": "integer"
-                  },
-                  "story_time": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "character_ids": {
-                    "type": "array",
-                    "items": {
-                      "type": "string"
-                    }
-                  },
-                  "source_anchors": {
-                    "type": "array",
-                    "items": {
-                      "$ref": "#/$defs/SourceAnchor"
-                    }
-                  }
-                },
-                "required": [
-                  "event_id",
-                  "title",
-                  "summary",
-                  "narrative_order",
-                  "story_time",
-                  "character_ids",
-                  "source_anchors"
-                ],
-                "additionalProperties": false
-              }
-            },
             "character_views": {
               "type": "array",
               "items": {
@@ -118,12 +66,6 @@
                         },
                         "involvement": {
                           "type": "string"
-                        },
-                        "source_anchors": {
-                          "type": "array",
-                          "items": {
-                            "$ref": "#/$defs/SourceAnchor"
-                          }
                         }
                       },
                       "required": [
@@ -132,11 +74,10 @@
                         "summary",
                         "narrative_order",
                         "story_time",
-                        "involvement",
-                        "source_anchors"
+                        "involvement"
                       ],
                       "additionalProperties": false,
-                      "description": "人物事件独立切片，必须直接锚定固定原作，不通过全局事件定位。"
+                      "description": "按人物整理的经历和变化；不保存逐事件原文位置。"
                     }
                   }
                 },
@@ -165,13 +106,12 @@
           },
           "required": [
             "source_ref",
-            "global_events",
             "character_views",
             "covered_source_anchors",
             "remaining_source_anchors"
           ],
           "additionalProperties": false,
-          "description": "Step1 从固定原作生成独立的全局事件与人物事件双视图；长原作可按完整事件边界逐窗扫描并由 Harness 合并，两套事件各自直接锚定原文。"
+          "description": "Step1 主要人物事件视图：事件无逐项原文锚点；原文阅读覆盖由 Harness 独立核对。"
         },
         {
           "type": "null"
@@ -205,9 +145,9 @@
     "notes"
   ],
   "additionalProperties": false,
-  "description": "模型输出合同：ready 表示有待验证产物；needs_input 返回具体缺项。此字段不决定保存、确认、完成或生效状态。",
+  "description": "Step1 主要人物事件 Agent 只返回人物事件视图，不返回独立分析。",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "BranchAgent_source_views_v1_3",
+  "title": "BranchAgent_source_character_step1_result_v2_0",
   "$defs": {
     "EvidenceRef": {
       "type": "object",

@@ -13,16 +13,14 @@
         {
           "type": "object",
           "properties": {
-            "source_global_analysis_ref": {
+            "source_knowledge_asset_ref": {
               "anyOf": [
-                {"$ref": "#/$defs/EvidenceRef"},
-                {"type": "null"}
-              ]
-            },
-            "source_character_analysis_ref": {
-              "anyOf": [
-                {"$ref": "#/$defs/EvidenceRef"},
-                {"type": "null"}
+                {
+                  "$ref": "#/$defs/EvidenceRef"
+                },
+                {
+                  "type": "null"
+                }
               ]
             },
             "player_identity": {
@@ -128,8 +126,7 @@
             }
           },
           "required": [
-            "source_global_analysis_ref",
-            "source_character_analysis_ref",
+            "source_knowledge_asset_ref",
             "player_identity",
             "strategy_basis",
             "experience_goals",

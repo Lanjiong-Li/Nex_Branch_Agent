@@ -8,7 +8,6 @@ from decimal import Decimal
 import hashlib
 import json
 import logging
-import re
 from uuid import uuid4
 
 from .records import new_record, scope, usage, budget, canonical_bytes
@@ -40,30 +39,6 @@ def _cfg(config, key, default):
             return default
         value = value[part]
     return value
-
-
-def _split_step2_analysis(value):
-    """Split the single plain model response into two independently versioned analyses."""
-    if not isinstance(value, str) or not value.strip():
-        raise WorkflowBlocked("empty_plain_text_output")
-    markers = {}
-    for name in ("GLOBAL_EVENT_ANALYSIS", "CHARACTER_EVENT_ANALYSIS"):
-        match = re.search(rf"(?m)^\s*\[\[{name}\]\]\s*$", value)
-        if match is None:
-            raise WorkflowBlocked("step2_sections_missing", {"missing_marker": name})
-        markers[name] = match
-    global_marker = markers["GLOBAL_EVENT_ANALYSIS"]
-    character_marker = markers["CHARACTER_EVENT_ANALYSIS"]
-    if global_marker.start() >= character_marker.start():
-        raise WorkflowBlocked("step2_sections_missing", {"reason": "section_order"})
-    global_text = value[global_marker.end():character_marker.start()].strip()
-    character_text = value[character_marker.end():].strip()
-    if not global_text or not character_text:
-        raise WorkflowBlocked("step2_sections_missing", {"reason": "empty_section"})
-    return {
-        "source_global_analysis": global_text,
-        "source_character_analysis": character_text,
-    }
 
 
 class Engine:
@@ -370,8 +345,6 @@ class Engine:
                 if data.get("resume_saved_result") and self._output_rejected(task, data["resume_saved_result"]["source_run_id"]):
                     data.pop("resume_saved_result")
                 saved_result_kind = saved.get("result_kind") if isinstance(saved, dict) else "ready" if isinstance(saved, str) and saved.strip() else None
-                if data.get("stage") == 2 and not isinstance(saved, str):
-                    saved_result_kind = None  # Never replay a pre-migration Step2 JSON result.
                 if saved_result_kind in ("ready", "needs_input"):
                     if data.get("coordinator") and not data.get("chapter_planning"):
                         queue_data = self._projection(project_id, "queue_context", data["queue_id"])
@@ -1122,7 +1095,6 @@ class Engine:
             return
         stage, chapter = data["stage"], data.get("chapter_id")
         if stage == 1:
-            from .context import tokens
             try:
                 source_version = self.workflow.resolve(project, "source_text")
                 source_text = body(self.store, source_version)
@@ -1132,14 +1104,11 @@ class Engine:
                     with self.store.transaction():
                         data["config_version_id"] = config_version["id"]
                         self._save_task_data(task, data)
-                source_config = config_version["values"]["context"]["step1_source"]
-                windowed = (data.get("step1_mode") == "window" if data.get("step1_mode") else
-                            tokens(source_text, config_version["values"]["model"]["name"]) > source_config["trigger_tokens"])
             except Exception as error:
                 reason = getattr(error, "reason", None) or getattr(error, "code", None) or "configuration_error"
                 self._fail_execution(task, None, reason, str(error), getattr(error, "details", None))
                 return
-            await self._drive_step1_views(task, token, source_version, source_text, windowed)
+            await self._drive_step1_views(task, token, source_version, source_text)
             return
         if data.get("batch_manifest_ref") and not data.get("batch_coverage_ready"):
             await self._drive_batch(task, token)
@@ -1153,10 +1122,6 @@ class Engine:
                 self._budget_check(task)
                 resume = data.get("resume_saved_result")
                 if resume and self._output_rejected(task, resume["source_run_id"]):
-                    data.pop("resume_saved_result")
-                    self._save_task_data(task, data)
-                    resume = None
-                if resume and stage == 2 and not isinstance(resume.get("output"), str):
                     data.pop("resume_saved_result")
                     self._save_task_data(task, data)
                     resume = None
@@ -1223,7 +1188,7 @@ class Engine:
             self._fail_execution(task, run, "user_stop")
         except Exception as error:
             reason = getattr(error, "reason", None) or getattr(error, "code", None) or ("active_time_limit" if isinstance(error, asyncio.TimeoutError) else "configuration_error")
-            repairable = isinstance(error, GraphError) or type(error).__name__ == "ValidationError" or reason in ("ModelBehaviorError", "source_anchor_invalid", "source_reference_mismatch", "source_coverage_incomplete", "incomplete_ready_result", "output_schema_invalid", "evidence_pointer_not_concrete", "evidence_pointer_missing", "evidence_item_ambiguous_or_missing", "evidence_reference_invalid", "review_scope_format_invalid", "step2_questions_forbidden", "step2_sections_missing", "ask_user_tool_required")
+            repairable = isinstance(error, GraphError) or type(error).__name__ == "ValidationError" or reason in ("ModelBehaviorError", "source_anchor_invalid", "source_reference_mismatch", "source_coverage_incomplete", "incomplete_ready_result", "output_schema_invalid", "evidence_pointer_not_concrete", "evidence_pointer_missing", "evidence_item_ambiguous_or_missing", "evidence_reference_invalid", "review_scope_format_invalid", "ask_user_tool_required")
             if isinstance(error, GraphValidationError) and run:
                 self._message(project, cid, str(error), task=task["id"], run=run["id"])
             if reason == "input_budget_exceeded" and stage in range(2, 9) and run and not self._task_data(task).get("batch_manifest_ref"):
@@ -1235,9 +1200,9 @@ class Engine:
                            if reason == "source_index_migration_required" else str(error))
                 self._fail_execution(task, run, reason, message, getattr(error, "details", None))
 
-    async def _drive_step1_views(self, task, token, source_version, source_text, windowed):
+    async def _drive_step1_views(self, task, token, source_version, source_text):
         from .step1_execution import drive_step1_views
-        await drive_step1_views(self, task, token, source_version, source_text, windowed)
+        await drive_step1_views(self, task, token, source_version, source_text)
 
     def _auxiliary_config(self, project, parent_config_id, stage):
         fixed = self.store.get(parent_config_id, project_id=project)
@@ -1460,31 +1425,17 @@ class Engine:
                 if reason in ("dependency_changed", "user_stop", "cost_limit", "active_time_limit", "turn_limit"):
                     saved = self._saved_output(current, run["id"])
                     data = self._task_data(current)
-                    saved_ready = ((data.get("stage") == 2 and isinstance(saved, str) and bool(saved.strip()))
-                        or (data.get("stage") != 2 and isinstance(saved, dict) and saved.get("result_kind") == "ready"))
+                    saved_ready = isinstance(saved, dict) and saved.get("result_kind") == "ready"
                     if saved_ready and not data.get("source_window_state") and not data.get("step1_view") and data.get("stage") in STAGES and data.get("stage") != 6 and not data.get("batch_owned") \
                             and not data.get("result_ref") and not data.get("result_refs"):
-                        if data["stage"] == 2:
-                            versions = {}
-                            try:
-                                parts = _split_step2_analysis(saved)
-                            except WorkflowBlocked:
-                                parts = {}
-                            for kind, text in parts.items():
-                                version = self.workflow.save(task["project_id"], kind, text,
-                                    stage=2, run=live, inputs=live["input_refs"])
-                                if reason == "dependency_changed":
-                                    update(self.store, self.workflow.state(version), dependency_status="review_required")
-                                versions[kind] = ref(version)
-                            if versions:
-                                data["result_refs"] = versions
-                        else:
-                            version = self.workflow.save(task["project_id"], STAGES[data["stage"]], saved,
-                                stage=data["stage"], chapter_id=data.get("chapter_id"), run=live, inputs=live["input_refs"],
-                                historical_inputs=[data["baseline_ref"]] if data["stage"] == 10 and data.get("baseline_ref") else [])
-                            if reason == "dependency_changed":
-                                update(self.store, self.workflow.state(version), dependency_status="review_required")
-                            data["result_ref"] = ref(version)
+                        candidate = (self._bind_program_provenance(2, live, saved, self._fixed_run_materials(live))
+                                     if data["stage"] == 2 else saved)
+                        version = self.workflow.save(task["project_id"], STAGES[data["stage"]], candidate,
+                            stage=data["stage"], chapter_id=data.get("chapter_id"), run=live, inputs=live["input_refs"],
+                            historical_inputs=[data["baseline_ref"]] if data["stage"] == 10 and data.get("baseline_ref") else [])
+                        if reason == "dependency_changed":
+                            update(self.store, self.workflow.state(version), dependency_status="review_required")
+                        data["result_ref"] = ref(version)
                         self._save_task_data(current, data)
                 self._close_run(current, live, "stopped" if reason == "user_stop" else "paused",
                                 {"code": reason, "message": message or reason, "retryable": False, "details": deepcopy(details or {})})
@@ -1521,7 +1472,7 @@ class Engine:
         if (data.get("stage") not in range(2, 11) or data.get("superseded_by_task_id")
                 or any(item["state"] == "open" for item in data.get("pending_user_items", []))):
             raise WorkflowBlocked("confirmation_candidate_missing")
-        refs = list(data.get("result_refs", {}).values()) if data.get("stage") == 2 else [data.get("result_ref")]
+        refs = [data.get("result_ref")]
         if not refs or any(not isinstance(value, dict) for value in refs):
             raise WorkflowBlocked("confirmation_candidate_missing")
         targets = []
@@ -1588,20 +1539,26 @@ class Engine:
         """Map an output field to the fixed material kinds that can own it."""
         leaf = next((part for part in reversed(path.split("/")) if part and not part.isdigit()), "")
         rules = {
-            "adaptation_strategy": {
+            "source_knowledge_asset": {
+                "source_global_events_ref": ("source_global_events",),
                 "source_global_analysis_ref": ("source_global_analysis",),
-                "source_character_analysis_ref": ("source_character_analysis",),
-                "character_ref": ("source_character_analysis",),
+                "source_character_events_ref": ("source_character_events",),
+                "character_ref": ("source_character_events",),
+                "other_character_ref": ("source_character_events",),
+                "key_event_refs": ("source_global_events", "source_character_events"),
+            },
+            "adaptation_strategy": {
+                "source_knowledge_asset_ref": ("source_knowledge_asset",),
+                "character_ref": ("source_knowledge_asset",),
                 "decision_refs": ("runtime.applicable_controls",),
                 "default_strategy_ref": ("adaptation_strategy",),
             },
             "adaptation_plan": {
-                "source_global_analysis_ref": ("source_global_analysis",),
-                "source_character_analysis_ref": ("source_character_analysis",),
+                "source_knowledge_asset_ref": ("source_knowledge_asset",),
                 "strategy_ref": ("adaptation_strategy",),
-                "character_ref": ("adaptation_strategy", "source_character_analysis"),
-                "subject_ref": ("adaptation_strategy", "source_global_analysis", "source_character_analysis"),
-                "source_refs": ("adaptation_strategy", "source_global_analysis", "source_character_analysis"),
+                "character_ref": ("adaptation_strategy", "source_knowledge_asset"),
+                "subject_ref": ("adaptation_strategy", "source_knowledge_asset"),
+                "source_refs": ("adaptation_strategy", "source_knowledge_asset"),
             },
             "game_event_view": {
                 "character_refs": ("source_character_events",),
@@ -1682,7 +1639,7 @@ class Engine:
 
     def _bind_program_provenance(self, stage, run, result, materials):
         """Create provenance from direct or transitively fixed inputs, never model DB IDs."""
-        if stage not in STAGES or stage == 2 or result.get("result_kind") != "ready":
+        if stage not in STAGES or result.get("result_kind") != "ready":
             return result
         value = deepcopy(result)
         output_kind = STAGES[stage]
@@ -1715,6 +1672,8 @@ class Engine:
                                     "content": body(self.store, version)})
 
         if stage == 1:
+            # Both Step1 branches reference the same frozen original. Bind
+            # source identities before their independent coverage checks.
             source_ref = self._frozen_material_ref(run, materials, "source_text")
 
             def bind_source(node):
@@ -1768,10 +1727,11 @@ class Engine:
         value = visit(value)
         payload = value["payload"]
         fixed_fields = {
-            3: (("source_global_analysis_ref", "source_global_analysis"),
-                ("source_character_analysis_ref", "source_character_analysis")),
-            4: (("source_global_analysis_ref", "source_global_analysis"),
-                ("source_character_analysis_ref", "source_character_analysis"),
+            2: (("source_global_events_ref", "source_global_events"),
+                ("source_global_analysis_ref", "source_global_analysis"),
+                ("source_character_events_ref", "source_character_events")),
+            3: (("source_knowledge_asset_ref", "source_knowledge_asset"),),
+            4: (("source_knowledge_asset_ref", "source_knowledge_asset"),
                 ("strategy_ref", "adaptation_strategy")),
             8: (("game_event_view_ref", "game_event_view"), ("ending_routes_ref", "ending_routes")),
             9: (("plan_ref", "adaptation_plan"),),
@@ -1804,64 +1764,6 @@ class Engine:
             payload["graph_checks"] = []
         return value
 
-    def _apply_step2(self, task, run, result):
-        parts = _split_step2_analysis(result)
-        data = self._task_data(task)
-        previous_refs = data.get("result_refs", {})
-        versions = {}
-        for kind, text in parts.items():
-            previous = None
-            if previous_refs.get(kind):
-                previous = self.workflow.fixed_version(task["project_id"], previous_refs[kind])
-            if previous and body(self.store, previous) == text:
-                version = previous
-            else:
-                version = self.workflow.save(
-                    task["project_id"], kind, text, stage=2, run=run,
-                    inputs=run["input_refs"], effective=False,
-                )
-            versions[kind] = version
-        data["result_refs"] = {kind: ref(version) for kind, version in versions.items()}
-        data.pop("result_ref", None)
-        data.pop("resume_saved_result", None)
-        self._save_task_data(task, data)
-        if not self._dependencies_valid(run):
-            for version in versions.values():
-                update(self.store, self.workflow.state(version), dependency_status="review_required")
-            self._checkpoint(task, run, "commit_artifact")
-            self._close_run(task, run, "paused")
-            self._transition(self.store.get(task["id"], project_id=task["project_id"]), "paused", "dependency_changed")
-            return
-
-        titles = {
-            "source_global_analysis": "Step 2A · 全局事件分析",
-            "source_character_analysis": "Step 2B · 主要人物事件分析",
-        }
-        pending = []
-        agent_confirmation = bool(getattr(self.model_service, "supports_manager", False)
-                                  and data.get("parent_owned"))
-        presentations = self._projection(task["project_id"], "presentations", task["conversation_id"], targets=[])
-        for kind in ("source_global_analysis", "source_character_analysis"):
-            version = versions[kind]
-            text = f"{titles[kind]}（v{version['version']}）\n\n{parts[kind]}"
-            if not agent_confirmation:
-                text += "\n\n请确认以上结果，或直接提出需要修改的内容。"
-            message = self._message(task["project_id"], task["conversation_id"], text, task=task["id"], run=run["id"])
-            targets = [{"subject": ref(version), "selections": [WHOLE]}]
-            if not agent_confirmation:
-                pending.append(self._wait_item(task, "confirmation", message, text, targets))
-            presentations["targets"].append({**targets[0], "message_id": message["id"], "task_id": task["id"]})
-            self._event(task["project_id"], "artifact.presented", {
-                "artifact_ref": ref(version), "message_id": message["id"], "selections": [WHOLE],
-            }, conversation=task["conversation_id"], task=task["id"], run=run["id"])
-        data = self._task_data(task)
-        data["pending_user_items"] = pending
-        self._save_task_data(task, data)
-        self._save_projection(task["project_id"], "presentations", task["conversation_id"], presentations)
-        self._checkpoint(task, run, "await_user")
-        self._close_run(task, run, "succeeded")
-        self._transition(self.store.get(task["id"], project_id=task["project_id"]), "waiting_user")
-
     def _apply_stage(self, task, run, result, materials):
         data = self._task_data(task)
         stage = data["stage"]
@@ -1870,8 +1772,8 @@ class Engine:
             return
         fixed_config = self.store.get(run["config_version_id"], project_id=task["project_id"])
         structured = fixed_config["values"].get("output", {}).get("structured", {}).get(
-            f"step{stage}", stage != 2)
-        if not structured and stage != 2:
+            f"step{stage}", True)
+        if not structured:
             if not isinstance(result, str) or not result.strip():
                 raise WorkflowBlocked("unstructured_output_invalid")
             data["unstructured_result_run_id"] = run["id"]
@@ -1885,108 +1787,105 @@ class Engine:
             self._transition(self.store.get(task["id"], project_id=task["project_id"]),
                              "paused", "unstructured_output")
             return
-        if stage == 2:
-            return self._apply_step2(task, run, result)
-        else:
+        try:
+            model_schema = self.workflow.catalog.schema_for(f"step{stage}", fixed_config["values"])
+            self.workflow.catalog.validate(model_schema, result, fixed_config["values"].get("schemas"))
+        except ValueError as error:
+            raise WorkflowBlocked("output_schema_invalid", {"validation_error": str(error)}) from error
+        if result["result_kind"] == "needs_input":
+            if getattr(self.model_service, "supports_ask_user", False):
+                raise WorkflowBlocked("ask_user_tool_required")
+            self._await_user_questions(task, run, result["questions"])
+            return
+        if result["payload"] is None or result["questions"]:
+            raise WorkflowBlocked("incomplete_ready_result")
+        display_result = result if stage == 6 else None
+        if stage == 6:
+            baseline_material = next(m for m in materials if m.get("schema_id") == "game_event_view")
+            current = self.workflow.resolve(task["project_id"], "game_event_view")
+            if ref(current) != baseline_material["ref"]:
+                raise WorkflowBlocked("dependency_changed", {"kind": "game_event_view"})
+            plan = self.workflow.resolve(task["project_id"], "adaptation_plan")
+            if body(self.store, plan)["payload"]["stage_artifact_refs"]["game_events"] != baseline_material["ref"]:
+                raise WorkflowBlocked("dependency_changed", {"kind": "adaptation_plan.stage_artifact_refs.game_events"})
+            if model_schema == "game_event_view":
+                # A run created before this change keeps its frozen output
+                # contract. Convert that legacy full-view response into
+                # the same patch while rejecting edits outside the field.
+                old_payload = deepcopy(baseline_material["content"]["payload"])
+                proposed_payload = deepcopy(result["payload"])
+                old_events = old_payload["events"]
+                proposed_events = proposed_payload["events"]
+                old_ids = [event["game_event_id"] for event in old_events]
+                proposed_ids = [event["game_event_id"] for event in proposed_events]
+                if old_ids != proposed_ids:
+                    raise WorkflowBlocked("output_schema_invalid", {"validation_error": "Step6 必须保留原有事件 ID 和顺序"})
+                updates = [{"game_event_id": event["game_event_id"],
+                            "narrative_function": event["narrative_function"]}
+                           for event in proposed_events]
+                for old_event, proposed_event in zip(old_events, proposed_events):
+                    old_event.pop("narrative_function", None)
+                    proposed_event.pop("narrative_function", None)
+                if old_payload != proposed_payload:
+                    raise WorkflowBlocked("output_schema_invalid", {"validation_error": "Step6 只能补充 narrative_function"})
+            else:
+                updates = result["payload"]["updates"]
+            update_ids = [item["game_event_id"] for item in updates]
+            original_ids = [event["game_event_id"] for event in baseline_material["content"]["payload"]["events"]]
+            if len(update_ids) != len(set(update_ids)) or set(update_ids) != set(original_ids):
+                raise WorkflowBlocked("output_schema_invalid", {"validation_error": "Step6 必须为现有每个事件各提供一次叙事功能，不得新增或遗漏事件"})
+            if any(not item["narrative_function"].strip() for item in updates):
+                raise WorkflowBlocked("output_schema_invalid", {"validation_error": "Step6 的叙事功能不能为空"})
+            functions = {item["game_event_id"]: item["narrative_function"].strip() for item in updates}
+            enriched = deepcopy(baseline_material["content"])
+            for event in enriched["payload"]["events"]:
+                event["narrative_function"] = functions[event["game_event_id"]]
+            enriched["notes"] = result["notes"]
+            result = enriched
             try:
-                model_schema = self.workflow.catalog.schema_for(f"step{stage}", fixed_config["values"])
-                self.workflow.catalog.validate(model_schema, result, fixed_config["values"].get("schemas"))
+                self.workflow.catalog.validate("game_event_view", result, fixed_config["values"].get("schemas"))
             except ValueError as error:
                 raise WorkflowBlocked("output_schema_invalid", {"validation_error": str(error)}) from error
-            if result["result_kind"] == "needs_input":
-                if getattr(self.model_service, "supports_ask_user", False):
-                    raise WorkflowBlocked("ask_user_tool_required")
-                self._await_user_questions(task, run, result["questions"])
-                return
-            if result["payload"] is None or result["questions"]:
-                raise WorkflowBlocked("incomplete_ready_result")
-            display_result = result if stage == 6 else None
-            if stage == 6:
-                baseline_material = next(m for m in materials if m.get("schema_id") == "game_event_view")
-                current = self.workflow.resolve(task["project_id"], "game_event_view")
-                if ref(current) != baseline_material["ref"]:
-                    raise WorkflowBlocked("dependency_changed", {"kind": "game_event_view"})
-                plan = self.workflow.resolve(task["project_id"], "adaptation_plan")
-                if body(self.store, plan)["payload"]["stage_artifact_refs"]["game_events"] != baseline_material["ref"]:
-                    raise WorkflowBlocked("dependency_changed", {"kind": "adaptation_plan.stage_artifact_refs.game_events"})
-                if model_schema == "game_event_view":
-                    # A run created before this change keeps its frozen output
-                    # contract. Convert that legacy full-view response into
-                    # the same patch while rejecting edits outside the field.
-                    old_payload = deepcopy(baseline_material["content"]["payload"])
-                    proposed_payload = deepcopy(result["payload"])
-                    old_events = old_payload["events"]
-                    proposed_events = proposed_payload["events"]
-                    old_ids = [event["game_event_id"] for event in old_events]
-                    proposed_ids = [event["game_event_id"] for event in proposed_events]
-                    if old_ids != proposed_ids:
-                        raise WorkflowBlocked("output_schema_invalid", {"validation_error": "Step6 必须保留原有事件 ID 和顺序"})
-                    updates = [{"game_event_id": event["game_event_id"],
-                                "narrative_function": event["narrative_function"]}
-                               for event in proposed_events]
-                    for old_event, proposed_event in zip(old_events, proposed_events):
-                        old_event.pop("narrative_function", None)
-                        proposed_event.pop("narrative_function", None)
-                    if old_payload != proposed_payload:
-                        raise WorkflowBlocked("output_schema_invalid", {"validation_error": "Step6 只能补充 narrative_function"})
-                else:
-                    updates = result["payload"]["updates"]
-                update_ids = [item["game_event_id"] for item in updates]
-                original_ids = [event["game_event_id"] for event in baseline_material["content"]["payload"]["events"]]
-                if len(update_ids) != len(set(update_ids)) or set(update_ids) != set(original_ids):
-                    raise WorkflowBlocked("output_schema_invalid", {"validation_error": "Step6 必须为现有每个事件各提供一次叙事功能，不得新增或遗漏事件"})
-                if any(not item["narrative_function"].strip() for item in updates):
-                    raise WorkflowBlocked("output_schema_invalid", {"validation_error": "Step6 的叙事功能不能为空"})
-                functions = {item["game_event_id"]: item["narrative_function"].strip() for item in updates}
-                enriched = deepcopy(baseline_material["content"])
-                for event in enriched["payload"]["events"]:
-                    event["narrative_function"] = functions[event["game_event_id"]]
-                enriched["notes"] = result["notes"]
-                result = enriched
-                try:
-                    self.workflow.catalog.validate("game_event_view", result, fixed_config["values"].get("schemas"))
-                except ValueError as error:
-                    raise WorkflowBlocked("output_schema_invalid", {"validation_error": str(error)}) from error
-            if stage == 7:
-                events_material = next(m for m in materials if m.get("schema_id") == "game_event_view")
-                if ref(self.workflow.planned_game_events(task["project_id"])) != events_material["ref"]:
-                    raise WorkflowBlocked("dependency_changed", {"kind": "adaptation_plan.stage_artifact_refs.game_events"})
-                event_ids = {event["game_event_id"] for event in events_material["content"]["payload"]["events"]}
-                if not event_ids or any(not isinstance(event.get("narrative_function"), str) or
-                                        not event["narrative_function"].strip()
-                                        for event in events_material["content"]["payload"]["events"]):
-                    raise WorkflowBlocked("missing_material", {"kind": "game_events.narrative_function"})
-                ending_ids = {ending["ending_id"] for ending in result["payload"]["endings"]}
-                route_ids = {route["route_id"] for route in result["payload"]["routes"]}
-                for route in result["payload"]["routes"]:
-                    if set(route["game_event_ids"]) - event_ids or set(route["ending_ids"]) - ending_ids:
-                        raise WorkflowBlocked("output_schema_invalid", {"validation_error": "Step7 路线引用了不存在的游戏事件或结局 ID"})
-                if any(set(item["used_by_item_ids"]) - (ending_ids | route_ids)
-                       for item in result["payload"]["state_requirements"]):
-                    raise WorkflowBlocked("output_schema_invalid", {"validation_error": "Step7 状态需求引用了不存在的结局或路线 ID"})
-            if stage == 8:
-                pinned = {material["schema_id"]: material["ref"] for material in materials}
-                if ref(self.workflow.planned_game_events(task["project_id"])) != pinned["game_event_view"]:
-                    raise WorkflowBlocked("dependency_changed", {"kind": "adaptation_plan.stage_artifact_refs.game_events"})
-                if ref(self.workflow.planned_ending_routes(task["project_id"])) != pinned["ending_routes"]:
-                    raise WorkflowBlocked("dependency_changed", {"kind": "adaptation_plan.stage_artifact_refs.ending_routes"})
-            if stage == 9:
-                pinned = {material["schema_id"]: material["ref"] for material in materials}
-                plan = self.workflow.resolve(task["project_id"], "adaptation_plan")
-                if ref(plan) != pinned["adaptation_plan"]:
-                    raise WorkflowBlocked("dependency_changed", {"kind": "adaptation_plan"})
-                # The three stage artifacts are transitively fixed by the
-                # plan.  Resolve them for validation without widening the
-                # Step9 model-input contract.
-                self.workflow.planned_game_events(task["project_id"], plan=plan)
-                self.workflow.planned_ending_routes(task["project_id"], plan=plan)
-                self.workflow.planned_player_profiles(task["project_id"], plan=plan)
-            # Step6 edits only narrative_function on the fixed Step5 artifact.
-            # Its original source anchors were already bound by the Harness;
-            # rebinding here would erase them because Step6 does not load the
-            # original text as a separate input.
-            if stage != 6:
-                result = self._bind_program_provenance(stage, run, result, materials)
+        if stage == 7:
+            events_material = next(m for m in materials if m.get("schema_id") == "game_event_view")
+            if ref(self.workflow.planned_game_events(task["project_id"])) != events_material["ref"]:
+                raise WorkflowBlocked("dependency_changed", {"kind": "adaptation_plan.stage_artifact_refs.game_events"})
+            event_ids = {event["game_event_id"] for event in events_material["content"]["payload"]["events"]}
+            if not event_ids or any(not isinstance(event.get("narrative_function"), str) or
+                                    not event["narrative_function"].strip()
+                                    for event in events_material["content"]["payload"]["events"]):
+                raise WorkflowBlocked("missing_material", {"kind": "game_events.narrative_function"})
+            ending_ids = {ending["ending_id"] for ending in result["payload"]["endings"]}
+            route_ids = {route["route_id"] for route in result["payload"]["routes"]}
+            for route in result["payload"]["routes"]:
+                if set(route["game_event_ids"]) - event_ids or set(route["ending_ids"]) - ending_ids:
+                    raise WorkflowBlocked("output_schema_invalid", {"validation_error": "Step7 路线引用了不存在的游戏事件或结局 ID"})
+            if any(set(item["used_by_item_ids"]) - (ending_ids | route_ids)
+                   for item in result["payload"]["state_requirements"]):
+                raise WorkflowBlocked("output_schema_invalid", {"validation_error": "Step7 状态需求引用了不存在的结局或路线 ID"})
+        if stage == 8:
+            pinned = {material["schema_id"]: material["ref"] for material in materials}
+            if ref(self.workflow.planned_game_events(task["project_id"])) != pinned["game_event_view"]:
+                raise WorkflowBlocked("dependency_changed", {"kind": "adaptation_plan.stage_artifact_refs.game_events"})
+            if ref(self.workflow.planned_ending_routes(task["project_id"])) != pinned["ending_routes"]:
+                raise WorkflowBlocked("dependency_changed", {"kind": "adaptation_plan.stage_artifact_refs.ending_routes"})
+        if stage == 9:
+            pinned = {material["schema_id"]: material["ref"] for material in materials}
+            plan = self.workflow.resolve(task["project_id"], "adaptation_plan")
+            if ref(plan) != pinned["adaptation_plan"]:
+                raise WorkflowBlocked("dependency_changed", {"kind": "adaptation_plan"})
+            # The three stage artifacts are transitively fixed by the
+            # plan.  Resolve them for validation without widening the
+            # Step9 model-input contract.
+            self.workflow.planned_game_events(task["project_id"], plan=plan)
+            self.workflow.planned_ending_routes(task["project_id"], plan=plan)
+            self.workflow.planned_player_profiles(task["project_id"], plan=plan)
+        # Step6 edits only narrative_function on the fixed Step5 artifact.
+        # Its original source anchors were already bound by the Harness;
+        # rebinding here would erase them because Step6 does not load the
+        # original text as a separate input.
+        if stage != 6:
+            result = self._bind_program_provenance(stage, run, result, materials)
         if stage == 9:
             # A chapter is made of fixed game events. Derive its original text
             # ranges from their verified Step5 anchors, never from an LLM
@@ -2028,14 +1927,6 @@ class Engine:
                 {"source_ref": deepcopy(source_material["ref"]), "start_utf16": start, "end_utf16": end,
                  "exact_quote": None, "prefix": None, "suffix": None}
                 for start, end in merged]
-        if stage == 1:
-            source = next(m for m in materials if m["kind"] == "source_text")
-            result = locate_source_anchors(result, source["content"], source["ref"])
-            if any(not event["source_anchors"] for event in result["payload"]["global_events"]):
-                raise WorkflowBlocked("source_anchor_invalid", {"kind": "global_events"})
-            if any(not event["source_anchors"] for view in result["payload"]["character_views"]
-                   for event in view["events"]):
-                raise WorkflowBlocked("source_anchor_invalid", {"kind": "character_views.events"})
         if stage in (5, 9):
             if stage == 5:
                 views_material = next(m for m in materials if m["schema_id"] == "source_global_events")
@@ -2082,7 +1973,7 @@ class Engine:
         prior = self.workflow.fixed_version(task["project_id"], data["result_ref"]) if data.get("result_ref") else None
         if prior and body(self.store, prior) == result:
             version = prior
-            if stage in (1, 11):
+            if stage == 11:
                 update(self.store, self.workflow.state(version), confirmation_status="not_required", effective_selections=[WHOLE])
                 artifact = self.store.get(version["artifact_id"], project_id=task["project_id"])
                 update(self.store, artifact, current_effective_version=version["version"])
@@ -2091,7 +1982,7 @@ class Engine:
             version = self.workflow.save(task["project_id"], STAGES[stage], result, stage=stage,
                 chapter_id=data.get("chapter_id"), run=run,
                 inputs=run["input_refs"] + ([step6_baseline] if step6_baseline else []),
-                effective=stage in (1, 11),
+                effective=stage == 11,
                 historical_inputs=([step6_baseline] if step6_baseline else []) +
                     ([data["baseline_ref"]] if stage == 10 and data.get("baseline_ref") else []))
         data["result_ref"] = ref(version)
@@ -2105,16 +1996,6 @@ class Engine:
             return
         if stage == 11:
             self._deliver_or_repair(task, run, version, result)
-            return
-        if stage == 1:
-            message = self._message(task["project_id"], task["conversation_id"],
-                stage_result_text(stage, result, version=version["version"]), task=task["id"], run=run["id"])
-            self._event(task["project_id"], "artifact.presented", {"artifact_ref": ref(version),
-                "message_id": message["id"], "selections": [WHOLE]}, conversation=task["conversation_id"],
-                task=task["id"], run=run["id"])
-            self._checkpoint(task, run, "advance_work")
-            self._close_run(task, run, "succeeded")
-            self._transition(self.store.get(task["id"], project_id=task["project_id"]), "succeeded")
             return
         agent_confirmation = bool(getattr(self.model_service, "supports_manager", False)
                                   and data.get("parent_owned"))
@@ -2500,10 +2381,19 @@ class Engine:
                                       and target.get("subject", {}).get("version") == str(version["version"])
                                       for target in item.get("targets", []))
                         if item["kind"] == "confirmation" and matches:
-                            item.update(state="resolved", answer_message_ids=[message["id"]])
+                            all_confirmed = all(
+                                self.workflow.state(self.workflow.fixed_version(project, target["subject"]))
+                                ["confirmation_status"] == "confirmed"
+                                for target in item.get("targets", []))
+                            if all_confirmed:
+                                item.update(state="resolved", answer_message_ids=[message["id"]])
                     self._save_task_data(waiting, data)
                     remaining = any(item["state"] == "open" for item in data.get("pending_user_items", []))
-                    if not remaining and self.workflow.state(version)["dependency_status"] == "valid" and waiting["state"] == "waiting_user":
+                    pending_versions = [self.workflow.fixed_version(project, fixed_ref)
+                                        for fixed_ref in data.get("result_refs", {}).values()]
+                    all_results_confirmed = all(self.workflow.state(saved)["confirmation_status"] in
+                                                ("confirmed", "not_required") for saved in pending_versions)
+                    if not remaining and all_results_confirmed and self.workflow.state(version)["dependency_status"] == "valid" and waiting["state"] == "waiting_user":
                         self._transition(waiting, "succeeded", source=message["id"])
                         self.workflow.writeback_plan(project, version, data["stage"])
             self._unblock_requests(project, cid, ("confirmation_required", "missing_material"))

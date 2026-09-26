@@ -92,6 +92,9 @@ class SchemaCatalog:
                 raise ValueError('ready 必须包含完整 payload 且 questions 为空')
             if payload['result_kind'] == 'needs_input' and not payload['questions']:
                 raise ValueError('needs_input 必须包含明确问题')
+            if schema_id == 'source_global_step1_result' \
+                    and payload['result_kind'] == 'ready' and not payload['analysis'].strip():
+                raise ValueError('Step1 全局事件视图与分析必须同时完整返回')
         return payload
 
     def output_type(self, schema_id, schemas=None, *, strict=True):
@@ -100,6 +103,23 @@ class SchemaCatalog:
     def validate_publication(self, schemas, profiles=None):
         if set(schemas) != set(self.schemas):
             raise ValueError(f'必须保留全部{len(self.schemas)}种输出类型')
+        # The Step1 model contract contains an additional analysis field, but
+        # its remaining envelope is saved as a separate event-view artifact.
+        # Keep their structures aligned when either editable Schema changes.
+        def runtime_shape(value):
+            if isinstance(value,dict):
+                return {key:runtime_shape(child) for key,child in value.items()
+                        if key not in ('description','title','examples')}
+            if isinstance(value,list):
+                return [runtime_shape(child) for child in value]
+            return value
+        for view,result in (('source_global_events','source_global_step1_result'),
+                            ('source_character_events','source_character_step1_result')):
+            combined=deepcopy(schemas[result])
+            combined['properties'].pop('analysis',None)
+            combined['required']=[field for field in combined['required'] if field!='analysis']
+            if runtime_shape(combined)!=runtime_shape(schemas[view]):
+                raise ValueError(f'{result} 的事件视图结构必须与 {view} 一致')
         for name, schema in schemas.items():
             check_schema_definition(schema)
             self._check_strict(schema)
@@ -134,7 +154,7 @@ class SchemaCatalog:
                     name = item['source'].get('schema_id')
                     if name:
                         for path in item['selectors']:
-                            if name in ('work_summary','source_analysis','source_global_analysis','source_character_analysis') and path=='':
+                            if name in ('work_summary','source_global_analysis') and path=='':
                                 continue  # Internal plain-text artifacts.
                             if not schema_path(schemas[name], path):
                                 raise ValueError(f'消费者字段不存在: {name}{path}')

@@ -1,6 +1,6 @@
 export const recordTypes = {project:'项目',conversation:'会话',history_record:'历史记录',work_session:'工作 Session',session_item:'Session 条目',artifact:'产物',artifact_version:'产物版本',artifact_state:'产物状态',decision:'决策',confirmation:'确认',task:'任务',run:'运行',queued_request:'排队请求',checkpoint:'检查点',config_version:'配置版本',context_snapshot:'实际上下文',model_call:'模型调用',tool_call:'工具调用',dependency:'依赖',blob:'内容与附件',runtime_event:'运行事件',idempotency_record:'幂等操作'};
 export const stateLabels = {running:'运行中',queued:'排队中',waiting_user:'等待你回复',paused:'已暂停',stopping:'停止请求已提交',stopped:'已停止',succeeded:'已完成',failed:'失败',interrupted:'已中断',created:'已创建',pending:'待执行',unknown:'结果待核对',draft:'草稿',published:'已发布',snapshot:'运行快照',retired:'历史配置',unconfirmed:'待确认',partial:'部分确认',confirmed:'已确认',not_required:'无需确认',valid:'依赖有效',review_required:'依赖待复核',invalid:'依赖失效',unchecked:'未检查',passed:'检查通过',inconclusive:'尚无结论',ready:'已保存'};
-export const stageNames=['原作切分','原作分析','玩家与策略','改编方案','全剧规划','章节事件','线性正文','互动设计','章节分支','整剧组装','最终审核'];
+export const stageNames=['原作事件整理','原作知识资产','玩家与策略','改编方案','全剧规划','章节事件','线性正文','互动设计','章节分支','整剧组装','最终审核'];
 export function selectActiveTask(tasks,conversationId=null){
   const byId=new Map(tasks.map(task=>[task.id,task]));
   const scoped=tasks.filter(task=>{

@@ -5,7 +5,9 @@ def test_stage_result_is_presented_as_readable_prose_without_json_envelope():
     result = {
         "result_kind": "ready",
         "payload": {
-            "source_views_ref": {"record_id": "source", "version": "1", "item_id": None, "json_pointer": None},
+            "source_global_events_ref": {"record_id": "global", "version": "1", "item_id": None, "json_pointer": None},
+            "source_global_analysis_ref": {"record_id": "analysis", "version": "1", "item_id": None, "json_pointer": None},
+            "source_character_events_ref": {"record_id": "character", "version": "1", "item_id": None, "json_pointer": None},
             "premise": "一个守塔人必须在真相与亲情之间做出选择。",
             "world_rules": [{"finding_id": "rule-1", "statement": "雾潮会抹去人的短期记忆。", "evidence_refs": []}],
             "themes": [{"finding_id": "theme-1", "statement": "记忆与责任", "evidence_refs": []}],
@@ -23,7 +25,7 @@ def test_stage_result_is_presented_as_readable_prose_without_json_envelope():
 
     text = stage_result_text(2, result, version=3, confirmation=True)
 
-    assert "Step 2 · 原作分析" in text
+    assert "Step 2 · 原作知识资产" in text
     assert "一个守塔人必须在真相与亲情之间做出选择。" in text
     assert "雾潮会抹去人的短期记忆。" in text
     assert "找回失踪的妹妹。" in text

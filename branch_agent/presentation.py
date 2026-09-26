@@ -11,7 +11,7 @@ import re
 
 STAGE_TITLES = {
     1: "原作切分",
-    2: "原作分析",
+    2: "原作知识资产",
     3: "玩家与改编策略",
     4: "互动改编方案",
     5: "游戏事件设计",
@@ -27,6 +27,8 @@ LABELS = {
     "title": "标题", "name": "名称", "summary": "概要", "description": "说明",
     "premise": "故事前提", "premise_and_scope": "故事前提与改编范围", "logline": "一句话故事",
     "world_rules": "世界规则", "themes": "主题", "conflicts": "核心冲突", "characters": "人物分析",
+    "event_causality": "事件因果", "canon_constraints": "原作约束", "uncertainties": "待核实内容",
+    "knowledge_type": "知识类型",
     "motivation": "动机", "arc": "人物弧光", "relationships": "人物关系",
     "preservation_items": "原作保留建议", "category": "类别", "content": "内容",
     "suggested_retention": "建议处理", "rationale": "理由", "statement": "结论",
@@ -64,6 +66,7 @@ ENUMS = {
     "major": "严重", "minor": "一般", "story": "剧情", "choice": "选择",
     "qte": "QTE", "game": "小游戏", "condition": "条件", "variable": "变量", "jump": "跳转",
     "true": "是", "false": "否",
+    "fact": "原作事实", "inference": "推断", "adaptation_suggestion": "改编建议",
 }
 
 SKIP_KEYS = {

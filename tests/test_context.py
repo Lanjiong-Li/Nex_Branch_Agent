@@ -176,13 +176,13 @@ def test_stage_input_switch_omits_model_payload_but_keeps_fixed_reference(contex
         'global_events': [{'event_id': 'event-one', 'title': '相遇', 'summary': source,
                            'narrative_order': 0, 'story_time': None, 'character_ids': [],
                            'source_anchors': [anchor]}],
-        'character_views': [], 'covered_source_anchors': [anchor],
+        'covered_source_anchors': [anchor],
         'remaining_source_anchors': []}, 'questions': [],
         'evidence_refs': [ref(original)], 'notes': []}
     with store.transaction():
-        views = workflow.save(pid, 'source_views', content, stage=1, origin='program',
+        views = workflow.save(pid, 'source_global_events', content, stage=1, origin='program',
                               inputs=[ref(original)], effective=True)
-    materials = [{'schema_id': 'source_views', 'content': content, 'ref': ref(views),
+    materials = [{'schema_id': 'source_global_events', 'content': content, 'ref': ref(views),
                   'state': workflow.state(views), 'required': True}]
     task, run, session, config = execution('step2', materials)
     config['context']['stage_inputs']['step2'] = []
@@ -266,7 +266,10 @@ def test_historical_provenance_does_not_reintroduce_a_pinned_artifacts_old_body(
                               artifact_id=old['artifact_id'],effective=True)
         character_version=workflow.save(pid,'source_character_events',character,stage=1,
             origin='program',inputs=[ref(original)],effective=True)
-    materials=[{'ref':ref(current),'required':True},{'ref':ref(character_version),'required':True}]
+        analysis=workflow.save(pid,'source_global_analysis','甲见乙。',stage=1,
+            inputs=[ref(original),ref(current)],effective=True)
+    materials=[{'ref':ref(current),'required':True},{'ref':ref(analysis),'required':True},
+               {'ref':ref(character_version),'required':True}]
     task,run,session,config=execution('step2',materials)
     prepared=prepare_runtime_materials('step2',task,run,session,config,materials,store)
     packed,_,audit=build_materials('step2',prepared,config,store,pid)
@@ -491,7 +494,10 @@ def test_aggregation_waits_for_full_ledger_then_preserves_original_refs(context_
         content['evidence_refs'].append(ref(old_views))
         views=workflow.save(pid,'source_global_events',content,stage=1,origin='program',inputs=[ref(original)],effective=True)
         character_views=workflow.save(pid,'source_character_events',character,stage=1,origin='program',inputs=[ref(original)],effective=True)
-    materials=[{'ref':ref(views),'required':True},{'ref':ref(character_views),'required':True}]
+        analysis=workflow.save(pid,'source_global_analysis','甲见乙。',stage=1,
+            inputs=[ref(original),ref(views)],effective=True)
+    materials=[{'ref':ref(views),'required':True},{'ref':ref(analysis),'required':True},
+               {'ref':ref(character_views),'required':True}]
     task,run,session,config=execution('step2',materials)
     inputs=[{'source_ref':ref(views),'content':content},
             {'source_ref':ref(character_views),'content':character}]

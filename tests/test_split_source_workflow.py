@@ -49,33 +49,47 @@ def _output(kind, source_ref):
         payload["character_views"] = [{"character_id": "C-甲", "name": "甲", "aliases": [],
             "description": "人物", "events": [{"character_event_id": "CEV-1", "title": "遇见乙",
                 "summary": "甲见乙。", "narrative_order": 1, "story_time": None,
-                "involvement": "相遇", "source_anchors": [anchor]}]}]
+                "involvement": "相遇"}]}]
     return {"result_kind": "ready", "payload": payload, "questions": [],
             "evidence_refs": [source_ref], "notes": []}
 
 
-def test_step1_schema_and_workflow_use_two_independent_artifacts(source_case, monkeypatch):
+def _knowledge_asset(global_view, global_analysis, character_view):
+    return {"result_kind": "ready", "payload": {
+        "source_global_events_ref": ref(global_view), "source_global_analysis_ref": ref(global_analysis),
+        "source_character_events_ref": ref(character_view), "premise": "甲见乙。",
+        "world_rules": [], "themes": [], "conflicts": [], "characters": [], "key_event_refs": [],
+        "preservation_items": [], "event_causality": [], "canon_constraints": [], "uncertainties": [],
+    }, "questions": [], "evidence_refs": [], "notes": []}
+
+
+def test_step1_schema_and_workflow_use_three_independent_artifacts(source_case, monkeypatch):
     store, workflow, project = source_case
     catalog = SchemaCatalog()
-    assert STAGE_OUTPUTS[1] == ("source_global_events", "source_character_events")
+    assert STAGE_OUTPUTS[1] == ("source_global_events", "source_global_analysis", "source_character_events")
     with store.transaction():
         original = workflow.save(project, "source_text", "甲见乙。", effective=True)
         source_ref = ref(original)
-        outputs = {kind: _output(kind, source_ref) for kind in STAGE_OUTPUTS[1]}
+        outputs = {kind: _output(kind, source_ref) for kind in (
+            "source_global_events", "source_character_events")}
         for kind, output in outputs.items():
             catalog.validate(kind, output)
         global_view = workflow.save(project, "source_global_events", outputs["source_global_events"],
                                     stage=1, inputs=[source_ref], effective=True)
         character_view = workflow.save(project, "source_character_events", outputs["source_character_events"],
                                        stage=1, inputs=[source_ref], effective=True)
-        workflow.save(project, "source_global_analysis", "全局分析", stage=2, effective=True)
-        workflow.save(project, "source_character_analysis", "人物分析", stage=2, effective=True)
+        global_analysis = workflow.save(project, "source_global_analysis", "全局分析", stage=1,
+            inputs=[source_ref, ref(global_view)], effective=True)
+        asset = workflow.save(project, "source_knowledge_asset",
+            _knowledge_asset(global_view, global_analysis, character_view), stage=2,
+            inputs=[ref(global_view), ref(global_analysis), ref(character_view)], effective=True)
     assert workflow.original_for(project, global_view)["id"] == original["id"]
     assert workflow.original_for(project, character_view)["id"] == original["id"]
     assert [item["kind"] for item in workflow.materials(project, 2)] == list(STAGE_OUTPUTS[1])
     monkeypatch.setitem(PROGRAM_REQUIRES, 5, [])  # Isolate source-view input contract from the plan guard.
     assert [item["kind"] for item in workflow.materials(project, 5)] == [
-        "source_global_events", "source_character_events", "source_global_analysis", "source_character_analysis"]
+        "source_global_events", "source_character_events", "source_knowledge_asset"]
+    assert workflow.materials(project, 3)[0]["ref"] == ref(asset)
     with store.transaction():
         revised = deepcopy(outputs["source_global_events"])
         revised["payload"]["global_events"][0]["summary"] = "再分析相遇。"
@@ -87,22 +101,22 @@ def test_step1_schema_and_workflow_use_two_independent_artifacts(source_case, mo
     assert body(store, character_view) == outputs["source_character_events"]
 
 
-def test_step5_rejects_unindexed_character_events(source_case, monkeypatch):
+def test_step5_accepts_character_events_without_event_anchors(source_case, monkeypatch):
     store, workflow, project = source_case
     monkeypatch.setitem(PROGRAM_REQUIRES, 5, [])
     with store.transaction():
         original = workflow.save(project, "source_text", "甲见乙。", effective=True)
         source_ref = ref(original)
-        workflow.save(project, "source_global_events", _output("source_global_events", source_ref),
-                      stage=1, inputs=[source_ref], effective=True)
-        invalid = _output("source_character_events", source_ref)
-        invalid["payload"]["character_views"][0]["events"][0]["source_anchors"] = []
-        workflow.save(project, "source_character_events", invalid, stage=1,
-                      inputs=[source_ref], effective=True)
-    with pytest.raises(WorkflowBlocked) as error:
-        workflow.materials(project, 5)
-    assert error.value.reason == "source_index_migration_required"
-    assert error.value.details["kind"] == "source_character_events"
+        global_view = workflow.save(project, "source_global_events", _output("source_global_events", source_ref),
+                                    stage=1, inputs=[source_ref], effective=True)
+        character_view = workflow.save(project, "source_character_events", _output("source_character_events", source_ref),
+                                       stage=1, inputs=[source_ref], effective=True)
+        global_analysis = workflow.save(project, "source_global_analysis", "全局分析", stage=1,
+                                        inputs=[source_ref, ref(global_view)], effective=True)
+        workflow.save(project, "source_knowledge_asset", _knowledge_asset(global_view, global_analysis, character_view),
+                      stage=2, inputs=[ref(global_view), ref(global_analysis), ref(character_view)], effective=True)
+    assert [item["kind"] for item in workflow.materials(project, 5)] == [
+        "source_global_events", "source_character_events", "source_knowledge_asset"]
 
 
 def test_step2_rejects_views_from_different_original_versions(source_case):

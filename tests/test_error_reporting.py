@@ -9,7 +9,7 @@ import pytest
 from branch_agent.model_service import ModelRunError
 from branch_agent.records import new_record, canonical_bytes, usage
 from branch_agent.workflow import WorkflowBlocked, all_records, update
-from test_runtime import runtime, coordinator, source_response
+from test_runtime import FakeModel, runtime, coordinator, source_response
 
 
 def failed_operation(engine, pid, cid, *, known=True):
@@ -60,35 +60,44 @@ def test_known_incomplete_cost_still_counts_and_rejection_is_not_unknown_usage(r
     engine._budget_check(task)
 
 
-def test_output_limit_pauses_once_preserving_safe_error_details(runtime):
-    engine, model, pid, cid = runtime
+def test_step1_branch_output_limit_pauses_once_preserving_safe_error_details(runtime):
+    engine, _, pid, cid = runtime
     engine.import_source(pid, cid, "甲见乙。", "故事")
     details = {"known_outcome": True, "terminal_status": "incomplete",
                "incomplete_reason": "max_output_tokens", "max_output_tokens": 8000}
 
-    def limit(task, materials):
-        error = ModelRunError("output_limit_exceeded", "模型输出达到 8000 tokens 上限（含推理），响应未完成。")
-        error.details = details
-        raise error
+    class LimitGlobal(FakeModel):
+        async def run(self, stage, task, run, session, config, materials, message, control=None,
+                      step1_view=None, step1_window=None, instructions_override=None):
+            if step1_view == "global":
+                self.calls.append(stage)
+                error = ModelRunError("output_limit_exceeded", "模型输出达到 8000 tokens 上限（含推理），响应未完成。")
+                error.details = details
+                raise error
+            return await super().run(stage, task, run, session, config, materials, message,
+                                     control=control, step1_view=step1_view,
+                                     step1_window=step1_window,
+                                     instructions_override=instructions_override)
 
-    model.responses = [coordinator, source_response, source_response, limit]
-    engine.submit_message(pid, cid, "开始改编")
-
-    async def drive():
-        for _ in range(7):
-            await engine.tick(pid, cid)
-    asyncio.run(drive())
-    task = next(t for t in engine.status(pid)["tasks"] if t["scope"]["stage"] == 2)
-    assert task["state"] == "paused" and task["pause_reason"] == "output_limit_exceeded"
-    assert task["repair_rounds_used"] == 0
-    assert model.calls == ["coordinator", "step1", "step1", "step2"]
-    run = next(r for r in engine.status(pid)["runs"] if r["task_id"] == task["id"])
+    model = LimitGlobal()
+    model.store = engine.store
+    engine.model_service = model
+    with engine.store.transaction():
+        message = engine._message(pid, cid, "分析原作", role="user")
+        task = engine._new_task(pid, cid, message, "generate", stage=1)
+    asyncio.run(engine.tick(pid, cid))
+    branches = {engine._task_data(child)["step1_view"]: child for child in all_records(
+        engine.store, pid, "task") if child["parent_task_id"] == task["id"]}
+    failed = engine.store.get(branches["global"]["id"], pid)
+    assert failed["state"] == "paused" and failed["pause_reason"] == "output_limit_exceeded"
+    assert failed["repair_rounds_used"] == 0
+    assert sorted(model.calls) == ["step1", "step1"]
+    run = next(r for r in engine.status(pid)["runs"] if r["task_id"] == failed["id"])
     assert run["error"]["details"] == details
-    notices = [h["content"].get("text", "") for h in all_records(engine.store, pid, "history_record")
-               if h["visibility"] == "conversation"]
-    assert any("8000" in text and "响应未完成" in text for text in notices)
-    assert engine.workflow.resolve(pid, "source_global_events")
+    assert engine.store.get(task["id"], pid)["state"] == "paused"
     assert engine.workflow.resolve(pid, "source_character_events")
+    with pytest.raises(WorkflowBlocked, match="missing_material"):
+        engine.workflow.resolve(pid, "source_global_events")
 
 
 LEGACY_LIMIT_MESSAGE = ("模型输出不符合结构约定：Responses stream ended with terminal event "

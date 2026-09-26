@@ -8,19 +8,54 @@ from branch_agent.context import build_materials, fit_input, input_budget, Budge
 
 
 def test_active_schemas_and_strict_json_adapter():
-    catalog=SchemaCatalog();assert len(catalog.schemas)==15
-    assert catalog.schema_for('step1.global')=='source_global_events'
-    assert catalog.schema_for('step1.character')=='source_character_events'
+    catalog=SchemaCatalog();assert len(catalog.schemas)==17
+    assert catalog.schema_for('step1.global')=='source_global_step1_result'
+    assert catalog.schema_for('step1.character')=='source_character_step1_result'
     assert catalog.registry['bindings']['step6']=='game_event_narrative_patch'
     assert 'event_function_map' not in catalog.schemas
     assert 'work_summary' not in catalog.schemas
     assert 'source_analysis' not in catalog.schemas
+    assert 'source_views' not in catalog.schemas
     assert 'aux.summary' not in catalog.registry['bindings']
-    assert 'step2' not in catalog.registry['bindings']
+    assert catalog.schema_for('step2')=='source_knowledge_asset'
     graph=json.loads((catalog.path/'examples/nexo_graph.example.json').read_text())
     catalog.output_type('nexo_graph').validate_json(json.dumps(graph))
     broken=deepcopy(graph);broken['chapters']='invalid'
     with pytest.raises(Exception): catalog.output_type('nexo_graph').validate_json(json.dumps(broken))
+
+
+@pytest.mark.parametrize('view,schema_id,other_field', [
+    ('global', 'source_global_step1_result', 'character_views'),
+    ('character', 'source_character_step1_result', 'global_events'),
+])
+def test_step1_global_analysis_and_character_events_have_distinct_contracts(view, schema_id, other_field):
+    from test_runtime import source_response
+    source_ref = {'record_id': str(uuid.uuid4()), 'version': '1',
+                  'item_id': None, 'json_pointer': None}
+    output = source_response(None, [{'schema_id': 'source_text',
+                                     'ref': source_ref, 'content': '甲见乙。'}])
+    output['payload'].pop(other_field)
+    catalog = SchemaCatalog()
+    if view == 'global':
+        output['analysis'] = 'Analysis of the fixed source'
+        catalog.validate(schema_id, output)
+        output['analysis'] = ''
+        with pytest.raises(ValueError):
+            catalog.validate(schema_id, output)
+    else:
+        output['payload']['character_views'] = [{
+            'character_id': 'C-1', 'name': '甲', 'aliases': [], 'description': '主角',
+            'events': [{'character_event_id': 'CEV-1', 'title': '相遇', 'summary': '甲见乙。',
+                'narrative_order': 1, 'story_time': None, 'involvement': '亲历'}],
+        }]
+        catalog.validate(schema_id, output)
+        output['payload']['character_views'][0]['events'][0]['source_anchors'] = []
+        with pytest.raises(ValueError):
+            catalog.validate(schema_id, output)
+        del output['payload']['character_views'][0]['events'][0]['source_anchors']
+        output['analysis'] = 'Unwanted character analysis'
+        with pytest.raises(ValueError):
+            catalog.validate(schema_id, output)
 
 
 def test_saved_editable_schemas_upgrade_to_direct_source_index_contract():
@@ -28,9 +63,6 @@ def test_saved_editable_schemas_upgrade_to_direct_source_index_contract():
     service = ConfigService.__new__(ConfigService)
     service.catalog = catalog
     saved = deepcopy(catalog.schemas)
-    character_event = saved['source_views']['properties']['payload']['anyOf'][0]['properties']['character_views']['items']['properties']['events']['items']
-    character_event['properties'] = {'event_id': {'type': 'string'}, 'involvement': {'type': 'string'}}
-    character_event['required'] = ['event_id', 'involvement']
     game_event = saved['game_event_view']['properties']['payload']['anyOf'][0]['properties']['events']['items']
     game_event['properties'].pop('source_anchors')
     game_event['required'].remove('source_anchors')
@@ -45,7 +77,6 @@ def test_saved_editable_schemas_upgrade_to_direct_source_index_contract():
     chapter['properties'].pop('chapter_source_anchors')
     chapter['required'].remove('chapter_source_anchors')
     upgraded = service._upgrade_schema_overrides(saved)
-    assert 'character_event_id' in upgraded['source_views']['properties']['payload']['anyOf'][0]['properties']['character_views']['items']['properties']['events']['items']['required']
     assert 'source_anchors' in upgraded['game_event_view']['properties']['payload']['anyOf'][0]['properties']['events']['items']['required']
     assert 'source_event_refs' not in upgraded['game_event_view']['properties']['payload']['anyOf'][0]['properties']['events']['items']['properties']
     assert 'source_anchors' in upgraded['game_event_view']['$defs']['CoverageItem']['required']

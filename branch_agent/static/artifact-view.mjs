@@ -1,20 +1,20 @@
-import {escapeHTML as e, publicView} from './ui-utils.mjs?v=20260926-1';
+import {escapeHTML as e, publicView} from './ui-utils.mjs?v=20260926-2';
 
 export const editableArtifactKinds = ['adaptation_strategy', 'adaptation_plan'];
 
 const labels = {
-  source_text: '原作全文', source_global_events: '全局事件视图', source_character_events: '主要人物事件视图',
-  source_global_analysis: '全局事件分析', source_character_analysis: '主要人物事件分析',
+  source_text: '原作全文', source_global_events: '作品事件视图', source_character_events: '主要人物事件视图',
+  source_global_analysis: '作品事件分析', source_knowledge_asset: '原作知识资产',
   adaptation_strategy: '玩家与互动策略', adaptation_plan: '互动剧本改编方案',
   game_event_view: '互动剧本事件视图', ending_routes: '结局路线', player_profiles: '目标玩家画像',
   chapter_design: '章节设计', chapter_graph: '章节 Graph', nexo_graph: '完整互动剧本'
 };
 const fallbackDescriptions = {
   source_text: '保存导入的完整原作。',
-  source_global_events: '记录覆盖原作的全局事件及其边界。',
-  source_character_events: '记录主要人物各自的事件线。',
-  source_global_analysis: '分析全局事件的因果与叙事作用。',
-  source_character_analysis: '分析人物事件与关系变化。',
+  source_global_events: 'Step1 作品事件视图 Agent 切分的完整事件及原文边界。',
+  source_character_events: 'Step1 主要人物事件视图 Agent 直接从原文梳理的人物事件线。',
+  source_global_analysis: '同一 Step1 作品事件视图 Agent 对事件因果、叙事作用和全本结构的分析。',
+  source_knowledge_asset: 'Step2 知识资产分析 Agent 综合全局事件、全局分析与人物事件形成的结构化原作知识。',
   adaptation_strategy: '确定玩家身份、改编原则和互动策略。',
   adaptation_plan: '规划互动剧本的目标、范围与改编方案。',
   game_event_view: '将原作事件映射为游戏事件。',

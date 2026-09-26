@@ -25,6 +25,7 @@ from .records import new_record, canonical_bytes
 from .auth import LocalAuth
 from .configuration import ConfigService
 from .context import unwrap, tokens, input_budget, BudgetExceeded
+from .prompts import step1_agent
 from .model_service import ModelService, ReadTools
 from .workflow import WorkflowBlocked
 from .artifact_workspace import ArtifactWorkspace
@@ -347,15 +348,39 @@ def create_app(store=None,engine=None,model_service=None,data_dir=None):
         def work():
             blob=db.blob_put(p,raw,media_type,name)
             result=engine.import_source(p,c,text,name)
-            values,_=config.values(p,'step1');n=tokens(text,values['model']['name'])
-            source_settings=values['context']['step1_source']
-            window_mode=n>source_settings['trigger_tokens']
-            return public({'result':result,'attachment':blob,'source_tokens':n,
-                'source_mode':'sliding_window' if window_mode else 'full_text',
-                'source_window_threshold':source_settings['trigger_tokens'],
-                'source_window_tokens':source_settings['window_tokens'],
-                'input_budget':input_budget(values),
-                'admitted':window_mode or n<input_budget(values)})
+            base,_=config.values(p,'step1')
+            branch_preflight={}
+            for view in ('global','character'):
+                agent_key=step1_agent(view,base)
+                values,_=config.values(p,'step1',agent_key=agent_key)
+                model=values['model']['name']
+                source_tokens=tokens(text,model)
+                settings=values['context']['step1_source']
+                budget=input_budget(values)
+                safe_full_budget=max(0,budget-min(8192,budget//10))
+                window_mode=(source_tokens>settings['trigger_tokens'] or
+                             source_tokens>safe_full_budget)
+                branch_preflight[view]={
+                    'agent_key':agent_key,
+                    'agent_name':values['prompts'].get('agent_names',{}).get(agent_key,agent_key),
+                    'model':model,
+                    'source_tokens':source_tokens,
+                    'source_mode':'sliding_window' if window_mode else 'full_text',
+                    'source_window_threshold':settings['trigger_tokens'],
+                    'source_window_tokens':settings['window_tokens'],
+                    'input_budget':budget,
+                    'safe_full_budget':safe_full_budget,
+                    'admitted':settings['window_tokens']<budget if window_mode else source_tokens<=safe_full_budget,
+                }
+            global_branch=branch_preflight['global']
+            modes={item['source_mode'] for item in branch_preflight.values()}
+            return public({'result':result,'attachment':blob,'source_tokens':global_branch['source_tokens'],
+                'source_mode':modes.pop() if len(modes)==1 else 'mixed',
+                'source_window_threshold':global_branch['source_window_threshold'],
+                'source_window_tokens':global_branch['source_window_tokens'],
+                'input_budget':global_branch['input_budget'],
+                'step1_branches':branch_preflight,
+                'admitted':all(item['admitted'] for item in branch_preflight.values())})
         return once(request,p,'source.import',body,work)
     @app.get(BASE+'/projects/{p}/status')
     async def status(request:Request,p:str):access(request,p);return public(engine.status(p))

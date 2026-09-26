@@ -10,22 +10,21 @@ from .records import new_record, scope
 from .graph import SCHEMA_DIR, validate_output
 from .schemas import SchemaCatalog
 
-STAGES = {1: "source_global_events", 2: "source_global_analysis", 3: "adaptation_strategy",
+STAGES = {1: "source_global_events", 2: "source_knowledge_asset", 3: "adaptation_strategy",
           4: "adaptation_plan", 5: "game_event_view", 6: "game_event_view",
           7: "ending_routes", 8: "player_profiles", 9: "chapter_design",
           10: "chapter_graph", 11: "review_report"}
 STAGE_OUTPUTS = {
-    1: ("source_global_events", "source_character_events"),
-    2: ("source_global_analysis", "source_character_analysis"),
+    1: ("source_global_events", "source_global_analysis", "source_character_events"),
 }
-AGENTS = {1: "source_parser", 2: "adaptation_planner", 3: "adaptation_planner",
+AGENTS = {1: "source_parser", 2: "source_knowledge_analyst", 3: "adaptation_planner",
           4: "adaptation_planner", 5: "interaction_architect", 6: "interaction_architect",
           7: "interaction_architect", 8: "interaction_architect", 9: "chapter_designer",
           10: "chapter_writer", 11: "validation_agent"}
-REQUIRES = {1: ["source_text"], 2: ["source_global_events", "source_character_events"],
-            3: ["source_global_analysis", "source_character_analysis"],
-            4: ["source_global_analysis", "source_character_analysis", "adaptation_strategy"],
-            5: ["source_global_events", "source_character_events", "source_global_analysis", "source_character_analysis"],
+REQUIRES = {1: ["source_text"], 2: ["source_global_events", "source_global_analysis", "source_character_events"],
+            3: ["source_knowledge_asset"],
+            4: ["source_knowledge_asset", "adaptation_strategy"],
+            5: ["source_global_events", "source_character_events", "source_knowledge_asset"],
             6: ["game_event_view"],
             7: ["game_event_view"],
             8: ["game_event_view", "ending_routes"],
@@ -34,7 +33,7 @@ REQUIRES = {1: ["source_text"], 2: ["source_global_events", "source_character_ev
 PROGRAM_REQUIRES = {5: ["adaptation_plan"], 6: ["adaptation_plan"],
                     7: ["adaptation_plan"], 8: ["adaptation_plan"]}
 WHOLE = {"item_id": None, "json_pointer": ""}
-PLAIN_ARTIFACTS = {"source_text", "source_analysis", "source_global_analysis", "source_character_analysis"}
+PLAIN_ARTIFACTS = {"source_text", "source_global_analysis"}
 
 
 class WorkflowBlocked(ValueError):
@@ -133,14 +132,16 @@ class Workflow:
         if global_events:
             if ref(self.original_for(project_id, global_events)) != ref(self.original_for(project_id, character_events)):
                 raise WorkflowBlocked("source_reference_mismatch", {"kind": "step1_views"})
+        if stage == 2:
+            global_analysis = self.resolve(project_id, "source_global_analysis")
+            if ref(global_events) not in global_analysis["source_refs"]:
+                raise WorkflowBlocked("source_reference_mismatch", {"kind": "source_global_analysis"})
+            if ref(self.original_for(project_id, global_analysis)) != ref(self.original_for(project_id, global_events)):
+                raise WorkflowBlocked("source_reference_mismatch", {"kind": "source_global_analysis"})
         if stage == 5:
             global_payload = body(self.store, global_events)["payload"]
-            character_payload = body(self.store, character_events)["payload"]
             if any(not event.get("source_anchors") for event in global_payload["global_events"]):
                 raise WorkflowBlocked("source_index_migration_required", {"kind": "source_global_events"})
-            if any("character_event_id" not in event or not event.get("source_anchors")
-                   for character in character_payload["character_views"] for event in character["events"]):
-                raise WorkflowBlocked("source_index_migration_required", {"kind": "source_character_events"})
         if indexed_events:
             if any("source_anchors" not in event or (event.get("adaptation_kind") != "new" and not event["source_anchors"])
                    for event in body(self.store, indexed_events)["payload"]["events"]):
@@ -221,7 +222,7 @@ class Workflow:
         kind = artifact["artifact_kind"]
         if kind == "source_text":
             return version
-        if kind in ("source_views", "source_global_events", "source_character_events"):
+        if kind in ("source_global_events", "source_character_events"):
             target = body(self.store, version)["payload"]["source_ref"]
             source = self.fixed_version(project_id, target)
             if self.store.get(source["artifact_id"], project_id=project_id)["artifact_kind"] != "source_text":
@@ -232,7 +233,7 @@ class Workflow:
                 continue
             parent = self.fixed_version(project_id, target)
             parent_kind = self.store.get(parent["artifact_id"], project_id=project_id)["artifact_kind"]
-            if parent_kind in ("source_text", "source_views", "source_global_events", "source_character_events"):
+            if parent_kind in ("source_text", "source_global_events", "source_character_events"):
                 return self.original_for(project_id, parent, _seen)
             try:
                 return self.original_for(project_id, parent, _seen)
@@ -272,11 +273,7 @@ class Workflow:
             config = self.store.get(run["config_version_id"], project_id=project_id)
             custom = config["values"].get("schemas")
         plain_content = kind in PLAIN_ARTIFACTS and isinstance(content, str)
-        if kind == "source_analysis" and isinstance(content, dict):
-            # Historical structured Step2 artifacts remain readable/importable,
-            # but new Agent runs store plain text with no output Schema.
-            self.validate_evidence(project_id, content)
-        elif kind not in PLAIN_ARTIFACTS:
+        if kind not in PLAIN_ARTIFACTS:
             self.catalog.validate(kind, content, custom)
             self.validate_evidence(project_id, content)
         elif not isinstance(content, str) or not content.strip():
@@ -304,7 +301,7 @@ class Workflow:
                     all(source[k] == historical[k] for k in ("record_id", "version"))
                     for historical in historical_inputs):
                 dep = new_record("dependency", project_id, consumer_ref=ref(version), producer_ref=source,
-                    relation="source" if kind in ("source_views", "source_global_events", "source_character_events") else "material",
+                    relation="source" if kind in ("source_global_events", "source_character_events") else "material",
                     consumer_selections=[WHOLE], producer_selections=[WHOLE], state="valid", assessment_ref=None)
                 dependencies.append(dep)
         version["dependency_ids"] = [d["id"] for d in dependencies]
@@ -424,7 +421,7 @@ class Workflow:
         complete |= "/payload" in {s["json_pointer"] for s in selections}
         artifact = self.store.get(version["artifact_id"], project_id=project_id)
         selected_paths = [s["json_pointer"] for s in selections]
-        if artifact["artifact_kind"] in ("source_analysis", "source_global_analysis", "source_character_analysis"):
+        if artifact["artifact_kind"] == "source_global_analysis":
             required = []
         elif artifact["artifact_kind"] == "adaptation_strategy":
             required = ["/payload/player_identity", "/payload/user_ideas", "/payload/strategy_basis"]

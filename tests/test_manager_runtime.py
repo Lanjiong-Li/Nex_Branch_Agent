@@ -19,6 +19,7 @@ from branch_agent.model_service import ask_user_request, manager_halt_request, m
 from branch_agent.records import new_record
 from branch_agent.storage import Store
 from branch_agent.workflow import all_records, ref, update
+from test_runtime import step2_response
 
 
 @pytest.fixture
@@ -70,8 +71,8 @@ def step1_view_message(engine, project, original, request_data):
     anchor = {"source_ref": source_ref, "start_utf16": 0, "end_utf16": 4,
               "exact_quote": original, "prefix": None, "suffix": None}
     instructions = request_data.get("instructions", "")
-    schema_name = ("source_global_events" if "当前独立产物：全局事件" in instructions
-                   else "source_character_events" if "当前独立产物：主要人物事件" in instructions
+    schema_name = ("source_global_events" if "当前独立产物：作品事件视图" in instructions
+                   else "source_character_events" if "当前独立产物：主要人物事件视图" in instructions
                    else "")
     assert schema_name in ("source_global_events", "source_character_events")
     payload = {"source_ref": source_ref, "covered_source_anchors": [anchor],
@@ -84,9 +85,11 @@ def step1_view_message(engine, project, original, request_data):
         payload["character_views"] = [{"character_id": "甲", "name": "甲", "aliases": [],
             "description": "原作人物", "events": [{"character_event_id": "character-event-1",
             "title": "甲见乙", "summary": original, "narrative_order": 0, "story_time": None,
-            "involvement": "甲遇见乙", "source_anchors": [anchor]}]}]
-    return message({"result_kind": "ready", "payload": payload, "questions": [],
-                    "evidence_refs": [source_ref], "notes": []})
+            "involvement": "甲遇见乙"}]}]
+    result = {"result_kind": "ready", "payload": payload, "questions": [],
+              "evidence_refs": [source_ref], "notes": []}
+    if schema_name == "source_global_events": result["analysis"] = "作品事件分析"
+    return message(result)
 
 
 def test_ask_user_result_requires_a_real_tool_marker():
@@ -358,6 +361,7 @@ async def test_manager_dispatches_stage_with_separate_audited_run(runtime, struc
     assert not any(stage == 2 for stage, _ in stages)
     assert engine.workflow.resolve(project, "source_global_events")
     assert engine.workflow.resolve(project, "source_character_events")
+    assert engine.workflow.resolve(project, "source_global_analysis", effective=False)
     coordinator_runs = [run for run in all_records(store, project, "run") if run["agent_key"] == "conversation_coordinator"]
     child_runs = [run for run in all_records(store, project, "run")
                   if run["agent_key"] in ("source_global_parser", "source_character_parser")]
@@ -390,7 +394,7 @@ async def test_manager_dispatches_stage_with_separate_audited_run(runtime, struc
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("via_message", [False, True])
-async def test_manager_requests_one_step2_confirmation_with_ask_user(runtime, via_message):
+async def test_manager_confirms_single_step2_knowledge_asset(runtime, via_message):
     store, project, conversation = runtime
     calls = []
     original = "甲见乙。"
@@ -408,15 +412,15 @@ async def test_manager_requests_one_step2_confirmation_with_ask_user(runtime, vi
         if number in (3, 4):
             return httpx.Response(200, json=step1_view_message(engine, project, original, data))
         if number == 6:
-            return httpx.Response(200, json=plain_message(
-                "[[GLOBAL_EVENT_ANALYSIS]]\n全局事件相遇。\n[[CHARACTER_EVENT_ANALYSIS]]\n人物甲与乙相遇。"))
+            return httpx.Response(200, json=message(step2_response()))
         if number == 7:
             step2 = next(task for task in all_records(store, project, "task")
                          if engine._task_data(task).get("stage") == 2)
             assert step2["state"] == "waiting_user"
             assert not engine._task_data(step2)["pending_user_items"]
+            assert engine.workflow.resolve(project, "source_knowledge_asset", effective=False)
             return httpx.Response(200, json=call("ask_user", {"questions": [{
-                "prompt": "这两份 Step2 分析是否可以作为后续改编依据？",
+                "prompt": "这份原作知识资产是否可以作为后续改编依据？",
                 "suggested_answers": ["确认"], "confirmation_task_id": step2["id"]}]}, number))
         if number == 8 and via_message:
             step2 = next(task for task in all_records(store, project, "task")
@@ -440,11 +444,11 @@ async def test_manager_requests_one_step2_confirmation_with_ask_user(runtime, vi
                  if task["parent_task_id"] == root["id"] and engine._task_data(task).get("stage") == 2)
     assert step2["state"] == "waiting_user"
     assert len(engine._task_data(step2)["pending_user_items"]) == 1
-    assert len(engine._task_data(step2)["pending_user_items"][0]["targets"]) == 2
+    assert len(engine._task_data(step2)["pending_user_items"][0]["targets"]) == 1
     actions = ActionService(engine)
-    assert actions.list_cards(project, conversation)["cards"][0]["description"] == "这两份 Step2 分析是否可以作为后续改编依据？"
+    assert actions.list_cards(project, conversation)["cards"][0]["description"] == "这份原作知识资产是否可以作为后续改编依据？"
     if via_message:
-        engine.submit_message(project, conversation, "确认这两份分析")
+        engine.submit_message(project, conversation, "确认这份知识资产")
         await engine.tick(project, conversation)
     else:
         for item in engine._task_data(step2)["pending_user_items"]:
@@ -461,4 +465,66 @@ async def test_manager_requests_one_step2_confirmation_with_ask_user(runtime, vi
     assert len([run for run in all_records(store, project, "run")
                 if run["agent_key"] == "conversation_coordinator"]) == 2
     assert len(calls) == (9 if via_message else 8)
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_step2_waits_for_knowledge_asset_confirmation_before_advancing(runtime):
+    store, project, conversation = runtime
+    original = "甲见乙。"
+    calls = []
+
+    def handler(request):
+        data = json.loads(request.content)
+        calls.append(data)
+        number = len(calls)
+        if number == 1:
+            return httpx.Response(200, json=call("begin_adaptation", {
+                "request": "完整改编", "source_is_current_message": False,
+                "stage": None, "chapter_id": None}, number))
+        if number in (2, 5):
+            return httpx.Response(200, json=call("run_stage", {
+                "stage": 1 if number == 2 else 2, "chapter_id": None}, number))
+        if number in (3, 4):
+            return httpx.Response(200, json=step1_view_message(engine, project, original, data))
+        if number == 6:
+            return httpx.Response(200, json=message(step2_response()))
+        assert number == 7
+        step2 = next(task for task in all_records(store, project, "task")
+                     if engine._task_data(task).get("stage") == 2)
+        return httpx.Response(200, json=call("ask_user", {"questions": [{
+            "prompt": "确认知识资产？", "suggested_answers": ["确认"],
+            "confirmation_task_id": step2["id"]}]}, number))
+
+    client = AsyncOpenAI(api_key="local-mock", http_client=httpx.AsyncClient(
+        transport=httpx.MockTransport(handler)), max_retries=0)
+    engine = Engine(store, ModelService(store, client), ConfigService(store))
+    engine.import_source(project, conversation, original, "测试原作")
+    engine.submit_message(project, conversation, "开始改编")
+    await engine.tick(project, conversation)
+
+    root = next(task for task in all_records(store, project, "task")
+                if engine._task_data(task).get("manager_controlled"))
+    step2 = next(task for task in all_records(store, project, "task")
+                 if task["parent_task_id"] == root["id"] and engine._task_data(task).get("stage") == 2)
+    assert step2["state"] == "waiting_user"
+    targets = engine._task_data(step2)["pending_user_items"][0]["targets"]
+    assert len(targets) == 1
+    presented = engine._projection(project, "presentations", conversation)["targets"]
+    manager_run = next(run for run in all_records(store, project, "run")
+                       if run["agent_key"] == "conversation_coordinator")
+    for index, target in enumerate(targets):
+        with store.transaction():
+            answer = engine._message(project, conversation, f"确认分析 {index + 1}", role="user")
+            receipt = engine._apply_request({"intent": "confirm", "stage": 2,
+                "chapter_id": None, "target_ref": target["subject"],
+                "requested_confirmation_paths": [""],
+                "source_message_ids": [answer["id"]]}, answer, presented,
+                root, manager_run)
+        assert receipt["status"] == "confirmed"
+        current = store.get(step2["id"], project_id=project)
+        assert current["state"] == "succeeded"
+        assert len([item for item in engine._task_data(current)["pending_user_items"]
+                    if item["state"] == "open"]) == 0
+    assert len(calls) == 7  # Step2 has its own structured model call.
     await client.close()

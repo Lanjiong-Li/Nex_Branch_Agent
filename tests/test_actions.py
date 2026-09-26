@@ -7,7 +7,7 @@ import pytest
 from branch_agent.actions import ActionService
 from branch_agent.records import new_record
 from branch_agent.workflow import body, ref, update, WorkflowBlocked, WHOLE
-from test_runtime import runtime, source_response
+from test_runtime import runtime, source_response, seed_knowledge_asset
 from test_split_source_workflow import _output as split_source_output
 
 
@@ -78,10 +78,11 @@ def test_action_stale_is_atomic_and_cannot_cross_conversation(runtime):
 def pending_confirmation(runtime):
     engine,_,pid,cid=runtime;_,task=initial_task(runtime,2)
     with engine.store.transaction():
-        source=engine.workflow.resolve(pid,'source_text')
-        result={'result_kind':'ready','payload':{'source_views_ref':ref(source),'premise':'相遇','world_rules':[],
-            'themes':[],'conflicts':[],'characters':[],'key_event_refs':[],'preservation_items':[]},'questions':[],'evidence_refs':[],'notes':[]}
-        version=engine.workflow.save(pid,'source_analysis',result,stage=2)
+        baseline=seed_knowledge_asset(engine,pid)
+        result=deepcopy(body(engine.store,baseline))
+        result['payload']['premise']='相遇'
+        version=engine.workflow.save(pid,'source_knowledge_asset',result,stage=2,
+            inputs=baseline['source_refs'])
         shown=engine._message(pid,cid,'请确认v1',task=task['id'])
         targets=[{'subject':ref(version),'selections':[WHOLE]}]
         data=engine._task_data(task);data['result_ref']=ref(version)
@@ -125,7 +126,7 @@ def failed_output(runtime, *, remote_unknown=False, unknown_cost=True):
                   'tool_definitions':{'storage':'inline_json','value':[]}}
         snapshot=engine.store.put(new_record('context_snapshot',pid,task_id=task['id'],run_id=run['id'],session_id=session['id'],
             config_version_id=run['config_version_id'],model=config['model']['name'],reasoning_effort=config['model']['reasoning_effort'],
-            **contents,output_schema=engine.workflow.catalog.binding('source_views',config.get('schemas')),
+            **contents,output_schema=engine.workflow.catalog.binding('source_global_step1_result',config.get('schemas')),
             content_sha256=hashlib.sha256(canonical_bytes(contents)).hexdigest(),input_token_estimate=1,input_token_budget=10000))
         measured={'input_tokens':5,'output_tokens':10,'cached_input_tokens':0,'reasoning_tokens':0,'estimated_cost':None if unknown_cost else {'amount':'0.01','currency':'USD'}}
         from branch_agent.records import usage
@@ -220,8 +221,8 @@ def test_report_usage_preserves_raw_unknown_and_records_source(runtime):
 
 def test_fresh_restart_rebuilds_step_one_even_when_previous_effective_exists(runtime):
     engine,model,pid,cid=runtime;service=ActionService(engine);root,task,_,_=failed_output(runtime,unknown_cost=False)
-    source=engine.workflow.resolve(pid,'source_text')
-    engine.workflow.save(pid,'source_views',source_response(task,[{'schema_id':'source_text','content':body(engine.store,source),'ref':ref(source)}]),stage=1,effective=True)
+    with engine.store.transaction():
+        seed_knowledge_asset(engine,pid)
     receipt=submit(service,pid,cid,card(service,pid,cid,'task:'+task['id']),'restart',{'max_cost_usd':'2','max_active_seconds':600})
     model.responses=[source_response]
     asyncio.run(engine.tick(pid,cid))
