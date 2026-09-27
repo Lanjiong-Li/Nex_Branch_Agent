@@ -906,29 +906,45 @@ class Engine:
         members_by_id = {member["id"]: member for member in members}
         calls = [c for c in all_records(self.store, task["project_id"], "model_call") if c["task_id"] in members_by_id]
         cost = Decimal("0")
+        current_view = self._task_data(task).get("step1_view")
+
+        def live_other_view(view_task, run_id):
+            if (current_view not in ("global", "character") or not view_task or not run_id
+                    or view_task["parent_task_id"] != task["parent_task_id"]
+                    or view_task["state"] != "running" or view_task["current_run_id"] != run_id):
+                return False
+            other_view = self._task_data(view_task).get("step1_view")
+            if other_view not in ("global", "character") or other_view == current_view:
+                return False
+            view_run = self.store.get(run_id, project_id=task["project_id"])
+            return bool(view_run and view_run["task_id"] == view_task["id"]
+                        and view_run["state"] == "running"
+                        and view_run["lease_owner"] == self.owner
+                        and view_run["lease_expires_at"]
+                        and view_run["lease_expires_at"] > self.store.now())
+
         for call in calls:
             if call.get("state") in ("pending", "running", "unknown"):
-                # The two Step 1 views intentionally run at the same time. A
-                # live sibling call is in flight, not an uncertain old call.
-                # Keep unknown calls and stale leases blocking recovery.
-                sibling = members_by_id[call["task_id"]]
-                data = self._task_data(task)
-                sibling_data = self._task_data(sibling)
-                parallel_step1 = (
-                    call["state"] in ("pending", "running")
-                    and data.get("step1_view") in ("global", "character")
-                    and sibling_data.get("step1_view") in ("global", "character")
-                    and sibling_data["step1_view"] != data["step1_view"]
-                    and sibling["parent_task_id"] == task["parent_task_id"]
-                )
-                if parallel_step1:
-                    sibling_run = self.store.get(call["run_id"], project_id=task["project_id"])
-                    parallel_step1 = bool(
-                        sibling_run and sibling_run["state"] == "running"
-                        and sibling_run["lease_owner"] == self.owner
-                        and sibling_run["lease_expires_at"]
-                        and sibling_run["lease_expires_at"] > self.store.now()
-                    )
+                # Step 1's other view can have a model call in flight, including
+                # its parent-owned context summary. A summary run has no lease;
+                # its live parent view run owns the lease instead. Unknown calls
+                # and stale or unrelated work must still block recovery.
+                call_task = members_by_id[call["task_id"]]
+                parallel_step1 = False
+                if call["state"] in ("pending", "running"):
+                    parallel_step1 = live_other_view(call_task, call["run_id"])
+                    call_data = self._task_data(call_task)
+                    if (not parallel_step1 and call_task["intent"] == "summarize"
+                            and call_task["state"] == "running"
+                            and call_task["current_run_id"] == call["run_id"]
+                            and call_data.get("stage") == "aux.summary"
+                            and call_data.get("parent_owned") is True):
+                        parent = members_by_id.get(call_task["parent_task_id"])
+                        summary_run = self.store.get(call["run_id"], project_id=task["project_id"])
+                        parallel_step1 = bool(
+                            parent and live_other_view(parent, parent["current_run_id"])
+                            and summary_run and summary_run["task_id"] == call_task["id"]
+                            and summary_run["state"] == "running")
                 if not parallel_step1:
                     raise WorkflowBlocked("operation_uncertain")
                 continue
