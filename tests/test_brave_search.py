@@ -42,7 +42,7 @@ async def test_search_uses_llm_context_endpoint_and_bounded_source_results(monke
     assert request.url.params["maximum_number_of_tokens"] == "2048"
     assert request.url.params["safesearch"] == "moderate"
     assert request.url.params["freshness"] == "pw"
-    assert request.url.params["search_lang"] == "zh"
+    assert request.url.params["search_lang"] == "zh-hans"
     assert result["status"] == "ok" and result["result_count"] == 2
     assert result["truncated"] is True
     assert result["results"][0] == {
@@ -80,7 +80,7 @@ async def test_missing_key_and_empty_results_are_distinct(monkeypatch):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("http_status,expected_code", [
     (401, "unauthorized"), (403, "forbidden"),
-    (429, "rate_limited"), (500, "upstream_error"),
+    (429, "rate_limited"), (422, "invalid_parameter"), (500, "upstream_error"),
 ])
 async def test_provider_errors_do_not_echo_body_or_key(monkeypatch, http_status, expected_code):
     monkeypatch.setenv("BRAVE_SEARCH_API_KEY", "fake-test-key")
@@ -178,6 +178,22 @@ async def test_chinese_query_defaults_to_chinese_and_result_stays_within_session
     async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http_client:
         result = await BraveSearchClient(http_client).search("中文事件资料")
 
-    assert requests[0].url.params["search_lang"] == "zh"
+    assert requests[0].url.params["search_lang"] == "zh-hans"
     assert len(json.dumps(result, ensure_ascii=False)) <= 8_000
     assert result["truncated"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("given,expected", [("zh", "zh-hans"), ("zh-CN", "zh-hans"),
+                                           ("zh-TW", "zh-hant"), ("ja", "jp")])
+async def test_common_language_aliases_use_brave_codes(monkeypatch, given, expected):
+    monkeypatch.setenv("BRAVE_SEARCH_API_KEY", "fake-test-key")
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(200, json={"grounding": {"generic": []}})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http_client:
+        await BraveSearchClient(http_client).search("query", search_lang=given)
+    assert requests[0].url.params["search_lang"] == expected

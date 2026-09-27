@@ -21,6 +21,10 @@ MAX_TOTAL_SNIPPET_CHARS = 3_000
 MAX_TITLE_CHARS = 160
 MAX_URL_CHARS = 1_000
 MAX_RESULT_JSON_CHARS = 8_000
+SEARCH_LANG_ALIASES = {
+    "zh": "zh-hans", "zh-cn": "zh-hans", "zh-sg": "zh-hans",
+    "zh-tw": "zh-hant", "zh-hk": "zh-hant", "ja": "jp",
+}
 
 
 class BraveSearchError(RuntimeError):
@@ -72,7 +76,9 @@ def _parameters(
     if len(query) > 600 or len(query.split()) > 75:
         raise BraveSearchError("invalid_query", "搜索词最多 600 字符、75 个词")
     if search_lang is None and re.search(r"[\u3400-\u9fff]", query):
-        search_lang = "zh"
+        search_lang = "zh-hans"
+    if isinstance(search_lang, str):
+        search_lang = SEARCH_LANG_ALIASES.get(search_lang.lower(), search_lang.lower())
     if safesearch not in {"off", "moderate", "strict"}:
         raise BraveSearchError("invalid_parameter", "safesearch 必须为 off、moderate 或 strict")
     params: dict[str, str | int] = {
@@ -217,6 +223,8 @@ class BraveSearchClient:
             raise BraveSearchError("unauthorized", "Brave Search API Key 无效")
         if response.status_code == 403:
             raise BraveSearchError("forbidden", "Brave Search 当前套餐无权访问此接口")
+        if response.status_code == 422:
+            raise BraveSearchError("invalid_parameter", "Brave Search 不支持指定的搜索参数或语言代码")
         if response.status_code >= 400:
             raise BraveSearchError("upstream_error", f"Brave Search 请求失败（HTTP {response.status_code}）")
         try:
