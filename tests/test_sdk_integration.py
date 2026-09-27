@@ -190,6 +190,122 @@ async def test_tool_execution_is_archived_and_second_turn_receives_result(runtim
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('configured', [False, True])
+async def test_web_search_tool_is_available_only_when_key_is_configured(runtime, monkeypatch, configured):
+    store, task, run, session, values = runtime
+    if configured:
+        monkeypatch.setenv('BRAVE_SEARCH_API_KEY', 'fake-search-key')
+    else:
+        monkeypatch.delenv('BRAVE_SEARCH_API_KEY', raising=False)
+    requests = []
+
+    def handler(request):
+        requests.append(json.loads(request.content))
+        return httpx.Response(200, json=provider_response())
+
+    client = AsyncOpenAI(api_key='local-mock', http_client=httpx.AsyncClient(
+        transport=httpx.MockTransport(handler)), max_retries=0)
+    await ModelService(store, client).run('coordinator', task, run, session, values, [], '你好')
+    names = {tool['name'] for tool in requests[0]['tools']}
+    assert ('web_search' in names) is configured
+    assert 'fake-search-key' not in str(requests)
+    await client.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('stage', ['step1', 'aux.summary'])
+async def test_web_search_tool_is_not_exposed_to_specialists_or_summary(runtime, monkeypatch, stage):
+    monkeypatch.setenv('BRAVE_SEARCH_API_KEY', 'fake-search-key')
+    store, base_task, _, _, _ = runtime
+    pid = base_task['project_id']
+    config = ConfigService(store).resolve(pid, stage)
+    values = config['values']
+    if stage == 'step1':
+        values['output']['structured']['step1.global'] = False
+        with store.transaction():
+            Workflow(store).save(pid, 'source_text', '甲见乙。', origin='import', effective=True)
+        materials = Workflow(store).materials(pid, 1)
+    else:
+        archive = store.get(base_task['requested_by_message_id'], pid)
+        materials = [{'builtin': 'runtime.archive_window', 'content': {
+            'history_refs': [ref(archive)], 'decision_refs': [], 'artifact_refs': [],
+            'tool_call_refs': []}, 'required': True}]
+    task = store.put(new_record('task', pid, conversation_id=base_task['conversation_id'],
+        requested_by_message_id=base_task['requested_by_message_id'], intent='generate', state='running'))
+    session = store.put(new_record('work_session', pid, conversation_id=base_task['conversation_id'],
+        session_key=stage + '-search-boundary'))
+    run = store.put(new_record('run', pid, task_id=task['id'],
+        agent_key='source_parser' if stage == 'step1' else 'context_summarizer',
+        session_id=session['id'], config_version_id=config['id'], state='running'))
+    requests = []
+
+    def handler(request):
+        requests.append(json.loads(request.content))
+        return httpx.Response(200, json=plain_provider_response('已完成'))
+
+    client = AsyncOpenAI(api_key='local-mock', http_client=httpx.AsyncClient(
+        transport=httpx.MockTransport(handler)), max_retries=0)
+    await ModelService(store, client).run(stage, task, run, session, values, materials,
+                                          '处理', **({'step1_view': 'global'} if stage == 'step1' else {}))
+    assert 'web_search' not in {tool['name'] for tool in requests[0].get('tools', [])}
+    if stage == 'aux.summary':
+        assert not requests[0].get('tools')
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_web_search_sdk_call_is_audited_and_next_turn_gets_bounded_result(runtime, monkeypatch):
+    monkeypatch.setenv('BRAVE_SEARCH_API_KEY', 'fake-search-key')
+    store, task, run, session, values = runtime
+    searches = []
+    requests = []
+
+    async def fake_search(self, query, **kwargs):
+        searches.append((query, kwargs))
+        return {'status': 'ok', 'results': [{'url': 'https://example.org/source',
+                'title': '来源', 'snippets': ['已核对的短摘录'],
+                'published_at': '2026-09-27', 'relative_age': 'today'}],
+                'result_count': 1, 'truncated': False}
+
+    monkeypatch.setattr('branch_agent.model_service.BraveSearchClient.search', fake_search)
+
+    def handler(request):
+        data = json.loads(request.content)
+        requests.append(data)
+        response = provider_response()
+        if len(requests) == 1:
+            assert 'web_search' in {tool['name'] for tool in data['tools']}
+            response['output'] = [{'id': 'fc_web_search', 'type': 'function_call',
+                'call_id': 'call_web_search', 'name': 'web_search',
+                'arguments': json.dumps({'query': '最新消息', 'freshness': 'pw',
+                                         'search_lang': 'zh'}), 'status': 'completed'}]
+        else:
+            output = next(item['output'] for item in data['input']
+                          if item.get('type') == 'function_call_output'
+                          and item['call_id'] == 'call_web_search')
+            result = json.loads(output)
+            assert result['status'] == 'ok'
+            assert result['results'][0]['url'] == 'https://example.org/source'
+            assert 'fake-search-key' not in output
+        return httpx.Response(200, json=response)
+
+    client = AsyncOpenAI(api_key='local-mock', http_client=httpx.AsyncClient(
+        transport=httpx.MockTransport(handler)), max_retries=0)
+    await ModelService(store, client).run('coordinator', task, run, session, values, [], '请核对最新消息')
+    assert len(requests) == 2
+    assert searches == [('最新消息', {'freshness': 'pw', 'search_lang': 'zh'})]
+    calls = store.list(task['project_id'], 'tool_call')
+    assert len(calls) == 1
+    assert calls[0]['tool_name'] == 'web_search' and calls[0]['state'] == 'succeeded'
+    assert calls[0]['history_ids']
+    assert len(store.list(task['project_id'], 'model_call')) == 2
+    assert store.get(run['id'], task['project_id'])['model_turns_used'] == 2
+    assert 'fake-search-key' not in str(calls)
+    assert 'fake-search-key' not in str(store.list(task['project_id'], 'session_item'))
+    await client.close()
+
+
+@pytest.mark.asyncio
 async def test_sdk_turn_limit_reports_the_actual_cause(runtime):
     store, task, run, session, values = runtime
     run = store.put(new_record('run', task['project_id'], task_id=task['id'],

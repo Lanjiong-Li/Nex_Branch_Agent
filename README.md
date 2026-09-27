@@ -17,15 +17,18 @@ createdb branch_agent_local   # 仅首次创建
 
 打开 <http://127.0.0.1:8767>。首次启动在 `.data/local-login.txt` 生成本地登录信息，文件权限为600；账号身份、签名密钥与项目历史会跨重启保留。该登录适配器供本地开发使用，正式平台认证按后端接口替换。
 
-服务端读取项目根目录 `.env`，环境变量优先于文件。新运行默认使用 `deepseek-flash`；如果在配置页为某个 Agent 选用 OpenAI 模型，才需要 `OPENAI_API_KEY`。不要覆盖现有 `.env`；按 `.env.example` 补齐：
+服务端读取项目根目录 `.env`，环境变量优先于文件。新运行默认使用 `deepseek-flash`；如果在配置页为某个 Agent 选用 OpenAI 模型，才需要 `OPENAI_API_KEY`。主 Agent 使用 `web_search` 时需配置 Brave Search 方案的 API Key。不要覆盖现有 `.env`；按 `.env.example` 补齐：
 
 ```dotenv
 DEEPSEEK_API_KEY=你的有效DeepSeek API密钥
 # 使用 OpenAI 模型时才填写：OPENAI_API_KEY=你的有效OpenAI API密钥
+# 使用 web_search 时填写：BRAVE_SEARCH_API_KEY=你的有效Brave Search API密钥
 DATABASE_URL=postgresql:///branch_agent_local
 ```
 
 可选 `BRANCH_DATA_DIR` 指定持久目录，`BRANCH_PORT` 更换监听端口。密钥只存在于服务端，不进入页面配置或模型上下文。认证失败会明确暂停，不能靠重复重试修复密钥。
+
+`web_search` 使用 Brave Search 方案的 **LLM Context** 接口，返回带来源 URL 的简短搜索结果，供主 Agent 回答需要外部实时信息的问题。首版仅向对话协调 Agent 提供；Step1–11 专业 Agent 和内部摘要 Agent 不调用此工具。搜索结果是外部资料，不能覆盖固定原作、已保存产物或用户确认。工具会限制返回条数与文本长度，搜索调用及结果记录在运行数据中。
 
 ## 使用
 
@@ -68,6 +71,6 @@ node --test tests/runtime-view.test.mjs
 
 ## 服务端部署准备
 
-仓库提供 `Dockerfile` 和 `compose.yaml`。在目标环境配置 `DEEPSEEK_API_KEY`、`BRANCH_DB_PASSWORD`、`BRANCH_LOCAL_PASSWORD` 后使用 `docker compose up -d --build`；使用 OpenAI 模型时额外配置 `OPENAI_API_KEY`。数据库与文件分别使用持久卷。现有测试实例位于腾讯云 `/opt/nex-branch-agent`，由 Docker Compose 运行应用和数据库，经 Nginx 提供 HTTPS 入口；更新前备份数据库与持久文件，并在重建应用后验证健康状态。正式平台认证仍需单独接入。
+仓库提供 `Dockerfile` 和 `compose.yaml`。在目标环境配置 `DEEPSEEK_API_KEY`、`BRANCH_DB_PASSWORD`、`BRANCH_LOCAL_PASSWORD` 后使用 `docker compose up -d --build`；使用 OpenAI 模型时额外配置 `OPENAI_API_KEY`，使用 `web_search` 时额外配置 `BRAVE_SEARCH_API_KEY`。数据库与文件分别使用持久卷。现有测试实例位于腾讯云 `/opt/nex-branch-agent`，由 Docker Compose 运行应用和数据库，经 Nginx 提供 HTTPS 入口；更新前备份数据库与持久文件，并在重建应用后验证健康状态。正式平台认证仍需单独接入。
 
 模型价格与容量初值依据官方模型页：[DeepSeek](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/)、[GPT-5.6 Sol](https://developers.openai.com/api/docs/models/gpt-5.6-sol)、[GPT-5 Mini](https://developers.openai.com/api/docs/models/gpt-5-mini)、[GPT-5 Nano](https://developers.openai.com/api/docs/models/gpt-5-nano)。DeepSeek 的美元费用估算暂按官方高峰时段单价计算，因此是保守估算，不是账单金额；更新价格表时生成新的配置版本。Nexo编辑器嵌入、工程自动写入/发布及完整DSL求解不在首版范围；当前仅对受支持表达式执行保守的不可达节点检查。

@@ -20,6 +20,7 @@ services:
       DATABASE_URL: postgresql://branch_agent:${BRANCH_DB_PASSWORD}@database:5432/branch_agent
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:?Set DEEPSEEK_API_KEY in environment}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      BRAVE_SEARCH_API_KEY: ${BRAVE_SEARCH_API_KEY:-}
       BRANCH_LOCAL_USER: ${BRANCH_LOCAL_USER:-developer}
       BRANCH_LOCAL_PASSWORD: ${BRANCH_LOCAL_PASSWORD:?Set BRANCH_LOCAL_PASSWORD in environment}
     volumes:
