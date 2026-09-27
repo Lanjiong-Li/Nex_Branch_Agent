@@ -71,6 +71,35 @@ def runtime(tmp_path):
         conn.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(namespace)))
 
 
+def test_import_source_starts_step1_from_exact_saved_version(runtime):
+    engine, model, project, conversation = runtime
+    imported = engine.import_source(project, conversation, "甲见乙。", "原作", start_step1=True)
+    source, root = imported["source"], imported["step1_task"]
+    assert root["state"] == "queued"
+    assert engine._task_data(root)["stages"] == [1]
+    assert engine._task_data(root)["source_ref"] == ref(source)
+    assert engine._task_data(root)["fresh_start"] is True
+    assert any(event["event_name"] == "source.step1_queued" and event["task_id"] == root["id"]
+               for event in all_records(engine.store, project, "runtime_event"))
+    assert any(event["event_name"] == "chat.activity" and event["payload"]["kind"] == "source"
+               and event["task_id"] == root["id"]
+               for event in all_records(engine.store, project, "runtime_event"))
+
+    with pytest.raises(WorkflowBlocked) as blocked:
+        engine.import_source(project, conversation, "另一版原作。", "原作二", start_step1=True)
+    assert blocked.value.reason == "source_import_workflow_active"
+    with pytest.raises(WorkflowBlocked) as budget_blocked:
+        engine.import_source(project, conversation, "预算不足的新版原作。", "原作三",
+                             step1_block_reason="budget_insufficient")
+    assert budget_blocked.value.reason == "source_import_workflow_active"
+    assert ref(engine.workflow.resolve(project, "source_text")) == ref(source)
+
+    asyncio.run(engine.tick(project, conversation))
+    children = all_records(engine.store, project, "task", parent_task_id=root["id"])
+    assert len(children) == 1 and children[0]["scope"]["stage"] == 1
+    assert model.calls == []
+
+
 def coordinator(task, materials):
     return {"result_kind": "ready", "payload": {"reply": "已接受整剧改编请求。",
         "source_message_kind": "request", "task_requests": [{
@@ -1134,6 +1163,9 @@ def test_step1_sliding_window_keeps_independent_runs_and_saves_two_views(runtime
     global_analysis = engine.workflow.resolve(pid, "source_global_analysis", effective=False)
     assert "global analysis" in global_analysis["content"]["text"]
     assert "source_anchors" not in character_view["content"]["value"]["payload"]["character_views"][0]["events"][0]
+    activities = all_records(engine.store, pid, "runtime_event", event_name="chat.activity")
+    assert {row["payload"]["view"] for row in activities if row["payload"]["status"] == "progress"} == {"global", "character"}
+    assert {row["payload"]["view"] for row in activities if row["payload"]["status"] == "finished"} == {"global", "character"}
 
 
 def test_step1_failed_window_keeps_other_view_and_independent_cursor(runtime):

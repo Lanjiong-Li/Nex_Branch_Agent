@@ -1,4 +1,4 @@
-"""Small, read-only Brave LLM Context client for the coordinator's web search tool.
+"""Small, read-only Brave LLM Context client for Agents' web search tool.
 
 The API key is read only from BRAVE_SEARCH_API_KEY. Provider response bodies and
 transport exceptions are deliberately never included in errors returned to agents.

@@ -167,6 +167,11 @@ def _save_view(engine, child, run, output, analysis, kind):
                   {"view": view, "artifact_ref": ref(version),
                    "analysis_ref": refs.get(ANALYSIS_KINDS.get(view))},
                   conversation=child["conversation_id"], task=child["id"], run=run["id"])
+    label = "作品事件" if view == "global" else "主要人物事件"
+    engine._event(project, "chat.activity",
+                  {"text": f"{label}分支已完成，产物已保存。", "kind": "agent",
+                   "status": "finished", "stage": "step1", "view": view},
+                  conversation=child["conversation_id"], task=child["id"], run=run["id"])
     if run["state"] == "running":
         engine._checkpoint(child, run, "advance_work")
         engine._close_run(child, run, "succeeded")
@@ -304,6 +309,13 @@ async def run_view(engine, child, token, source_ref, source_text, windowed):
                     engine._event(project, "source.window_completed",
                         {"view": view, "start_utf16": cursor, "end_utf16": window["end_utf16"],
                          "commit_utf16": commit, "source_ref": source_ref},
+                        conversation=cid, task=child["id"], run=run["id"])
+                    label = "作品事件" if view == "global" else "主要人物事件"
+                    progress = round(commit * 100 / source_length) if source_length else 100
+                    engine._event(project, "chat.activity",
+                        {"text": f"{label}分支已处理至原作的 {progress}%。",
+                         "kind": "agent", "status": "progress", "stage": "step1", "view": view,
+                         "progress_percent": progress},
                         conversation=cid, task=child["id"], run=run["id"])
                     if commit < source_length:
                         engine._checkpoint(child, run, "advance_work")

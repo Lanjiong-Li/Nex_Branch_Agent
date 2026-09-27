@@ -8,7 +8,7 @@ from openai import AsyncOpenAI
 from branch_agent.storage import Store
 from branch_agent.records import new_record
 from branch_agent.configuration import ConfigService
-from branch_agent.model_service import ModelService, ModelRunError, append_history
+from branch_agent.model_service import ModelService, ModelRunError, PublicReplyStream, append_history
 from branch_agent.workflow import Workflow, ref
 
 
@@ -41,6 +41,153 @@ def plain_provider_response(text):
     value=provider_response()
     value['output'][0]['content'][0]['text']=text
     return value
+
+
+def streamed_provider_response(response, chunks, *, terminal_type='response.completed'):
+    events=[{'type':'response.output_text.delta','sequence_number':index+1,
+             'item_id':response['output'][0]['id'],'output_index':0,'content_index':0,
+             'logprobs':[],'delta':chunk} for index,chunk in enumerate(chunks)]
+    events.append({'type':terminal_type,'sequence_number':len(events)+1,'response':response})
+    body=''.join('data: '+json.dumps(item,ensure_ascii=False)+'\n\n' for item in events)+'data: [DONE]\n\n'
+    return httpx.Response(200,headers={'content-type':'text/event-stream'},content=body.encode())
+
+
+def test_public_reply_stream_decodes_only_direct_payload_reply_and_split_emoji():
+    raw=('{'+'"notes":["reply: private"],"payload":{"other":{"reply":"private"},'
+         '"reply":"第一段\\n😀 \\ud83d\\ude00","task_requests":[]}}')
+    decoder=PublicReplyStream()
+    output=''.join(decoder.feed(raw[index:index+3]) for index in range(0,len(raw),3))
+    assert output=='第一段\n😀 😀'
+    assert 'private' not in output
+
+
+@pytest.mark.asyncio
+async def test_streamed_coordinator_emits_public_reply_and_audits_terminal_response(runtime):
+    store,task,run,session,values=runtime
+    response=provider_response()
+    raw=response['output'][0]['content'][0]['text']
+    chunks=[raw[index:index+7] for index in range(0,len(raw),7)]
+    requests=[]
+    def handler(request):
+        data=json.loads(request.content);requests.append(data)
+        assert data['stream'] is True
+        return streamed_provider_response(response,chunks)
+    client=AsyncOpenAI(api_key='local-mock-not-real',
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),max_retries=0)
+    result=await ModelService(store,client).run('coordinator',task,run,session,values,[],'你好',live_events=True)
+    assert result['payload']['reply']=='你好，请提交原作。'
+    events=sorted(store.list(task['project_id'],'runtime_event'),key=lambda item:item['sequence'])
+    names=[item['event_name'] for item in events]
+    assert 'chat.reply.started' in names and 'chat.reply.completed' in names
+    assert 'chat.reply.failed' not in names
+    deltas=[item['payload']['delta'] for item in events if item['event_name']=='chat.reply.delta']
+    assert ''.join(deltas)=='你好，请提交原作。'
+    assert all('task_requests' not in delta for delta in deltas)
+    assert any(item['event_name']=='chat.activity' and item['payload']['kind']=='model' for item in events)
+    assert all(item['conversation_id']==task['conversation_id'] for item in events)
+    calls=store.list(task['project_id'],'model_call')
+    assert len(calls)==1 and calls[0]['state']=='succeeded' and calls[0]['usage']['input_tokens']==100
+    assert store.list(task['project_id'],'session_item')
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_streamed_coordinator_retries_pre_event_429_with_one_logical_turn(runtime):
+    store,task,run,session,values=runtime
+    response=provider_response();raw=response['output'][0]['content'][0]['text']
+    values['retry']['max_retries']=1
+    attempts=[]
+    def handler(request):
+        attempts.append(json.loads(request.content))
+        if len(attempts)==1:
+            return httpx.Response(429,json={'error':{'message':'test rate limit','type':'rate_limit_error'}})
+        return streamed_provider_response(response,[raw[:20],raw[20:]])
+    client=AsyncOpenAI(api_key='local-mock-not-real',
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),max_retries=0)
+    result=await ModelService(store,client).run('coordinator',task,run,session,values,[],'你好',live_events=True)
+    assert result['payload']['reply']=='你好，请提交原作。'
+    calls=store.list(task['project_id'],'model_call')
+    assert len(attempts)==2 and len(calls)==2
+    assert {call['attempt'] for call in calls}=={1,2}
+    assert len({call['operation_id'] for call in calls})==1
+    assert len({call['turn_index'] for call in calls})==1
+    assert store.get(run['id'],task['project_id'])['model_turns_used']==1
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_streamed_coordinator_marks_partial_reply_failed_on_incomplete_response(runtime):
+    store,task,run,session,values=runtime
+    response=provider_response();raw=response['output'][0]['content'][0]['text']
+    response['status']='incomplete';response['incomplete_details']={'reason':'max_output_tokens'}
+    def handler(request):
+        return streamed_provider_response(response,[raw],terminal_type='response.incomplete')
+    client=AsyncOpenAI(api_key='local-mock-not-real',
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),max_retries=0)
+    with pytest.raises(ModelRunError) as error:
+        await ModelService(store,client).run('coordinator',task,run,session,values,[],'你好',live_events=True)
+    assert error.value.code=='output_limit_exceeded'
+    events=store.list(task['project_id'],'runtime_event')
+    names=[item['event_name'] for item in events]
+    assert 'chat.reply.started' in names and 'chat.reply.failed' in names
+    assert 'chat.reply.completed' not in names
+    calls=store.list(task['project_id'],'model_call')
+    assert len(calls)==1 and calls[0]['state']=='failed'
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_streamed_coordinator_discards_draft_when_final_reply_differs(runtime):
+    store,task,run,session,values=runtime
+    response=provider_response()
+    raw=response['output'][0]['content'][0]['text']
+    raw=raw.replace('"reply": "你好，请提交原作。"',
+                    '"reply": "临时草稿", "reply": "最终回复"')
+    response['output'][0]['content'][0]['text']=raw
+    def handler(request):
+        return streamed_provider_response(response,[raw[:80],raw[80:]])
+    client=AsyncOpenAI(api_key='local-mock-not-real',
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),max_retries=0)
+    result=await ModelService(store,client).run('coordinator',task,run,session,values,[],'你好',live_events=True)
+    assert result['payload']['reply']=='最终回复'
+    names=[event['event_name'] for event in store.list(task['project_id'],'runtime_event')]
+    assert 'chat.reply.started' in names and 'chat.reply.failed' in names
+    assert 'chat.reply.completed' not in names
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_streamed_coordinator_reports_tool_lifecycle_without_arguments_or_results(runtime):
+    store,task,run,session,values=runtime
+    responses=[]
+    def handler(request):
+        data=json.loads(request.content);responses.append(data)
+        response=provider_response()
+        if len(responses)==1:
+            response['output']=[{'id':'fc_read','type':'function_call','call_id':'call_read',
+                'name':'read_record','arguments':json.dumps({'record_id':task['requested_by_message_id'],
+                    'version':None,'cursor':None}),'status':'completed'}]
+            events=[{'type':'response.completed','sequence_number':1,'response':response}]
+            body=''.join('data: '+json.dumps(item,ensure_ascii=False)+'\n\n' for item in events)+'data: [DONE]\n\n'
+            return httpx.Response(200,headers={'content-type':'text/event-stream'},content=body.encode())
+        assert any(item.get('type')=='function_call_output' and item['call_id']=='call_read' for item in data['input'])
+        raw=response['output'][0]['content'][0]['text']
+        return streamed_provider_response(response,[raw[:30],raw[30:]])
+    client=AsyncOpenAI(api_key='local-mock-not-real',
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),max_retries=0)
+    result=await ModelService(store,client).run('coordinator',task,run,session,values,[],
+        '查看我刚才说了什么',live_events=True)
+    assert result['payload']['reply']=='你好，请提交原作。'
+    events=store.list(task['project_id'],'runtime_event')
+    activities=[item['payload'] for item in events if item['event_name']=='chat.activity']
+    assert any(item['kind']=='tool' and item['status']=='started' and item['tool_name']=='read_record'
+               for item in activities)
+    assert any(item['kind']=='tool' and item['status']=='finished' for item in activities)
+    assert all('arguments' not in item and 'result' not in item and task['requested_by_message_id'] not in item['text']
+               for item in activities)
+    assert len(store.list(task['project_id'],'model_call'))==2
+    assert len(store.list(task['project_id'],'tool_call'))==1
+    await client.close()
 
 
 @pytest.mark.asyncio
@@ -121,7 +268,8 @@ async def test_step2_uses_structured_knowledge_asset_schema(runtime):
 
 
 @pytest.mark.asyncio
-async def test_disabling_stage_output_type_changes_real_sdk_request(runtime):
+async def test_disabling_stage_output_type_changes_real_sdk_request(runtime, monkeypatch):
+    monkeypatch.delenv('BRAVE_SEARCH_API_KEY', raising=False)
     store,base_task,_,_,_=runtime;pid=base_task['project_id'];requests=[]
     workflow=Workflow(store)
     with store.transaction():
@@ -144,10 +292,15 @@ async def test_disabling_stage_output_type_changes_real_sdk_request(runtime):
         assert [tool['name'] for tool in data['tools']]==['read_record']
         return httpx.Response(200,json=plain_provider_response('原始文本调试输出'))
     client=AsyncOpenAI(api_key='local-mock-not-real',http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),max_retries=0)
-    result=await ModelService(store,client).run('step1',task,run,session,config['values'],workflow.materials(pid,1),'切片',step1_view='global')
+    result=await ModelService(store,client).run('step1',task,run,session,config['values'],workflow.materials(pid,1),
+        '切片',step1_view='global',live_events=True)
     assert result=='原始文本调试输出'
     assert store.list(pid,'context_snapshot')[-1]['output_schema'] is None
     assert requests
+    activities=[item['payload'] for item in store.list(pid,'runtime_event')
+                if item['event_name']=='chat.activity']
+    assert activities and all(item['view']=='global' for item in activities)
+    assert any('全局事件 Agent' in item['text'] for item in activities)
     await client.close()
 
 
@@ -190,66 +343,81 @@ async def test_tool_execution_is_archived_and_second_turn_receives_result(runtim
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('stage', [
+    'coordinator', 'step1', 'step2', 'aux.summary', 'aux.history_answer'])
 @pytest.mark.parametrize('configured', [False, True])
-async def test_web_search_tool_is_available_only_when_key_is_configured(runtime, monkeypatch, configured):
-    store, task, run, session, values = runtime
+async def test_web_search_tool_is_available_to_every_agent_when_key_is_configured(
+        runtime, monkeypatch, stage, configured):
+    store, base_task, base_run, base_session, base_values = runtime
     if configured:
         monkeypatch.setenv('BRAVE_SEARCH_API_KEY', 'fake-search-key')
     else:
         monkeypatch.delenv('BRAVE_SEARCH_API_KEY', raising=False)
-    requests = []
-
-    def handler(request):
-        requests.append(json.loads(request.content))
-        return httpx.Response(200, json=provider_response())
-
-    client = AsyncOpenAI(api_key='local-mock', http_client=httpx.AsyncClient(
-        transport=httpx.MockTransport(handler)), max_retries=0)
-    await ModelService(store, client).run('coordinator', task, run, session, values, [], '你好')
-    names = {tool['name'] for tool in requests[0]['tools']}
-    assert ('web_search' in names) is configured
-    assert 'fake-search-key' not in str(requests)
-    await client.close()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize('stage', ['step1', 'aux.summary'])
-async def test_web_search_tool_is_not_exposed_to_specialists_or_summary(runtime, monkeypatch, stage):
-    monkeypatch.setenv('BRAVE_SEARCH_API_KEY', 'fake-search-key')
-    store, base_task, _, _, _ = runtime
     pid = base_task['project_id']
-    config = ConfigService(store).resolve(pid, stage)
-    values = config['values']
-    if stage == 'step1':
-        values['output']['structured']['step1.global'] = False
-        with store.transaction():
-            Workflow(store).save(pid, 'source_text', '甲见乙。', origin='import', effective=True)
-        materials = Workflow(store).materials(pid, 1)
+    if stage == 'coordinator':
+        task, run, session, values, materials = (
+            base_task, base_run, base_session, base_values, [])
     else:
-        archive = store.get(base_task['requested_by_message_id'], pid)
-        materials = [{'builtin': 'runtime.archive_window', 'content': {
-            'history_refs': [ref(archive)], 'decision_refs': [], 'artifact_refs': [],
-            'tool_call_refs': []}, 'required': True}]
-    task = store.put(new_record('task', pid, conversation_id=base_task['conversation_id'],
-        requested_by_message_id=base_task['requested_by_message_id'], intent='generate', state='running'))
-    session = store.put(new_record('work_session', pid, conversation_id=base_task['conversation_id'],
-        session_key=stage + '-search-boundary'))
-    run = store.put(new_record('run', pid, task_id=task['id'],
-        agent_key='source_parser' if stage == 'step1' else 'context_summarizer',
-        session_id=session['id'], config_version_id=config['id'], state='running'))
+        config = ConfigService(store).resolve(pid, stage)
+        values = config['values']
+        values['output']['structured']['step1.global' if stage == 'step1' else stage] = False
+        if stage == 'step1':
+            with store.transaction():
+                Workflow(store).save(pid, 'source_text', '甲见乙。', origin='import', effective=True)
+            materials = Workflow(store).materials(pid, 1)
+        elif stage == 'step2':
+            workflow = Workflow(store)
+            with store.transaction():
+                source = workflow.save(pid, 'source_text', '甲见乙。',
+                    origin='import', effective=True)
+                source_ref = ref(source)
+                global_events = workflow.save(pid, 'source_global_events', {
+                    'result_kind': 'ready', 'payload': {
+                        'source_ref': source_ref, 'global_events': [],
+                        'covered_source_anchors': [], 'remaining_source_anchors': []},
+                    'questions': [], 'evidence_refs': [source_ref], 'notes': []},
+                    stage=1, inputs=[source_ref], effective=True)
+                character_events = workflow.save(pid, 'source_character_events', {
+                    'result_kind': 'ready', 'payload': {
+                        'source_ref': source_ref, 'character_views': [],
+                        'covered_source_anchors': [], 'remaining_source_anchors': []},
+                    'questions': [], 'evidence_refs': [source_ref], 'notes': []},
+                    stage=1, inputs=[source_ref], effective=True)
+                workflow.save(pid, 'source_global_analysis', '甲与乙相遇。',
+                    stage=1, inputs=[source_ref, ref(global_events)], effective=True)
+            materials = workflow.materials(pid, 2)
+        else:
+            archive = store.get(base_task['requested_by_message_id'], pid)
+            materials = [{'builtin': 'runtime.archive_window', 'content': {
+                'history_refs': [ref(archive)], 'decision_refs': [], 'artifact_refs': [],
+                'tool_call_refs': []}, 'required': True}]
+        task = store.put(new_record('task', pid, conversation_id=base_task['conversation_id'],
+            requested_by_message_id=base_task['requested_by_message_id'],
+            intent='generate', state='running'))
+        session = store.put(new_record('work_session', pid,
+            conversation_id=base_task['conversation_id'], session_key=stage + '-search-boundary'))
+        run = store.put(new_record('run', pid, task_id=task['id'],
+            agent_key=values['prompts']['stage_agents'][stage],
+            session_id=session['id'], config_version_id=config['id'], state='running'))
     requests = []
 
     def handler(request):
         requests.append(json.loads(request.content))
-        return httpx.Response(200, json=plain_provider_response('已完成'))
+        response = (provider_response() if stage == 'coordinator'
+                    else plain_provider_response('已完成'))
+        return httpx.Response(200, json=response)
 
     client = AsyncOpenAI(api_key='local-mock', http_client=httpx.AsyncClient(
         transport=httpx.MockTransport(handler)), max_retries=0)
-    await ModelService(store, client).run(stage, task, run, session, values, materials,
-                                          '处理', **({'step1_view': 'global'} if stage == 'step1' else {}))
-    assert 'web_search' not in {tool['name'] for tool in requests[0].get('tools', [])}
+    await ModelService(store, client).run(stage, task, run, session, values,
+        materials, '处理', **({'step1_view': 'global'} if stage == 'step1' else {}))
+    names = {tool['name'] for tool in requests[0].get('tools', [])}
+    assert ('web_search' in names) is configured
     if stage == 'aux.summary':
-        assert not requests[0].get('tools')
+        assert names == ({'web_search'} if configured else set())
+    else:
+        assert {'list_records', 'read_record'} <= names
+    assert 'fake-search-key' not in str(requests)
     await client.close()
 
 
@@ -306,6 +474,33 @@ async def test_web_search_sdk_call_is_audited_and_next_turn_gets_bounded_result(
 
 
 @pytest.mark.asyncio
+async def test_unresolved_web_search_blocks_task_retry_before_model_call(runtime):
+    store, task, run, session, values = runtime
+    pid = task['project_id']
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        return httpx.Response(200, json=provider_response())
+
+    client = AsyncOpenAI(api_key='local-mock', http_client=httpx.AsyncClient(
+        transport=httpx.MockTransport(handler)), max_retries=0)
+    service = ModelService(store, client)
+    await service.run('coordinator', task, run, session, values, [], '首次调用')
+    model_call = store.list(pid, 'model_call')[0]
+    store.put(new_record('tool_call', pid, task_id=task['id'], run_id=run['id'],
+        model_call_id=model_call['id'], operation_id=str(uuid.uuid4()),
+        provider_tool_call_id='uncertain-web-search', tool_name='web_search',
+        arguments={'storage': 'inline_json', 'value': {'query': 'test'}},
+        state='running', attempt=1))
+    with pytest.raises(ModelRunError) as caught:
+        await service.run('coordinator', task, run, session, values, [], '重试')
+    assert caught.value.code == 'operation_uncertain'
+    assert len(requests) == 1
+    await client.close()
+
+
+@pytest.mark.asyncio
 async def test_sdk_turn_limit_reports_the_actual_cause(runtime):
     store, task, run, session, values = runtime
     run = store.put(new_record('run', task['project_id'], task_id=task['id'],
@@ -349,8 +544,9 @@ async def test_post_response_pause_keeps_validated_result(runtime):
 
 
 @pytest.mark.asyncio
-async def test_sdk_compaction_is_audited_auxiliary_run(runtime):
+async def test_sdk_compaction_is_audited_auxiliary_run(runtime, monkeypatch):
     from branch_agent.model_service import PersistentSession
+    monkeypatch.setenv('BRAVE_SEARCH_API_KEY', 'fake-search-key')
     store,task,run,session,values=runtime;values['context'].update(recent_turns=1,history_token_cap=100)
     persistent=PersistentSession(store,session,task,run)
     await persistent.add_items([{'role':'user','content':'早期人物设定讨论。'*300},
@@ -368,7 +564,7 @@ async def test_sdk_compaction_is_audited_auxiliary_run(runtime):
         response=provider_response()
         if summary:
             assert output_format.get('type')!='json_schema'
-            assert not data.get('tools')
+            assert {tool['name'] for tool in data.get('tools', [])} == {'web_search'}
             response['output'][0]['content'][0]['text']='已讨论人物动机；尚无新增确认。'
         return httpx.Response(200,json=response)
     client=AsyncOpenAI(api_key='local-mock',http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),max_retries=0)

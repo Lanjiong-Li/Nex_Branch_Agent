@@ -6,6 +6,7 @@ from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import hashlib
+import inspect
 import json
 import logging
 from uuid import uuid4
@@ -178,15 +179,49 @@ class Engine:
         self._wake.set()
         return message
 
-    def import_source(self, project_id, conversation_id, text, name):
+    def import_source(self, project_id, conversation_id, text, name, *, start_step1=False,
+                      step1_block_reason=None):
         if not text:
             raise WorkflowBlocked("source_empty")
         with self.store.transaction():
             self.store.advisory_lock(f"{project_id}:materials")
+            if start_step1 or step1_block_reason:
+                self.store.advisory_lock(f"{project_id}:conversation:{conversation_id}")
+                active = [task for task in all_records(self.store, project_id, "task")
+                          if self._task_data(task).get("is_workflow")
+                          and task["state"] in ("queued", "running", "waiting_user")]
+                if active:
+                    raise WorkflowBlocked("source_import_workflow_active", {"task_id": active[-1]["id"]})
             message = self._message(project_id, conversation_id, f"已导入原作：{name}（{len(text)} 字符）", role="user")
             version = self.workflow.save(project_id, "source_text", text, origin="import", inputs=[ref(message)], effective=True)
             self._event(project_id, "source.imported", {"artifact_ref": ref(version), "name": name}, conversation=conversation_id, source=message["id"])
-        return {"source": version, "message": message}
+            step1_task = None
+            if start_step1:
+                request = {"intent": "generate", "stage": 1, "chapter_id": None,
+                           "target_ref": None, "request": "分析刚导入的完整原作，执行 Step1。",
+                           "source_message_ids": [message["id"]], "requested_confirmation_paths": []}
+                receipt = self._apply_request(request, message, [], None, None)
+                step1_task = self.store.get(receipt["task_id"], project_id=project_id)
+                data = self._task_data(step1_task)
+                if not data.get("is_workflow") or data.get("source_ref") != ref(version):
+                    raise WorkflowBlocked("source_reference_mismatch", {"expected_source_ref": ref(version)})
+                data["fresh_start"] = True
+                self._save_task_data(step1_task, data)
+                self._event(project_id, "source.step1_queued",
+                            {"artifact_ref": ref(version), "task_id": step1_task["id"]},
+                            conversation=conversation_id, task=step1_task["id"], source=message["id"])
+                self._event(project_id, "chat.activity",
+                            {"text": "原作已保存，Step1 已排队启动。", "kind": "source",
+                             "status": "queued", "stage": "step1"},
+                            conversation=conversation_id, task=step1_task["id"], source=message["id"])
+            elif step1_block_reason == "budget_insufficient":
+                self._event(project_id, "chat.activity",
+                            {"text": "原作已保存，Step1 未启动：当前模型预算不足。", "kind": "source",
+                             "status": "blocked", "stage": "step1"},
+                            conversation=conversation_id, source=message["id"])
+        if step1_task:
+            self._wake.set()
+        return {"source": version, "message": message, "step1_task": step1_task}
 
     def _import_source_message(self, message):
         """Promote one exact user message to the effective source, once."""
@@ -1074,6 +1109,10 @@ class Engine:
                                 conversation=task["conversation_id"], task=task["id"], run=run["id"])
                     return {"message_id": shown["id"]}
             kwargs["event_source_presenter"] = present_event_source
+        # Only the production model service opts into durable public streaming.
+        # Test and extension model services keep their existing run contract.
+        if "live_events" in inspect.signature(self.model_service.run).parameters:
+            kwargs["live_events"] = True
         model = asyncio.create_task(self.model_service.run(stage if isinstance(stage, str) else f"step{stage}", task, run, session, config, materials, message, control=control, **kwargs))
         self._calls[run["id"]] = model
         forced = asyncio.get_running_loop().create_future()

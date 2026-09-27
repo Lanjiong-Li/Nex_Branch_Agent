@@ -122,3 +122,20 @@
 .message-body.markdown th,.message-body.markdown td{border:1px solid #dce8d7;padding:6px 9px;text-align:left;vertical-align:top}
 .message-body.markdown th{background:#f2f7f0;font-weight:600}
 .markdown-download{margin:4px 0 2px;font-size:11px}
+
+/* Runtime activity reads as part of the conversation, without a separate card. */
+.chat-activity{display:flex;align-items:baseline;gap:9px;margin:8px 0 15px;color:#74837b;font-size:12px;line-height:1.65;overflow-wrap:anywhere}
+.chat-activity>span:nth-child(2){min-width:0;flex:1}
+.chat-activity-mark{flex:0 0 16px;text-align:center;color:#8da99a;font-weight:700}
+.chat-activity-mark::before{content:'·'}
+.chat-activity.source .chat-activity-mark::before{content:'↧'}
+.chat-activity.coordinator .chat-activity-mark::before{content:'⌘'}
+.chat-activity.agent .chat-activity-mark::before{content:'◌'}
+.chat-activity.tool .chat-activity-mark::before{content:'⚙'}
+.chat-activity.artifact .chat-activity-mark::before{content:'✓'}
+.chat-activity.error{color:#aa6657}
+.chat-activity.error .chat-activity-mark::before{content:'!'}
+.chat-activity time{font-size:9px;color:#9baa9d;white-space:nowrap}
+.message.streaming .message-body{min-height:22px}
+.message.streaming .stream-status,.stream-placeholder{color:#95a399;font-size:11px;font-weight:400}
+.message.streaming .stream-placeholder{font-style:italic}

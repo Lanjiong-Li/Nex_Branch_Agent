@@ -90,6 +90,7 @@ def create_app(store=None,engine=None,model_service=None,data_dir=None):
             'dependency_changed':'上游依赖已经改变，需要先完成复核','idempotency_conflict':'同一幂等键用于不同请求',
             'source_index_migration_required':'旧版阶段产物缺少独立原文索引，需重新生成并确认对应阶段',
             'operation_uncertain':'上一次操作结果尚未确认，请先核对保存结果','queue_hold':'队列已暂停，需要明确继续',
+            'source_import_workflow_active':'当前项目仍有正在执行或等待确认的改编任务，请先完成或停止后再导入新原作',
             'cost_limit':'任务费用已达到限额，请明确追加额度后继续','active_time_limit':'任务活动耗时已达到限额',
             'turn_limit':'任务模型轮次已达到限额','usage_uncertain':'用量尚未核验，暂不能开始新的调用',
             'action_stale':'待处理事项已发生变化，请查看更新后的选项再提交',
@@ -361,8 +362,6 @@ def create_app(store=None,engine=None,model_service=None,data_dir=None):
         # Hash original bytes as well as parsed text: different attachments are distinct submissions.
         body={'conversation_id':c,'name':name,'source_hash':digest(text),'file_hash':hashlib.sha256(raw).hexdigest()}
         def work():
-            blob=db.blob_put(p,raw,media_type,name)
-            result=engine.import_source(p,c,text,name)
             base,_=config.values(p,'step1')
             branch_preflight={}
             for view in ('global','character'):
@@ -389,16 +388,65 @@ def create_app(store=None,engine=None,model_service=None,data_dir=None):
                 }
             global_branch=branch_preflight['global']
             modes={item['source_mode'] for item in branch_preflight.values()}
+            admitted=all(item['admitted'] for item in branch_preflight.values())
+            result=engine.import_source(p,c,text,name,start_step1=admitted,
+                                        step1_block_reason=None if admitted else 'budget_insufficient')
+            blob=db.blob_put(p,raw,media_type,name)
+            task=result.get('step1_task')
             return public({'result':result,'attachment':blob,'source_tokens':global_branch['source_tokens'],
                 'source_mode':modes.pop() if len(modes)==1 else 'mixed',
                 'source_window_threshold':global_branch['source_window_threshold'],
                 'source_window_tokens':global_branch['source_window_tokens'],
                 'input_budget':global_branch['input_budget'],
                 'step1_branches':branch_preflight,
-                'admitted':all(item['admitted'] for item in branch_preflight.values())})
+                'admitted':admitted,'step1_started':bool(task),
+                'step1_task_id':task['id'] if task else None,
+                'step1_reason':None if task else 'budget_insufficient'})
         return once(request,p,'source.import',body,work)
     @app.get(BASE+'/projects/{p}/status')
     async def status(request:Request,p:str):access(request,p);return public(engine.status(p))
+    @app.get(BASE+'/projects/{p}/conversations/{c}/activity')
+    async def conversation_activity(request:Request,p:str,c:str,after:int=0,limit:int=200,
+                                    tail:bool=True,before:int|None=None):
+        access(request,p);conversation(p,c)
+        if not 0<=after<=9223372036854775807:raise HTTPException(400,'事件游标超出有效范围')
+        if before is not None and (not 0<before<=9223372036854775807 or after):
+            raise HTTPException(400,'旧记录游标无效或不能与 after 同时使用')
+        limit=min(max(limit,1),500)
+        stream_names=('chat.activity','chat.reply.started','chat.reply.delta',
+                      'chat.reply.completed','chat.reply.failed')
+        # Capture the project cursor first. Any event committed afterward will be
+        # delivered by SSE from this cursor, even if this snapshot does not see it.
+        last_sequence=db._connection().execute(
+            'SELECT COALESCE(MAX(sequence),0) AS value FROM runtime_events WHERE project_id=%s',
+            (p,)).fetchone()['value']
+        if before is not None:
+            rows=[row['data'] for row in db._connection().execute(
+                'SELECT data FROM runtime_events WHERE project_id=%s AND conversation_id=%s '
+                'AND event_name=ANY(%s) AND sequence<%s AND sequence<=%s ORDER BY sequence DESC LIMIT %s',
+                (p,c,list(stream_names),before,last_sequence,limit+1)).fetchall()]
+            truncated_before=len(rows)>limit
+            selected=list(reversed(rows[:limit]))
+            has_more=False
+        elif tail and after==0:
+            rows=[row['data'] for row in db._connection().execute(
+                'SELECT data FROM runtime_events WHERE project_id=%s AND conversation_id=%s '
+                'AND event_name=ANY(%s) AND sequence<=%s ORDER BY sequence DESC LIMIT %s',
+                (p,c,list(stream_names),last_sequence,limit+1)).fetchall()]
+            truncated_before=len(rows)>limit
+            selected=list(reversed(rows[:limit]))
+            has_more=False
+        else:
+            rows=[row['data'] for row in db._connection().execute(
+                'SELECT data FROM runtime_events WHERE project_id=%s AND conversation_id=%s '
+                'AND event_name=ANY(%s) AND sequence>%s AND sequence<=%s ORDER BY sequence LIMIT %s',
+                (p,c,list(stream_names),after,last_sequence,limit+1)).fetchall()]
+            selected=rows[:limit]
+            has_more=len(rows)>limit
+            truncated_before=False
+        return public({'events':selected,'next_sequence':selected[-1]['sequence'] if selected else after,
+                       'last_sequence':last_sequence,'has_more':has_more,
+                       'truncated_before':truncated_before})
     @app.post(BASE+'/projects/{p}/tasks/{task_id}/{action}')
     async def control(request:Request,p:str,task_id:str,action:str):
         if action not in ('stop','resume'):raise HTTPException(404,'未知操作')
@@ -695,7 +743,7 @@ def create_app(store=None,engine=None,model_service=None,data_dir=None):
             if not last.isdigit() or len(last)>19 or int(last)>9223372036854775807:raise HTTPException(400,'Last-Event-ID 必须是有效非负整数')
             after=max(after,int(last))
         async def stream():
-            position=after
+            position=after;idle_polls=0
             while not await request.is_disconnected():
                 try:access(request,p)
                 except HTTPException:
@@ -706,7 +754,8 @@ def create_app(store=None,engine=None,model_service=None,data_dir=None):
                     position=row['sequence']
                     yield f'id: {position}\ndata: {json.dumps(public(row),ensure_ascii=False)}\n\n'
                 if len(rows)==1000:continue
-                yield ': heartbeat\n\n';await asyncio.sleep(2)
+                idle_polls=0 if rows else idle_polls+1
+                yield ': heartbeat\n\n';await asyncio.sleep(0.5 if idle_polls<=10 else 2)
         return StreamingResponse(stream(),media_type='text/event-stream',headers={'Cache-Control':'no-cache','X-Accel-Buffering':'no'})
     @app.get('/')
     async def index():return FileResponse(ROOT/'branch_agent/static/index.html')

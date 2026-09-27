@@ -16,9 +16,10 @@ from branch_agent.records import new_record
 
 class IdleEngine:
     def __init__(self):self.imports=[]
-    def import_source(self,p,c,text,name):
-        self.imports.append({'project_id':p,'conversation_id':c,'text':text,'name':name})
-        return {'source_saved':True}
+    def import_source(self,p,c,text,name,*,start_step1=False,step1_block_reason=None):
+        self.imports.append({'project_id':p,'conversation_id':c,'text':text,'name':name,
+                             'start_step1':start_step1,'step1_block_reason':step1_block_reason})
+        return {'source_saved':True,'step1_task':{'id':'test-step1-task'} if start_step1 else None}
     async def start(self):pass
     async def stop(self):pass
     def status(self,p):return {'tasks':[],'runs':[],'queue':[],'artifacts':[],'latest_delivery':None}
@@ -249,6 +250,9 @@ def test_account_config_endpoints_apply_to_all_owned_projects(api):
     assert imported.json()['source_window_threshold']==250000
     assert imported.json()['source_window_tokens']==120000
     assert imported.json()['source_mode']=='full_text'
+    assert imported.json()['step1_started'] is True
+    assert imported.json()['step1_task_id']=='test-step1-task'
+    assert client.app.state.engine.imports[-1]['start_step1'] is True
 
 
 def test_source_import_reports_independent_step1_branch_modes(api):
@@ -278,6 +282,52 @@ def test_source_import_reports_independent_step1_branch_modes(api):
     assert receipt['step1_branches']['character']['agent_key']=='source_character_parser'
     assert receipt['step1_branches']['character']['source_window_threshold']==1
     assert receipt['step1_branches']['global']['input_budget']>receipt['step1_branches']['global']['source_tokens']
+    assert receipt['step1_started'] is True
+
+
+def test_source_import_saves_but_does_not_start_when_step1_budget_is_insufficient(api,monkeypatch):
+    import branch_agent.app as app_module
+    client,_,_=api
+    project,conversation=create_space(client)
+    monkeypatch.setattr(app_module,'input_budget',lambda _values:1)
+    result=client.post(BASE+f'/projects/{project}/source',json={
+        'conversation_id':conversation,'text':'预算不足时仍保留的原作。'})
+    assert result.status_code==200,result.text
+    receipt=result.json()
+    assert receipt['admitted'] is False
+    assert receipt['step1_started'] is False
+    assert receipt['step1_task_id'] is None
+    assert receipt['step1_reason']=='budget_insufficient'
+    assert client.app.state.engine.imports[-1]['start_step1'] is False
+    assert client.app.state.engine.imports[-1]['step1_block_reason']=='budget_insufficient'
+
+
+def test_conversation_activity_is_scoped_ordered_and_tail_bounded(api):
+    client,store,_=api
+    project,conversation=create_space(client)
+    client.headers['Idempotency-Key']=str(uuid.uuid4())
+    other=client.post(BASE+f'/projects/{project}/conversations',json={'title':'另一个会话'}).json()['id']
+    names=['chat.activity','chat.reply.started','chat.reply.delta','chat.reply.completed',
+           'chat.reply.failed','tool.called','chat.activity']
+    targets=[conversation,conversation,other,conversation,conversation,conversation,conversation]
+    for sequence,(name,target) in enumerate(zip(names,targets),1):
+        store.put(new_record('runtime_event',project,sequence=sequence,event_name=name,
+                             conversation_id=target,payload={'text':str(sequence)}))
+    endpoint=BASE+f'/projects/{project}/conversations/{conversation}/activity'
+    tail=client.get(endpoint+'?limit=2').json()
+    assert [event['sequence'] for event in tail['events']]==[5,7]
+    assert tail['last_sequence']==7
+    assert tail['next_sequence']==7
+    assert tail['truncated_before'] is True
+    older=client.get(endpoint+'?before=5&limit=2').json()
+    assert [event['sequence'] for event in older['events']]==[2,4]
+    assert older['truncated_before'] is True
+    first=client.get(endpoint+'?tail=false&after=0&limit=2').json()
+    assert [event['sequence'] for event in first['events']]==[1,2]
+    assert first['has_more'] is True
+    second=client.get(endpoint+'?after=2&limit=2').json()
+    assert [event['sequence'] for event in second['events']]==[4,5]
+    assert client.get(BASE+f'/projects/{project}/conversations/{uuid.uuid4()}/activity').status_code==404
 
 
 def test_account_config_schema_validation_is_read_only_and_reports_strict_errors(api):

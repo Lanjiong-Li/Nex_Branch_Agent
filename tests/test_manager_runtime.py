@@ -60,6 +60,33 @@ def message(value):
                       "text": json.dumps(value, ensure_ascii=False), "annotations": []}]}])
 
 
+def mock_transport(handler):
+    """Serve the same mock response through the coordinator's streamed route."""
+    def handle(request):
+        result=handler(request)
+        if not json.loads(request.content).get('stream') or result.status_code!=200:
+            return result
+        payload=result.json()
+        events=[]
+        for output_index,item in enumerate(payload['output']):
+            if item['type']!='message':continue
+            for content_index,part in enumerate(item['content']):
+                if part['type']!='output_text':continue
+                content=part['text'];middle=max(1,len(content)//2)
+                for chunk in (content[:middle],content[middle:]):
+                    if chunk:
+                        events.append({'type':'response.output_text.delta',
+                            'sequence_number':len(events)+1,'item_id':item['id'],
+                            'output_index':output_index,'content_index':content_index,
+                            'logprobs':[],'delta':chunk})
+        events.append({'type':'response.completed','sequence_number':len(events)+1,
+                       'response':payload})
+        body=''.join('data: '+json.dumps(item,ensure_ascii=False)+'\n\n' for item in events)
+        return httpx.Response(200,headers={'content-type':'text/event-stream'},
+                              content=(body+'data: [DONE]\n\n').encode())
+    return httpx.MockTransport(handle)
+
+
 @pytest.mark.asyncio
 async def test_coordinator_shows_fixed_event_source_without_inserting_excerpt_into_session(runtime):
     store, project, conversation = runtime
@@ -83,7 +110,7 @@ async def test_coordinator_shows_fixed_event_source_without_inserting_excerpt_in
             "questions": [], "evidence_refs": [], "notes": []}))
 
     client = AsyncOpenAI(api_key="local-mock", http_client=httpx.AsyncClient(
-        transport=httpx.MockTransport(handler)), max_retries=0)
+        transport=mock_transport(handler)), max_retries=0)
     engine = Engine(store, ModelService(store, client), ConfigService(store))
     engine.submit_message(project, conversation, "查看相遇事件的原文")
     await engine.tick(project, conversation)
@@ -203,7 +230,7 @@ async def test_child_question_stops_manager_before_next_stage_or_duplicate_confi
         pytest.fail("等待用户回答后不应再次调用模型")
 
     client = AsyncOpenAI(api_key="local-mock", http_client=httpx.AsyncClient(
-        transport=httpx.MockTransport(handler)), max_retries=0)
+        transport=mock_transport(handler)), max_retries=0)
     engine = Engine(store, ModelService(store, client), ConfigService(store))
     async def wait_for_user(task, _token):
         with store.transaction():
@@ -260,7 +287,7 @@ async def test_missing_upstream_does_not_dispatch_child_or_create_user_question(
         pytest.fail("上游材料缺失后不应继续调用模型")
 
     client = AsyncOpenAI(api_key="local-mock", http_client=httpx.AsyncClient(
-        transport=httpx.MockTransport(handler)), max_retries=0)
+        transport=mock_transport(handler)), max_retries=0)
     engine = Engine(store, ModelService(store, client), ConfigService(store))
     engine.import_source(project, conversation, "甲见乙。", "测试原作")
     engine.submit_message(project, conversation, "开始改编")
@@ -295,7 +322,7 @@ async def test_coordinator_ask_user_stops_then_resumes_from_answer(runtime):
         return httpx.Response(200, json=message(final))
 
     client = AsyncOpenAI(api_key="local-mock", http_client=httpx.AsyncClient(
-        transport=httpx.MockTransport(handler)), max_retries=0)
+        transport=mock_transport(handler)), max_retries=0)
     engine = Engine(store, ModelService(store, client), ConfigService(store))
     engine.import_source(project, conversation, "甲见乙。", "测试原作")
     engine.submit_message(project, conversation, "开始改编")
@@ -327,7 +354,7 @@ async def test_coordinator_does_not_duplicate_an_existing_pending_confirmation(r
             **({"confirmation_task_id": existing_task_id} if with_confirmation_id else {})}]}, 1))
 
     client = AsyncOpenAI(api_key="local-mock", http_client=httpx.AsyncClient(
-        transport=httpx.MockTransport(handler)), max_retries=0)
+        transport=mock_transport(handler)), max_retries=0)
     engine = Engine(store, ModelService(store, client), ConfigService(store))
     engine.import_source(project, conversation, "甲见乙。", "测试原作")
     existing_task_id = None
@@ -391,7 +418,7 @@ async def test_manager_dispatches_stage_with_separate_audited_run(runtime, struc
         return httpx.Response(200, json=message(final) if structured else plain_message("Step1 已完成。"))
 
     client = AsyncOpenAI(api_key="local-mock", http_client=httpx.AsyncClient(
-        transport=httpx.MockTransport(handler)), max_retries=0)
+        transport=mock_transport(handler)), max_retries=0)
     engine = Engine(store, ModelService(store, client), ConfigService(store))
     if not structured:
         draft = engine.config_service.draft(project, {"output": {"structured": {"coordinator": False}}})
@@ -477,7 +504,7 @@ async def test_manager_confirms_single_step2_knowledge_asset(runtime, via_messag
         return httpx.Response(200, json=message(final))
 
     client = AsyncOpenAI(api_key="local-mock", http_client=httpx.AsyncClient(
-        transport=httpx.MockTransport(handler)), max_retries=0)
+        transport=mock_transport(handler)), max_retries=0)
     engine = Engine(store, ModelService(store, client), ConfigService(store))
     engine.import_source(project, conversation, original, "测试原作")
     engine.submit_message(project, conversation, "开始改编")
@@ -541,7 +568,7 @@ async def test_step2_waits_for_knowledge_asset_confirmation_before_advancing(run
             "confirmation_task_id": step2["id"]}]}, number))
 
     client = AsyncOpenAI(api_key="local-mock", http_client=httpx.AsyncClient(
-        transport=httpx.MockTransport(handler)), max_retries=0)
+        transport=mock_transport(handler)), max_retries=0)
     engine = Engine(store, ModelService(store, client), ConfigService(store))
     engine.import_source(project, conversation, original, "测试原作")
     engine.submit_message(project, conversation, "开始改编")

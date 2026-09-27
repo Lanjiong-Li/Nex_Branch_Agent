@@ -260,7 +260,8 @@ async def test_summary_failing_actual_hard_input_budget_keeps_generation(runtime
 
 
 @pytest.mark.asyncio
-async def test_real_sdk_plain_text_pages_resume_without_structured_repairs(runtime):
+@pytest.mark.parametrize('uncertain_search',[False,True])
+async def test_real_sdk_plain_text_pages_resume_without_structured_repairs(runtime,uncertain_search):
     import httpx
     from openai import AsyncOpenAI
     from branch_agent.records import new_record
@@ -304,6 +305,21 @@ async def test_real_sdk_plain_text_pages_resume_without_structured_repairs(runti
     assert first.value.code=='test_pause' and len(requests)==2
     assert store.get(row['id'],pid)['generation']==1
     phase['value']=1
+    if uncertain_search:
+        import uuid
+        old_call=all_records(store,pid,'model_call')[0]
+        old_run=store.get(old_call['run_id'],pid)
+        store.put(new_record('tool_call',pid,task_id=old_run['task_id'],run_id=old_run['id'],
+            model_call_id=old_call['id'],operation_id=str(uuid.uuid4()),
+            provider_tool_call_id='uncertain-web-search',tool_name='web_search',
+            arguments={'storage':'inline_json','value':{'query':'test'}},state='running',attempt=1))
+        with pytest.raises(BudgetExceeded) as blocked:
+            await compact_session(service,session,'coordinator',cfg,'instructions',[],output,'继续',control)
+        assert blocked.value.code=='operation_uncertain'
+        assert len(requests)==2
+        assert store.get(row['id'],pid)['generation']==1
+        await client.close()
+        return
     await compact_session(service,session,'coordinator',cfg,'instructions',[],output,'继续',control)
     assert len(requests)==4  # Two validated pages were reused; only two were sent.
     assert store.get(row['id'],pid)['generation']==2

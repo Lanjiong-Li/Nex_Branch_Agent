@@ -17,7 +17,7 @@ createdb branch_agent_local   # 仅首次创建
 
 打开 <http://127.0.0.1:8767>。首次启动在 `.data/local-login.txt` 生成本地登录信息，文件权限为600；账号身份、签名密钥与项目历史会跨重启保留。该登录适配器供本地开发使用，正式平台认证按后端接口替换。
 
-服务端读取项目根目录 `.env`，环境变量优先于文件。新运行默认使用 `deepseek-flash`；如果在配置页为某个 Agent 选用 OpenAI 模型，才需要 `OPENAI_API_KEY`。主 Agent 使用 `web_search` 时需配置 Brave Search 方案的 API Key。不要覆盖现有 `.env`；按 `.env.example` 补齐：
+服务端读取项目根目录 `.env`，环境变量优先于文件。新运行默认使用 `deepseek-flash`；如果在配置页为某个 Agent 选用 OpenAI 模型，才需要 `OPENAI_API_KEY`。任一 Agent 使用 `web_search` 时需配置 Brave Search 方案的 API Key。不要覆盖现有 `.env`；按 `.env.example` 补齐：
 
 ```dotenv
 DEEPSEEK_API_KEY=你的有效DeepSeek API密钥
@@ -28,12 +28,12 @@ DATABASE_URL=postgresql:///branch_agent_local
 
 可选 `BRANCH_DATA_DIR` 指定持久目录，`BRANCH_PORT` 更换监听端口。密钥只存在于服务端，不进入页面配置或模型上下文。认证失败会明确暂停，不能靠重复重试修复密钥。
 
-`web_search` 使用 Brave Search 方案的 **LLM Context** 接口，返回带来源 URL 的简短搜索结果，供主 Agent 回答需要外部实时信息的问题。首版仅向对话协调 Agent 提供；Step1–11 专业 Agent 和内部摘要 Agent 不调用此工具。搜索结果是外部资料，不能覆盖固定原作、已保存产物或用户确认。工具会限制返回条数与文本长度，搜索调用及结果记录在运行数据中。
+`web_search` 使用 Brave Search 方案的 **LLM Context** 接口，返回带来源 URL 的简短搜索结果。服务端配置 `BRAVE_SEARCH_API_KEY` 后，主协调 Agent、Step1–11 专业 Agent 及内部辅助 Agent（包括上下文摘要 Agent）均可调用；未配置时不提供该工具。搜索结果是外部资料，不能覆盖固定原作、已保存产物或用户确认。工具会限制返回条数与文本长度，搜索调用及结果记录在运行数据中。
 
 ## 使用
 
-1. 创建项目及会话，粘贴原文或导入 UTF-8／UTF-16 LE TXT、Markdown、DOCX。解析后的原文保存为固定版本。
-2. 在对话中提出改编任务。程序按既定流程准备材料并调用专业 Agent；需要选择或确认时在对话中回答。
+1. 创建项目及会话，在聊天框粘贴原文，或导入 UTF-8／UTF-16 LE TXT、Markdown、DOCX。导入会保存固定原作版本并自动启动 Step1；预算预检不通过时会说明已保存但未启动。
+2. 在对话中提出改编任务。程序按既定流程准备材料并调用专业 Agent；聊天区会实时显示运行记录与协调 Agent 的回复草稿，正式回复保存后替换草稿。需要选择或确认时在对话中回答。
 3. 可以追问历史、修改已有产物或要求调整顺序。运行中提交消息时选择 Steer 或 Queue。
 4. 在“配置”中调整 Agent、阶段 instructions、输入材料、模型与 output_type；保存草稿后发布，后续 Run 使用新配置。
 5. 在“运行数据”中按项目查看每次 Agent Run 的实际输入、工具调用、模型输出、保存的产物和错误原因。

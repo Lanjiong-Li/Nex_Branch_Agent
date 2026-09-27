@@ -6,6 +6,7 @@ SessionItem generations remain readable; a summary cannot confirm business state
 """
 from __future__ import annotations
 from copy import deepcopy
+import inspect
 import json
 import time
 import uuid
@@ -117,6 +118,11 @@ def saved_summary_page(service,parent,original,rows,config,cfg,archives,seen,pre
             fixed=store.get(run['config_version_id'],pid)
             if digest(fixed['values'])!=digest(cfg):continue
             if not any(digest(store.get(i,pid)['values'])==digest(config) for i in fixed['resolved_from_ids']):continue
+            uncertain_searches=[call for call in all_records(store,pid,'tool_call',{'run_id':run['id']})
+                if call['tool_name']=='web_search' and call['state'] in ('pending','running','unknown')]
+            if uncertain_searches:
+                raise BudgetExceeded('operation_uncertain',
+                    '摘要页已有结果未核对的网页搜索调用，保留原工作历史并暂停以避免重复搜索')
             calls=all_records(store,pid,'model_call',{'run_id':run['id']})
             saved=store.projection_get(f'{pid}:run_result:{run["id"]}')
             for call in calls:
@@ -147,7 +153,8 @@ def saved_summary_page(service,parent,original,rows,config,cfg,archives,seen,pre
     return max(matches,key=lambda x:x['created_at']) if matches else None
 
 
-async def compact_session(service, persistent, stage, config, instructions, tool_defs, output, request, control=None):
+async def compact_session(service, persistent, stage, config, instructions, tool_defs, output, request,
+                          control=None, live_events=False):
     from .model_service import all_records, ref
     if stage=='aux.summary':return
     store=service.store;pid=persistent.task['project_id'];model=config['model']['name']
@@ -261,14 +268,17 @@ async def compact_session(service, persistent, stage, config, instructions, tool
                         event(store,pid,'session.summary_repair_requested',{'plan_hash':plan_hash,'repair_key':repair_key,
                             'run_id':run['id'],'round':repair_round,'validation_feedback':feedback},task=child['id'],run=run['id'])
                 page_seen=seen+[a['record_ref']['record_id'] for a in window]
-                message=json.dumps({'task':'请把下列真实历史整理成简洁的纯文本工作摘要。不得改变决策或产物状态。完整工具调用与结果只说明工具已执行，不代表用户请求已有最终结论；如尚未最终答复，摘要必须保留该请求、已完成的工具结论和继续所需信息。当前用户请求将在新Runner中重新提供。不要输出JSON、字段名或证据引用。',
+                message=json.dumps({'task':'请把下列真实历史整理成简洁的纯文本工作摘要。不得改变决策或产物状态。完整工具调用与结果只说明工具已执行，不代表用户请求已有最终结论；如尚未最终答复，摘要必须保留该请求、已完成的工具结论和继续所需信息。外部网页搜索结果不得作为会话历史事实，摘要只能依据本次归档和上一页摘要。当前用户请求将在新Runner中重新提供。不要输出JSON、字段名或证据引用。',
                     'target_tokens':cfg['summary']['target_tokens'],'required_covered_message_ids':page_seen,
                     'prior_page_summary':summary,'original_archives':window,
                     'validation_feedback':feedback},ensure_ascii=False)
                 material={'builtin':'runtime.archive_window','content':{'history_refs':[a['record_ref'] for a in window],
                     'decision_refs':[],'artifact_refs':[],'tool_call_refs':[]},'required':True}
                 try:
-                    page_summary=await service.run('aux.summary',child,run,session,cfg,[material],message,control=control)
+                    live_kwargs = ({'live_events': live_events}
+                                   if 'live_events' in inspect.signature(service.run).parameters else {})
+                    page_summary=await service.run('aux.summary',child,run,session,cfg,[material],message,
+                                                   control=control,**live_kwargs)
                 except BudgetExceeded as error:
                     # The preliminary window estimate cannot know the exact size
                     # of current controls, provenance or the escaped SDK envelope.
