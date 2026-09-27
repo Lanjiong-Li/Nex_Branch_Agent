@@ -592,10 +592,10 @@ def session_key(stage, chapter_id=None, sharing=None):
 
 
 def locate_source_anchors(output, source, source_ref, *, full_coverage=True):
-    """Resolve exact quotes to UTF-16; ambiguity is a blocking input error."""
+    """Resolve exact quotes to UTF-16 without guessing between repeated matches."""
     value = deepcopy(output)
     source_bytes = source.encode("utf-16-le")
-    def walk(node):
+    def walk(node, path=""):
         if isinstance(node, dict):
             if {"exact_quote", "start_utf16", "end_utf16"} <= node.keys():
                 if node["source_ref"]["record_id"] != source_ref["record_id"] or node["source_ref"]["version"] != source_ref["version"]:
@@ -621,14 +621,23 @@ def locate_source_anchors(output, source, source_ref, *, full_coverage=True):
                             hits.append(position)
                         start = position + 1
                     if len(hits) != 1:
-                        raise WorkflowBlocked("source_anchor_ambiguous")
+                        count = len(hits)
+                        message = (f"原文引文命中 {count} 次；请提供精确 UTF-16 起止位置或足以消歧的 prefix/suffix"
+                                   if count else "原文引文在固定原文中未命中；请核对引文与固定原文，或提供可验证的精确 UTF-16 起止位置")
+                        raise WorkflowBlocked("source_anchor_ambiguous", {
+                            "code": "source_anchor_ambiguous", "validation_errors": [{
+                            "path": path or "/", "validator": "source_anchor_unique_match",
+                            "message": message, "category": "content", "match_count": count,
+                            "candidate_start_utf16": [
+                                len(source[:position].encode("utf-16-le")) // 2 for position in hits[:8]],
+                        }]})
                     node["start_utf16"] = len(source[:hits[0]].encode("utf-16-le")) // 2
                     node["end_utf16"] = node["start_utf16"] + len(quote.encode("utf-16-le")) // 2
-            for item in node.values():
-                walk(item)
+            for key, item in node.items():
+                walk(item, path + "/" + str(key).replace("~", "~0").replace("/", "~1"))
         elif isinstance(node, list):
-            for item in node:
-                walk(item)
+            for index, item in enumerate(node):
+                walk(item, path + "/" + str(index))
     walk(value)
     payload = value["payload"]
     if full_coverage:

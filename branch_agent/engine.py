@@ -1393,7 +1393,7 @@ class Engine:
             self._fail_execution(task, run, "user_stop")
         except Exception as error:
             reason = getattr(error, "reason", None) or getattr(error, "code", None) or ("active_time_limit" if isinstance(error, asyncio.TimeoutError) else "configuration_error")
-            repairable = isinstance(error, GraphError) or type(error).__name__ == "ValidationError" or reason in ("ModelBehaviorError", "source_anchor_invalid", "source_reference_mismatch", "source_coverage_incomplete", "incomplete_ready_result", "output_schema_invalid", "evidence_pointer_not_concrete", "evidence_pointer_missing", "evidence_item_ambiguous_or_missing", "evidence_reference_invalid", "review_scope_format_invalid", "ask_user_tool_required")
+            repairable = isinstance(error, GraphError) or type(error).__name__ == "ValidationError" or reason in ("ModelBehaviorError", "source_anchor_invalid", "source_anchor_ambiguous", "source_reference_mismatch", "source_coverage_incomplete", "incomplete_ready_result", "output_schema_invalid", "evidence_pointer_not_concrete", "evidence_pointer_missing", "evidence_item_ambiguous_or_missing", "evidence_reference_invalid", "review_scope_format_invalid", "ask_user_tool_required")
             if isinstance(error, GraphValidationError) and run:
                 self._message(project, cid, str(error), task=task["id"], run=run["id"])
             if reason == "input_budget_exceeded" and stage in range(2, 9) and run and not self._task_data(task).get("batch_manifest_ref"):
@@ -1608,7 +1608,7 @@ class Engine:
         issue = (getattr(error, 'details', None) or {}).get('output_failure', {})
         if issue.get('category') in ('content', 'format'):
             return 'content'  # Failed format repair returns to the producer.
-        if reason in ('source_anchor_invalid', 'source_reference_mismatch',
+        if reason in ('source_anchor_invalid', 'source_anchor_ambiguous', 'source_reference_mismatch',
                       'source_coverage_incomplete', 'source_window_coverage_invalid',
                       'source_window_boundary_invalid', 'source_window_event_outside_commit',
                       'source_window_wrong_view', 'source_window_incomplete',

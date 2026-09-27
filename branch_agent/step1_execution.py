@@ -346,7 +346,7 @@ async def run_view(engine, child, token, source_ref, source_text, windowed):
         except Exception as error:
             reason = getattr(error, "reason", None) or getattr(error, "code", None) or "configuration_error"
             repairable = (type(error).__name__ == "ValidationError" or reason in
-                ("ModelBehaviorError", "source_anchor_invalid", "source_reference_mismatch",
+                ("ModelBehaviorError", "source_anchor_invalid", "source_anchor_ambiguous", "source_reference_mismatch",
                  "source_coverage_incomplete", "source_window_coverage_invalid",
                  "source_window_boundary_invalid", "source_window_event_outside_commit",
                  "source_window_wrong_view", "source_window_incomplete", "source_view_incomplete",
