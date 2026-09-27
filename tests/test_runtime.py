@@ -1335,20 +1335,170 @@ def test_repair_exhaustion_rejects_last_output_before_explicit_continue(runtime)
         message = engine._message(pid, cid, "分析原作", role="user")
         task = engine._new_task(pid, cid, message, "generate", stage=2)
     invalid = "这不是结构化知识资产"
-    model.responses = [invalid, invalid, invalid, step2_response()]
-    for _ in range(3): asyncio.run(engine.tick(pid, cid))
+    model.responses = [invalid] * 6 + [step2_response()]
+    for _ in range(6): asyncio.run(engine.tick(pid, cid))
     current = engine.store.get(task["id"], pid)
     assert current["state"] == "paused" and current["pause_reason"] == "repair_exhausted"
     data = engine._task_data(current)
     assert data["current_run_id"] in data.get("rejected_output_run_ids", [])
-    assert len(data["rejected_output_run_ids"]) == 3
+    assert len(data["rejected_output_run_ids"]) == 6
+    assert data["content_repair_rounds_used"] == 5
     engine.control_task(pid, task["id"], "continue")
     asyncio.run(engine.tick(pid, cid))
-    assert model.calls == ["step2"] * 4
+    assert model.calls == ["step2"] * 7
     current = engine.store.get(task["id"], pid)
-    assert current["state"] == "waiting_user" and current["repair_rounds_used"] == 2
+    assert current["state"] == "waiting_user" and current["repair_rounds_used"] == 5
     assert engine.workflow.resolve(pid, "source_global_analysis", effective=False)
     assert engine.workflow.resolve(pid, "source_knowledge_asset", effective=False)
+
+
+@pytest.mark.parametrize('description,operation', [
+    ('', {'op': 'remove', 'path': '/description'}),
+    ('唯一的故事规则：😀不能回头。', {'op': 'move', 'from': '/description', 'path': '/notes/-'}),
+])
+def test_format_repair_runs_in_independent_session_and_applies_only_safe_patch(runtime, description, operation):
+    from branch_agent.model_service import ModelRunError, append_history
+    from branch_agent.output_repair import assess, candidate_hash
+    from branch_agent.schemas import SchemaCatalog
+
+    engine, _, pid, cid = runtime
+    engine.import_source(pid, cid, "甲见乙。", "故事")
+    with engine.store.transaction():
+        seed_knowledge_asset(engine, pid)
+        message = engine._message(pid, cid, "分析原作", role="user")
+        task = engine._new_task(pid, cid, message, "generate", stage=2)
+    valid = step2_response()
+    invalid = {**valid, 'description': description}
+    raw = __import__('json').dumps(invalid, ensure_ascii=False)
+
+    class FormatModel(FakeModel):
+        async def run(self, stage, task, run, session, config, materials, message, control=None, **kwargs):
+            self.calls.append(stage)
+            if control:
+                await control()
+            if stage == 'aux.format_repair':
+                assert session['id'] != self.failed_session
+                assert 'validation_errors' in message and 'candidate_sha256' in message
+                return __import__('json').dumps({'candidate_sha256': candidate_hash(invalid),
+                    'patch': [operation]})
+            self.failed_session = session['id']
+            archived = append_history(self.store, pid, cid, {
+                'terminal_status': 'completed',
+                'output': [{'type': 'message', 'content': [
+                    {'type': 'output_text', 'text': raw}]}]},
+                task_id=task['id'], run_id=run['id'], kind='model_output')
+            finding = assess(raw, 'source_knowledge_asset', SchemaCatalog(), config.get('schemas'))
+            raise ModelRunError('ModelBehaviorError', '模型输出不符合结构', details={
+                'output_failure': {'category': finding['category'], 'origin': finding['origin'],
+                    'problems': finding['problems'], 'history_record_id': archived['id'],
+                    'schema_id': 'source_knowledge_asset',
+                    'candidate_sha256': candidate_hash(invalid)}})
+
+    model = FormatModel(); model.store = engine.store
+    engine.model_service = model
+    asyncio.run(engine.tick(pid, cid))
+    current = engine.store.get(task['id'], pid)
+    assert current['state'] == 'waiting_user', (current['pause_reason'], model.calls,
+        [(r['agent_key'], r['state'], r.get('error')) for r in all_records(engine.store, pid, 'run')],
+        [(e['event_name'], e['payload'].get('reason')) for e in all_records(engine.store, pid, 'runtime_event')
+         if e['event_name'].startswith('format_repair')])
+    assert model.calls == ['step2', 'aux.format_repair']
+    assert current['repair_rounds_used'] == 0
+    assert engine._task_data(current)['format_repair_rounds_used'] == 1
+    result_version = engine.workflow.resolve(pid, 'source_knowledge_asset', effective=False)
+    from branch_agent.workflow import body
+    saved = body(engine.store, result_version)
+    assert saved['notes'] == valid['notes'] + ([description] if description else [])
+    repair_runs = [run for run in all_records(engine.store, pid, 'run')
+                   if run['agent_key'] == 'format_repairer']
+    assert len(repair_runs) == 1 and repair_runs[0]['session_id'] != model.failed_session
+
+
+def test_step1_format_child_allows_live_sibling_view_but_blocks_unknown_or_stale_call(runtime):
+    import hashlib
+    from branch_agent.records import canonical_bytes
+    engine, _, pid, cid = runtime
+    with engine.store.transaction():
+        message = engine._message(pid, cid, '分析双视图', role='user')
+        root = engine._new_task(pid, cid, message, 'generate', stage=1)
+        global_view = engine._new_task(pid, cid, message, 'generate', stage=1,
+                                       parent=root, step1_view='global')
+        character_view = engine._new_task(pid, cid, message, 'generate', stage=1,
+                                          parent=root, step1_view='character')
+        global_view, global_run, _, _ = engine._start_run(
+            global_view, 1, [], session_key_override='step1-test:global')
+        character_view, character_run, character_session, character_config = engine._start_run(
+            character_view, 1, [], session_key_override='step1-test:character')
+        format_child = engine._new_task(pid, cid, message, 'summarize', stage=1,
+                                        parent=global_view, step1_view='global')
+        format_data = engine._task_data(format_child)
+        format_data.update(stage='aux.format_repair', parent_owned=True)
+        engine._save_task_data(format_child, format_data)
+        snapshot_content = {'instructions': {'storage': 'inline_text', 'text': 'test'},
+            'input_items': {'storage': 'inline_json', 'value': []},
+            'tool_definitions': {'storage': 'inline_json', 'value': []}}
+        snapshot = engine.store.put(new_record('context_snapshot', pid,
+            task_id=character_view['id'], run_id=character_run['id'],
+            session_id=character_session['id'], config_version_id=character_run['config_version_id'],
+            model=character_config['model']['name'],
+            reasoning_effort=character_config['model']['reasoning_effort'],
+            output_schema=None, **snapshot_content, input_token_estimate=1,
+            input_token_budget=10000,
+            content_sha256=hashlib.sha256(canonical_bytes(snapshot_content)).hexdigest()))
+        call = engine.store.put(new_record('model_call', pid, task_id=character_view['id'],
+            run_id=character_run['id'], operation_id=str(uuid4()),
+            context_snapshot_id=snapshot['id'], state='running', started_at=engine.store.now()))
+
+    engine._budget_check(format_child)
+    with engine.store.transaction():
+        update(engine.store, call, state='unknown')
+    with pytest.raises(WorkflowBlocked, match='operation_uncertain'):
+        engine._budget_check(format_child)
+    with engine.store.transaction():
+        call = update(engine.store, engine.store.get(call['id'], pid), state='running')
+        update(engine.store, engine.store.get(character_run['id'], pid),
+               lease_expires_at=_after(engine.store.now(), -60))
+    with pytest.raises(WorkflowBlocked, match='operation_uncertain'):
+        engine._budget_check(format_child)
+
+
+def test_content_and_legacy_repair_limits_are_counted_separately(runtime):
+    engine, _, pid, cid = runtime
+    engine.import_source(pid, cid, '甲见乙。', '故事')
+    with engine.store.transaction():
+        seed_knowledge_asset(engine, pid)
+        message = engine._message(pid, cid, '分析原作', role='user')
+        task = engine._new_task(pid, cid, message, 'generate', stage=2)
+
+    def start():
+        with engine.store.transaction():
+            current = engine.store.get(task['id'], pid)
+            data = engine._task_data(current)
+            return engine._start_run(current, 2, engine.workflow.materials(pid, 2),
+                session_key_override=data.get('repair_session_key'),
+                fresh_allowance=bool(data.get('repair_session_key')))[1]
+
+    first = start()
+    engine._repair_execution(task, first, 'missing /payload/premise', category='content',
+        diagnostics={'validation_errors': [{'path': '/payload/premise',
+            'validator': 'required', 'message': 'missing premise'}]})
+    data = engine._task_data(task)
+    assert data['content_repair_rounds_used'] == 1
+    assert data.get('legacy_repair_rounds_used', 0) == 0
+    second = start()
+    assert second['session_id'] != first['session_id']
+    engine._repair_execution(task, second, 'legacy protocol feedback')
+    data = engine._task_data(task)
+    assert data['content_repair_rounds_used'] == 1
+    assert data['legacy_repair_rounds_used'] == 1
+    third = start()
+    engine._repair_execution(task, third, 'legacy protocol feedback')
+    assert engine._task_data(task)['legacy_repair_rounds_used'] == 2
+    fourth = start()
+    engine._repair_execution(task, fourth, 'legacy protocol feedback')
+    current = engine.store.get(task['id'], pid)
+    assert current['state'] == 'paused' and current['pause_reason'] == 'repair_exhausted'
+    assert engine._task_data(task)['content_repair_rounds_used'] == 1
 
 
 @pytest.mark.parametrize("missing_input", [False, True])
@@ -1463,7 +1613,7 @@ def test_coordinator_directory_preserves_confirmation_scope_without_historical_s
     assert set(state["queue_gate"]) == {"row_version", "holds", "last_applied_event_seq"}
 
 
-@pytest.mark.parametrize("recheck_saved,ask_user,invalid_ref", [(False, False, None), (True, False, None), ("restart", False, None), ("legacy_gap", False, None), (False, True, None), (False, "legacy", None), (False, "ancestor", None), (False, False, "once"), (False, False, "always"), (False, False, "continue_exhausted"), (False, False, "crash_rejected")])
+@pytest.mark.parametrize("recheck_saved,ask_user,invalid_ref", [(False, False, None), (True, False, None), ("restart", False, None), ("legacy_gap", False, None), (False, True, None), (False, "legacy", None), (False, "ancestor", None), (False, False, "once"), (False, False, "schema_once"), (False, False, "modelbehavior_once"), (False, False, "content_exhausted"), (False, False, "always"), (False, False, "continue_exhausted"), (False, False, "crash_rejected")])
 def test_long_stage_uses_real_batch_children_and_coverage_before_aggregation(runtime, monkeypatch, recheck_saved, ask_user, invalid_ref):
     from branch_agent.context import BudgetExceeded, prepare_runtime_materials, build_materials
     from branch_agent.context_batching import batch_coverage
@@ -1511,7 +1661,7 @@ def test_long_stage_uses_real_batch_children_and_coverage_before_aggregation(run
     monkeypatch.setattr(engine.workflow.catalog, "validate", validate_result)
 
     class BatchModel:
-        def __init__(self): self.calls = []; self.overflowed = False; self.asked = None; self.auxiliary = []
+        def __init__(self): self.calls = []; self.overflowed = False; self.asked = None; self.auxiliary = []; self.aux_sessions = []
         async def run(self, stage, task, run, session, config, materials, message, control=None):
             self.calls.append(stage)
             prepared = prepare_runtime_materials(stage, task, run, session, config, materials, engine.store)
@@ -1531,6 +1681,7 @@ def test_long_stage_uses_real_batch_children_and_coverage_before_aggregation(run
             if stage == "aux.subtask":
                 ranges = next(m["content"] for m in materials if m.get("builtin") == "runtime.batch_state")
                 self.auxiliary.append(task["id"])
+                self.aux_sessions.append(session['id'])
                 result = {"result_kind": "ready", "payload": {"task": "局部分析", "findings": [], "recommendations": ["保留冲突"],
                         "limitations": [], "artifact_refs": [ranges["manifest_ref"]]}, "questions": [], "evidence_refs": [], "notes": []}
                 if ask_user and self.asked is None and len(self.auxiliary) == 2:
@@ -1544,11 +1695,34 @@ def test_long_stage_uses_real_batch_children_and_coverage_before_aggregation(run
                     assert session["id"] == self.asked["session_id"]
                     assert run["config_version_id"] == self.asked["config_version_id"]
                     assert ranges == self.asked["ranges"]
-                if invalid_ref and (len(self.auxiliary) == 1 or invalid_ref == "always" or (invalid_ref == "continue_exhausted" and len(self.auxiliary) <= 3)):
+                if invalid_ref in ('schema_once', 'modelbehavior_once', 'content_exhausted') and (
+                        len(self.auxiliary) == 1 or invalid_ref == 'content_exhausted'):
+                    result['payload'].pop('recommendations')
+                    if invalid_ref == 'content_exhausted' and len(self.auxiliary) > 1:
+                        assert 'output_schema_invalid' in message
+                        assert session['id'] != self.aux_sessions[-2]
+                        assert self.auxiliary[0] == task['id']
+                    if invalid_ref == 'modelbehavior_once':
+                        from branch_agent.model_service import ModelRunError, append_history
+                        raw = __import__('json').dumps(result, ensure_ascii=False)
+                        archive = append_history(engine.store, pid, cid, {
+                            'terminal_status': 'completed', 'output': [{'type': 'message',
+                                'content': [{'type': 'output_text', 'text': raw}]}]},
+                            kind='model_output', task_id=task['id'], run_id=run['id'])
+                        raise ModelRunError('ModelBehaviorError', '结构化内容缺失', details={
+                            'output_failure': {'category': 'content', 'schema_id': 'subtask_result',
+                                'history_record_id': archive['id'], 'problems': [{
+                                    'path': '/payload/recommendations', 'validator': 'required',
+                                    'message': '缺少 recommendations', 'category': 'content'}]}})
+                elif invalid_ref in ('once', 'always', 'continue_exhausted', 'crash_rejected') and (len(self.auxiliary) == 1 or invalid_ref == "always" or (invalid_ref == "continue_exhausted" and len(self.auxiliary) <= 3)):
                     result["payload"]["artifact_refs"] = [{**ranges["manifest_ref"], "record_id": str(uuid4())}]
                 elif invalid_ref and len(self.auxiliary) == 2:
-                    assert "evidence_reference_invalid" in message
+                    assert ("output_schema_invalid" if invalid_ref == 'schema_once' else
+                            "缺少 recommendations" if invalid_ref == 'modelbehavior_once' else
+                            "evidence_reference_invalid") in message
                     assert self.auxiliary[0] == task["id"]
+                    if invalid_ref in ('schema_once', 'modelbehavior_once'):
+                        assert session['id'] != self.aux_sessions[0]
                 # Match the real SDK's durable final-response boundary before
                 # Engine validates and commits the result in its own transaction.
                 with engine.store.transaction():
@@ -1625,12 +1799,16 @@ def test_long_stage_uses_real_batch_children_and_coverage_before_aggregation(run
                 assert len(model.calls) == before
                 resumed = True
                 current = engine.store.get(task["id"], pid)
-            if invalid_ref in ("always", "continue_exhausted") and current["state"] == "paused":
+            if invalid_ref in ("always", "continue_exhausted", "content_exhausted") and current["state"] == "paused":
                 child = engine.store.get(model.auxiliary[0], pid)
                 assert child["state"] == "paused" and child["pause_reason"] == "repair_exhausted"
-                assert child["repair_rounds_used"] == 2
-                assert len(engine._task_data(child)["rejected_output_run_ids"]) == 3
-                assert len(model.auxiliary) == 3 and len(set(model.auxiliary)) == 1
+                limit = 5 if invalid_ref == 'content_exhausted' else 2
+                assert child["repair_rounds_used"] == limit
+                assert len(engine._task_data(child)["rejected_output_run_ids"]) == limit + 1
+                assert len(model.auxiliary) == limit + 1 and len(set(model.auxiliary)) == 1
+                if invalid_ref == 'content_exhausted':
+                    assert engine._task_data(child)['content_repair_rounds_used'] == 5
+                    assert len(set(model.aux_sessions)) == 6
                 ledger = batch_coverage(engine.store, pid, engine._task_data(current)["batch_manifest_ref"])
                 assert not ledger["complete"] and not ledger["result_refs"]
                 if invalid_ref == "continue_exhausted":
@@ -1666,7 +1844,7 @@ def test_long_stage_uses_real_batch_children_and_coverage_before_aggregation(run
             if current["state"] == "waiting_user": return
         pytest.fail("batch parent did not reach a complete presented artifact")
     asyncio.run(drive())
-    if invalid_ref == "always": return
+    if invalid_ref in ("always", "content_exhausted"): return
     data = engine._task_data(task)
     ledger = batch_coverage(engine.store, pid, data["batch_manifest_ref"])
     assert ledger["complete"]
@@ -1677,6 +1855,9 @@ def test_long_stage_uses_real_batch_children_and_coverage_before_aggregation(run
     if invalid_ref:
         assert model.auxiliary.count(model.auxiliary[0]) == rejected_calls + 1
         assert all(model.auxiliary.count(i) == 1 for i in set(model.auxiliary) - {model.auxiliary[0]})
+    if invalid_ref in ('schema_once', 'modelbehavior_once'):
+        repaired = engine.store.get(model.auxiliary[0], pid)
+        assert engine._task_data(repaired)['content_repair_rounds_used'] == 1
     if ask_user:
         assert model.auxiliary.count(model.asked["task_id"]) == 2
         assert all(model.auxiliary.count(i) == 1 for i in set(model.auxiliary) - {model.asked["task_id"]})

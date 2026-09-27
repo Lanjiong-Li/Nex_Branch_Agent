@@ -12,6 +12,36 @@ from jsonschema import Draft202012Validator
 
 ROOT = Path(__file__).resolve().parents[1]
 
+
+class OutputValidationError(ValueError):
+    """Machine-readable schema/domain findings kept out of public error text."""
+
+    def __init__(self, problems):
+        self.problems = problems
+        super().__init__('; '.join(f"{item['path']}: {item['message']}" for item in problems[:12]))
+
+
+def _pointer(parts):
+    return '/' + '/'.join(str(part).replace('~', '~0').replace('/', '~1') for part in parts)
+
+
+def validation_problems(schema, payload):
+    findings = []
+    for error in sorted(Draft202012Validator(schema).iter_errors(payload), key=lambda e: str(list(e.path))):
+        path = _pointer(error.path)
+        finding = {'path': path, 'validator': error.validator,
+                   'message': error.message[:500],
+                   'message_truncated': len(error.message) > 500,
+                   'category': 'content'}
+        if error.validator == 'additionalProperties' and isinstance(error.instance, dict):
+            extras = sorted(set(error.instance) - set(error.schema.get('properties', {})))
+            finding['unexpected_properties'] = extras
+            finding['category'] = 'format' if extras else 'content'
+        if error.validator == 'required' and isinstance(error.instance, dict):
+            finding['missing_properties'] = sorted(set(error.validator_value) - set(error.instance))
+        findings.append(finding)
+    return findings
+
 @lru_cache(maxsize=256)
 def _check_schema_text(encoded):
     # Cache only identical immutable schema text; edits get a different key and
@@ -84,17 +114,20 @@ class SchemaCatalog:
 
     def validate(self, schema_id, payload, schemas=None):
         schema = (schemas or self.schemas)[schema_id]
-        errors = sorted(Draft202012Validator(schema).iter_errors(payload), key=lambda e: str(list(e.path)))
-        if errors:
-            raise ValueError('; '.join('/' + '/'.join(map(str, e.path)) + ': ' + e.message for e in errors[:12]))
+        problems = validation_problems(schema, payload)
+        if problems:
+            raise OutputValidationError(problems)
         if schema_id != 'nexo_graph':
             if payload['result_kind'] == 'ready' and (payload['payload'] is None or payload['questions']):
-                raise ValueError('ready 必须包含完整 payload 且 questions 为空')
+                raise OutputValidationError([{'path': '/payload', 'validator': 'stage_ready',
+                    'message': 'ready 必须包含完整 payload 且 questions 为空', 'category': 'content'}])
             if payload['result_kind'] == 'needs_input' and not payload['questions']:
-                raise ValueError('needs_input 必须包含明确问题')
+                raise OutputValidationError([{'path': '/questions', 'validator': 'stage_needs_input',
+                    'message': 'needs_input 必须包含明确问题', 'category': 'content'}])
             if schema_id == 'source_global_step1_result' \
                     and payload['result_kind'] == 'ready' and not payload['analysis'].strip():
-                raise ValueError('Step1 全局事件视图与分析必须同时完整返回')
+                raise OutputValidationError([{'path': '/analysis', 'validator': 'stage_analysis',
+                    'message': 'Step1 全局事件视图与分析必须同时完整返回', 'category': 'content'}])
         return payload
 
     def output_type(self, schema_id, schemas=None, *, strict=True):

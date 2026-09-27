@@ -19,6 +19,8 @@ from .graph import (assemble_project, merge_chapter, quality_checks, GraphError,
                     GraphValidationError, validate_output, project_profile)
 from .graph_contract import load_graph_contract
 from .presentation import stage_result_text
+from .output_repair import assess as assess_output, apply_format_repair, candidate_hash
+from .schemas import OutputValidationError
 
 LOG = logging.getLogger(__name__)
 CLOSED_RUNS = {"succeeded", "waiting_user", "paused", "failed", "stopped", "interrupted"}
@@ -941,11 +943,19 @@ class Engine:
         members_by_id = {member["id"]: member for member in members}
         calls = [c for c in all_records(self.store, task["project_id"], "model_call") if c["task_id"] in members_by_id]
         cost = Decimal("0")
-        current_view = self._task_data(task).get("step1_view")
+        task_data = self._task_data(task)
+        current_view = task_data.get("step1_view")
+        view_owner = task
+        if (task_data.get('parent_owned') and task_data.get('stage') == 'aux.format_repair'
+                and current_view in ('global', 'character')):
+            parent = members_by_id.get(task['parent_task_id'])
+            if parent and self._task_data(parent).get('step1_view') == current_view:
+                view_owner = parent
+        peer_parent_id = view_owner['parent_task_id']
 
         def live_other_view(view_task, run_id):
             if (current_view not in ("global", "character") or not view_task or not run_id
-                    or view_task["parent_task_id"] != task["parent_task_id"]
+                    or view_task["parent_task_id"] != peer_parent_id
                     or view_task["state"] != "running" or view_task["current_run_id"] != run_id):
                 return False
             other_view = self._task_data(view_task).get("step1_view")
@@ -972,14 +982,18 @@ class Engine:
                     if (not parallel_step1 and call_task["intent"] == "summarize"
                             and call_task["state"] == "running"
                             and call_task["current_run_id"] == call["run_id"]
-                            and call_data.get("stage") == "aux.summary"
+                            and call_data.get("stage") in ("aux.summary", "aux.format_repair")
                             and call_data.get("parent_owned") is True):
                         parent = members_by_id.get(call_task["parent_task_id"])
                         summary_run = self.store.get(call["run_id"], project_id=task["project_id"])
                         parallel_step1 = bool(
                             parent and live_other_view(parent, parent["current_run_id"])
                             and summary_run and summary_run["task_id"] == call_task["id"]
-                            and summary_run["state"] == "running")
+                            and summary_run["state"] == "running"
+                            and (call_data.get('stage') == 'aux.summary' or
+                                 (summary_run['lease_owner'] == self.owner
+                                  and summary_run['lease_expires_at']
+                                  and summary_run['lease_expires_at'] > self.store.now())))
                 if not parallel_step1:
                     raise WorkflowBlocked("operation_uncertain")
                 continue
@@ -1130,7 +1144,13 @@ class Engine:
             if forced in done:
                 raise WorkflowBlocked("user_stop")
             if model in done:
-                return model.result()
+                try:
+                    return model.result()
+                except Exception as error:
+                    issue = (getattr(error, 'details', None) or {}).get('output_failure')
+                    if stage != 'aux.format_repair' and issue and issue.get('category') == 'format':
+                        return await self._format_repair(task, run, config, issue, token, error)
+                    raise
             raise WorkflowBlocked("active_time_limit")
         finally:
             self._calls.pop(run["id"], None)
@@ -1147,6 +1167,115 @@ class Engine:
                 data["active_ms"] = data.get("active_ms", 0) + max(0, elapsed_ms - auxiliary_ms)
                 self._save_task_data(task, data)
                 self._refresh_usage(task)
+
+    async def _format_repair(self, task, parent_run, config, issue, token, original_error):
+        """Run a format-only Agent in its own Task/Session under the parent budget."""
+        from .context import unwrap
+        from .model_service import ModelRunError
+        project = task['project_id']
+        limit = _cfg(config, 'repair.format_max_rounds', 1)
+        already_used = self._task_data(task).get('format_repair_rounds_used', 0)
+        if not issue.get('history_record_id') or not issue.get('schema_id'):
+            issue['category'] = 'content'
+            raise original_error
+        archive = self.store.get(issue['history_record_id'], project_id=project)
+        from .output_repair import response_text
+        raw = (response_text(unwrap(archive['content'], self.store, project))
+               if archive and archive['record_type'] == 'history_record'
+               and archive.get('run_id') == parent_run['id'] else None)
+        if raw is None or already_used >= limit:
+            issue['category'] = 'content'
+            raise original_error
+        schema_id = issue['schema_id']
+        finding = assess_output(raw, schema_id, self.workflow.catalog, config.get('schemas'))
+        if finding['category'] != 'format':
+            issue.update(category=finding['category'], problems=finding['problems'])
+            raise original_error
+        if len(finding['problems']) > 20:
+            issue['category'] = 'content'
+            issue['format_repair_error'] = '校验问题超过单次定向格式修复范围'
+            raise original_error
+        schema = (config.get('schemas') or self.workflow.catalog.schemas)[schema_id]
+        request = json.dumps({'task': 'format_only', 'source_run_id': parent_run['id'],
+            'source_archive_id': archive['id'], 'candidate_sha256': issue.get('candidate_sha256'),
+            'raw_output': raw, 'schema_id': schema_id, 'schema': schema,
+            'validation_errors': finding['problems'],
+            'response_protocol': ('hash_bound_json_pointer_patch' if finding['candidate'] is not None
+                                  else 'complete_json_syntax_fix')}, ensure_ascii=False)
+        failure = None
+        for round_number in range(already_used, limit):
+            child = child_run = None
+            try:
+                with self.store.transaction():
+                    self.store.advisory_lock(f'{project}:conversation:{task["conversation_id"]}')
+                    message = self.store.get(task['requested_by_message_id'], project_id=project)
+                    child = self._new_task(project, task['conversation_id'], message, 'summarize',
+                                           parent=task, request='修复固定模型候选的格式')
+                    data = self._task_data(child)
+                    data['stage'] = 'aux.format_repair'
+                    data['parent_owned'] = True
+                    if self._task_data(task).get('step1_view'):
+                        data['step1_view'] = self._task_data(task)['step1_view']
+                    data['config_version_id'] = self._auxiliary_config(project, parent_run['config_version_id'],
+                                                                        'aux.format_repair')['id']
+                    self._save_task_data(child, data)
+                    parent_data = self._task_data(task)
+                    parent_data['format_repair_rounds_used'] = round_number + 1
+                    self._save_task_data(task, parent_data)
+                    child, child_run, child_session, child_config = self._start_run(
+                        child, 'aux.format_repair', [], fresh_allowance=True,
+                        session_key_override=f'format:{parent_run["id"]}:{round_number}:{child["id"]}')
+                reply = await self._invoke('aux.format_repair', child, child_run, child_session,
+                                           child_config, [], request, token)
+                fixed = apply_format_repair(raw, finding, reply)
+                fixed = self.workflow.catalog.validate(schema_id, fixed, config.get('schemas'))
+                with self.store.transaction():
+                    self._save_projection(project, 'run_result', child_run['id'], {'output': reply})
+                    self._close_run(child, child_run, 'succeeded')
+                    self._transition(self.store.get(child['id'], project_id=project), 'succeeded')
+                    self._event(project, 'format_repair.applied',
+                        {'parent_run_id': parent_run['id'], 'repair_run_id': child_run['id'],
+                         'source_archive_id': archive['id'], 'candidate_sha256': candidate_hash(fixed),
+                         'round': round_number + 1}, conversation=task['conversation_id'],
+                        task=task['id'], run=parent_run['id'])
+                return fixed
+            except (asyncio.CancelledError, WorkflowBlocked) as error:
+                if child and child_run:
+                    reason = getattr(error, 'reason', None) or 'user_stop'
+                    state = 'paused' if reason == 'operation_uncertain' else 'stopped'
+                    with self.store.transaction():
+                        self._close_run(child, child_run, state,
+                            {'code': reason, 'message': str(error), 'retryable': False, 'details': {}})
+                        update(self.store, self.store.get(child['id'], project_id=project),
+                               state=state, pause_reason=reason, current_run_id=None)
+                raise
+            except Exception as error:
+                failure = str(error)
+                uncertain = getattr(error, 'code', None) == 'operation_uncertain'
+                if child and child_run:
+                    with self.store.transaction():
+                        state = 'paused' if uncertain else 'failed'
+                        self._close_run(child, child_run, state,
+                                        {'code': 'operation_uncertain' if uncertain else 'format_repair_failed',
+                                         'message': failure,
+                                         'retryable': False, 'details': {}})
+                        current = self.store.get(child['id'], project_id=project)
+                        update(self.store, current, state=state,
+                               pause_reason='operation_uncertain' if uncertain else 'format_repair_failed',
+                               current_run_id=None)
+                if uncertain:
+                    raise
+                continue
+        with self.store.transaction():
+            self._event(project, 'format_repair.failed',
+                {'parent_run_id': parent_run['id'], 'source_archive_id': archive['id'],
+                 'reason': failure or 'format_repair_exhausted'}, conversation=task['conversation_id'],
+                task=task['id'], run=parent_run['id'])
+        # The original stage Agent, with a fresh Session, must decide any
+        # unresolved or semantic changes. Never accept the repair Agent's text.
+        issue['category'] = 'content'
+        issue['format_repair_error'] = failure or 'format_repair_exhausted'
+        raise original_error
 
     async def _execute(self, task, token):
         project, cid = task["project_id"], task["conversation_id"]
@@ -1226,11 +1355,18 @@ class Engine:
                     materials = aggregation_materials(self.store, task, prospective, fixed["values"], materials, data["batch_manifest_ref"])
                     manifest_version = self.workflow.fixed_version(project, data["batch_manifest_ref"])
                     materials.append({"ref": data["batch_manifest_ref"], "schema_id": "batch_manifest", "content": body(self.store, manifest_version), "required": False})
-                task, run, session, config = self._start_run(task, stage, materials, recovery=bool(resume))
+                task, run, session, config = self._start_run(
+                    task, stage, materials, recovery=bool(resume),
+                    session_key_override=data.get('repair_session_key'),
+                    fresh_allowance=bool(data.get('repair_session_key') and not resume))
                 data = self._task_data(task)
                 data["model_dispatched"] = True
                 self._save_task_data(task, data)
             request_text = data.get("request", "执行当前阶段")
+            if data.get('repair_brief'):
+                request_text += ('\nHarness 校验修复单（候选按需通过 read_record 固定引用读取；'
+                                 '不要继承失败 Run 的历史）：\n' +
+                                 json.dumps(data['repair_brief'], ensure_ascii=False))
             if stage == 11:
                 request_text += "\n只校验本次提供的最终 Nexo Graph。checked_scope与unchecked_scope都是仅含裸章节ID的字符串数组，不要填说明句或拼接多个ID。checked_scope只列实际完整检查的章节ID；未完整检查的章节列入unchecked_scope。程序会绑定来源和criteria_ref，并将graph_checks固定为空数组。"
             result = resume["output"] if resume else await self._invoke(stage, task, run, session, config, materials, request_text, token)
@@ -1263,7 +1399,13 @@ class Engine:
             if reason == "input_budget_exceeded" and stage in range(2, 9) and run and not self._task_data(task).get("batch_manifest_ref"):
                 self._begin_batches(task, run, materials)
             elif repairable and run:
-                self._repair_execution(task, run, str(error) + (": " + json.dumps(error.details, ensure_ascii=False) if getattr(error, "details", None) else ""))
+                category=self._repair_category(error, reason)
+                feedback=str(error)
+                if category=='legacy' and getattr(error, 'details', None):
+                    feedback += ': ' + json.dumps(error.details, ensure_ascii=False)
+                self._repair_execution(task, run, feedback,
+                    category=category,
+                    diagnostics=getattr(error, 'details', None))
             else:
                 message = (f"旧版 {error.details.get('kind', '阶段')} 产物缺少独立原文索引，需从该阶段重新生成并确认"
                            if reason == "source_index_migration_required" else str(error))
@@ -1385,7 +1527,10 @@ class Engine:
                 # Fixed originals stay as provenance; aux.subtask reads only owned/neighbor pieces.
                 materials.extend({**m, "required": False} for m in self._fixed_run_materials(source_run) if not m.get("builtin"))
                 self._budget_check(child)
-                child, run, session, config = self._start_run(child, "aux.subtask", materials, recovery=saved is not None)
+                child, run, session, config = self._start_run(child, "aux.subtask", materials,
+                    recovery=saved is not None,
+                    session_key_override=cdata.get('repair_session_key'),
+                    fresh_allowance=bool(cdata.get('repair_session_key') and saved is None))
                 cdata = self._task_data(child)
                 cdata["model_dispatched"] = saved is None
                 if saved is not None:
@@ -1397,7 +1542,9 @@ class Engine:
             prompt = (f"为Step{data['stage']}执行局部分析。读取runtime.batch_state所有owned_source_ranges，neighbor_source_ranges仅作邻接证据。"
                       "用subtask_result记录发现、真实证据引用、建议和限制；不要声称已看未分配范围。"
                       "若材料冲突或不能完整处理当前范围，返回needs_input，不以ready掩盖缺口。\n" + data.get("request", "")
-                      + "\n批次任务与用户补充：\n" + cdata.get("request", ""))
+                      + "\n批次任务与用户补充：\n" + cdata.get("request", "")
+                      + ("\nHarness 校验修复单：\n" + json.dumps(cdata['repair_brief'], ensure_ascii=False)
+                         if cdata.get('repair_brief') else ""))
             result = saved if saved is not None else await self._invoke("aux.subtask", child, run, session, config, materials, prompt, token)
             with self.store.transaction():
                 self.store.advisory_lock(f"{project}:conversation:{task['conversation_id']}")
@@ -1433,9 +1580,20 @@ class Engine:
                 self._fail_execution(task, None, "user_stop")
         except Exception as error:
             reason = getattr(error, "reason", None) or getattr(error, "code", "configuration_error")
-            if child and run and reason == "evidence_reference_invalid":
-                feedback = str(error) + ": " + json.dumps(error.details, ensure_ascii=False)
-                self._repair_execution(child, run, feedback)
+            diagnostics = getattr(error, 'details', None) or {}
+            if isinstance(error, OutputValidationError):
+                reason = 'output_schema_invalid'
+                diagnostics = {'validation_errors': error.problems}
+            repairable = (reason in ('evidence_reference_invalid', 'output_schema_invalid')
+                          or reason == 'ModelBehaviorError')
+            if child and run and repairable:
+                diagnostics = {**diagnostics, 'code': reason}
+                category = self._repair_category(error, reason)
+                feedback = str(error)
+                if category == 'legacy' and diagnostics:
+                    feedback += ': ' + json.dumps(diagnostics, ensure_ascii=False)
+                self._repair_execution(child, run, feedback, category=category,
+                                       diagnostics=diagnostics)
                 failed_child = self.store.get(child["id"], project_id=project)
                 if failed_child["state"] == "paused":
                     self._fail_execution(task, None, failed_child["pause_reason"], feedback)
@@ -1443,7 +1601,25 @@ class Engine:
             if child and run: self._fail_execution(child, run, reason, str(error), getattr(error, "details", None))
             self._fail_execution(task, None, reason, str(error), getattr(error, "details", None))
 
-    def _repair_execution(self, task, run, error):
+    @staticmethod
+    def _repair_category(error, reason):
+        if type(error).__name__ == 'ValidationError':
+            return 'content'
+        issue = (getattr(error, 'details', None) or {}).get('output_failure', {})
+        if issue.get('category') in ('content', 'format'):
+            return 'content'  # Failed format repair returns to the producer.
+        if reason in ('source_anchor_invalid', 'source_reference_mismatch',
+                      'source_coverage_incomplete', 'source_window_coverage_invalid',
+                      'source_window_boundary_invalid', 'source_window_event_outside_commit',
+                      'source_window_wrong_view', 'source_window_incomplete',
+                      'source_view_incomplete', 'source_analysis_incomplete',
+                      'source_window_empty_interval_unverified', 'output_schema_invalid',
+                      'incomplete_ready_result', 'evidence_pointer_not_concrete',
+                      'evidence_pointer_missing', 'evidence_item_ambiguous_or_missing'):
+            return 'content'
+        return 'legacy'
+
+    def _repair_execution(self, task, run, error, *, category='legacy', diagnostics=None):
         with self.store.transaction():
             self.store.advisory_lock(f"{task['project_id']}:conversation:{task['conversation_id']}")
             current = self.store.get(task["id"], project_id=task["project_id"])
@@ -1461,18 +1637,78 @@ class Engine:
             data.pop("resume_saved_result", None)
             data["model_dispatched"] = False
             self._save_task_data(current, data)
-            limit = _cfg(config, "repair.max_rounds", 2) + data.get("additional_repair_rounds", 0)
-            if current["repair_rounds_used"] >= limit:
+            content = category == 'content'
+            # A pre-upgrade task has no protocol marker and only the aggregate
+            # counter. New-format tasks keep content and legacy repair limits
+            # independent even if both happen in one Task.
+            migrated = current['repair_rounds_used'] if 'repair_protocol_version' not in data else 0
+            used = (data.get('content_repair_rounds_used', migrated if content else 0)
+                    if content else data.get('legacy_repair_rounds_used', migrated))
+            limit = (_cfg(config, 'repair.content_max_rounds', 5) if content else
+                     _cfg(config, 'repair.max_rounds', 2)) + data.get('additional_repair_rounds', 0)
+            if used >= limit:
                 self._fail_execution(task, run, "repair_exhausted", error)
                 return
-            self._close_run(current, live, "failed", {"code": "output_validation_failed", "message": error, "retryable": False, "details": {}})
+            detail = diagnostics or {}
+            self._close_run(current, live, "failed", {"code": "output_validation_failed",
+                "message": error, "retryable": False,
+                "details": {'category': category, 'validation': deepcopy(detail)}})
             current = self.store.get(task["id"], project_id=task["project_id"])
             current = update(self.store, current, repair_rounds_used=current["repair_rounds_used"] + 1)
             data = self._task_data(current)
+            data['repair_protocol_version'] = 2
             prior = self._projection(task["project_id"], "run_result", run["id"]).get("output")
-            data["request"] = data.get("request", "") + "\n校验失败，请在同一任务范围内修复：" + error
-            if prior:
-                data["request"] += "\n先前草稿：" + json.dumps(prior, ensure_ascii=False)
+            if content:
+                from .model_service import append_history
+                data['content_repair_rounds_used'] = used + 1
+                issue = detail.get('output_failure', {})
+                candidate_ref = None
+                if issue.get('history_record_id'):
+                    candidate_ref = {'record_id': issue['history_record_id'],
+                                     'json_pointer': '/output',
+                                     'sha256': issue.get('candidate_sha256')}
+                elif prior is not None:
+                    archived = append_history(self.store, task['project_id'], task['conversation_id'],
+                        prior, kind='model_output', task_id=task['id'], run_id=run['id'])
+                    candidate_ref = {'record_id': archived['id'], 'sha256': candidate_hash(prior)}
+                problems = issue.get('problems') or detail.get('validation_errors') or []
+                if not isinstance(problems, list):
+                    problems = [{'path': '', 'validator': 'stage_contract',
+                                 'message': str(problems)[:500], 'category': 'content'}]
+                if not problems:
+                    problems = [{'path': '', 'validator': 'stage_contract',
+                                 'message': error[:500], 'category': 'content'}]
+                raw_details = {key: value for key, value in detail.items()
+                               if key not in ('output_failure', 'validation_errors', 'validation_error')
+                               and isinstance(value, (str, int, float, bool, type(None)))
+                               and len(str(value)) <= 500}
+                data['repair_brief'] = {
+                    'error_code': getattr(error, 'code', None) or detail.get('code') or 'output_validation_failed',
+                    'errors': problems[:30], 'error_count': len(problems),
+                    'details': raw_details, 'candidate_ref': candidate_ref,
+                    'source_input_refs': live['input_refs'][:30],
+                    'source_input_ref_count': len(live['input_refs']),
+                    'instruction': ('修复上述明确缺失或无效的字段；按需读取固定候选的对应路径。'
+                                    '输出本阶段完整 Schema 对象，不得凭空补写原文或事实。'
+                                    '无法定位或证据不足时基于固定输入重新生成。'
+                                    + ('校验错误数量超过当前修复单范围，请复核整个固定候选。'
+                                       if len(problems) > 30 else '')),
+                    'round': used + 1, 'max_rounds': limit,
+                }
+                state = data.get('source_window_state')
+                if state:
+                    data['repair_brief']['source_window'] = {
+                        'source_ref': state['source_ref'], 'start_utf16': state['cursor']}
+                data['repair_session_key'] = f'repair:{task["id"]}:{run["id"]}:{used + 1}'
+            else:
+                data['legacy_repair_rounds_used'] = used + 1
+                # Existing review/graph/protocol repair keeps its former limit.
+                # It too uses a fresh Session and a bounded diagnostic rather
+                # than appending an entire failed draft to the request.
+                data['repair_brief'] = {'error_code': 'output_validation_failed',
+                    'errors': [{'path': '', 'message': error[:500]}],
+                    'source_input_refs': live['input_refs'], 'round': used + 1}
+                data['repair_session_key'] = f'repair:{task["id"]}:{run["id"]}:{used + 1}'
             data.pop("remaining_turns", None)
             data.pop("resume_saved_result", None)
             data["model_dispatched"] = False
@@ -1480,7 +1716,11 @@ class Engine:
             # This is additional authorized work in the same running Task, not a
             # budget-pause recovery or a new user task.
             self._transition(current, "running")
-            self._event(task["project_id"], "repair.scheduled", {"round": current["repair_rounds_used"], "error": error}, conversation=task["conversation_id"], task=task["id"])
+            self._event(task["project_id"], "repair.scheduled",
+                {"round": used + 1,
+                 "category": category, "error": error[:2000],
+                 "candidate_ref": data['repair_brief'].get('candidate_ref')},
+                conversation=task["conversation_id"], task=task["id"])
 
     def _fail_execution(self, task, run, reason, message=None, details=None):
         reason = {"max_turns": "turn_limit", "MaxTurnsExceeded": "turn_limit"}.get(reason, reason)
@@ -1860,7 +2100,10 @@ class Engine:
             model_schema = self.workflow.catalog.schema_for(f"step{stage}", fixed_config["values"])
             self.workflow.catalog.validate(model_schema, result, fixed_config["values"].get("schemas"))
         except ValueError as error:
-            raise WorkflowBlocked("output_schema_invalid", {"validation_error": str(error)}) from error
+            raise WorkflowBlocked("output_schema_invalid", {
+                "validation_error": str(error),
+                **({"validation_errors": error.problems} if isinstance(error, OutputValidationError) else {})
+            }) from error
         if result["result_kind"] == "needs_input":
             if getattr(self.model_service, "supports_ask_user", False):
                 raise WorkflowBlocked("ask_user_tool_required")

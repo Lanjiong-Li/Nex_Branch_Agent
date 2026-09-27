@@ -36,6 +36,61 @@ async def test_fixed_material_dominance_does_not_repeat_soft_compaction(runtime)
 
 
 @pytest.mark.asyncio
+async def test_tiny_old_prefix_and_large_recent_turn_skip_optional_compaction(runtime):
+    store,task,run,row,cfg=runtime;pid=task['project_id']
+    cfg['context'].update(recent_turns=1,history_token_cap=100)
+    session=PersistentSession(store,row,task,run)
+    original=[{'role':'user','content':'早前问题'},
+        {'role':'assistant','content':'已经处理'},
+        {'role':'user','content':'当前原文窗口'},
+        {'role':'assistant','content':'当前窗口的大段结果。'*1000}]
+    await session.add_items(original)
+    output=SchemaCatalog().output_type('coordinator_response')
+    initial=compaction_layout(original,cfg,'instructions',[],output.json_schema(),'继续')
+    cfg['context']['input_token_cap']=initial['total']+100
+    plan=compaction_layout(original,cfg,'instructions',[],output.json_schema(),'继续')
+    assert plan['total']>plan['input_budget']*cfg['compaction']['trigger_ratio']
+    assert tokens(plan['prefix'],cfg['model']['name'])<50
+    assert tokens(plan['tail'],cfg['model']['name'])>plan['summary_reserve_tokens']
+    class Counted(SummaryModel):
+        calls=0
+        async def run(self,*args,**kwargs):
+            self.calls+=1
+            return await super().run(*args,**kwargs)
+    service=Counted(store)
+    await compact_session(service,session,'step1',cfg,'instructions',[],output,'继续')
+    assert service.calls==0
+    assert store.get(row['id'],pid)['generation']==1
+    assert await session.get_items()==original
+    assert not store.list(pid,'artifact_version')
+
+
+@pytest.mark.asyncio
+async def test_larger_valid_summary_preserves_executable_original_history(runtime):
+    store,task,run,row,cfg=runtime;pid=task['project_id']
+    cfg['context'].update(recent_turns=1,history_token_cap=100)
+    session=PersistentSession(store,row,task,run)
+    original=[{'role':'user','content':'早期原文。'*500},
+        {'role':'assistant','content':'早期结论。'*500},
+        {'role':'user','content':'当前问题'}]
+    await session.add_items(original)
+    output=SchemaCatalog().output_type('coordinator_response')
+    initial=compaction_layout(original,cfg,'instructions',[],output.json_schema(),'继续')
+    cfg['context']['input_token_cap']=initial['total']+100
+    class LongSummary(SummaryModel):
+        async def run(self,*args,**kwargs):
+            return '有效但比原工作历史更长的摘要。'*1500
+    await compact_session(LongSummary(store),session,'coordinator',cfg,'instructions',[],output,'继续')
+    assert store.get(row['id'],pid)['generation']==1
+    assert await session.get_items()==original
+    assert not store.list(pid,'artifact_version')
+    skipped=store.list(pid,'runtime_event',filters={'event_name':'session.compaction_skipped'})
+    assert len(skipped)==1 and skipped[0]['payload']['reason']=='summary_not_smaller'
+    children=[record for record in store.list(pid,'task') if record['parent_task_id']==task['id']]
+    assert len(children)==1 and children[0]['state']=='succeeded'
+
+
+@pytest.mark.asyncio
 async def test_summary_only_prefix_skips_soft_target_but_never_hard_cap(runtime):
     store,task,run,row,cfg=runtime
     cfg['context'].update(recent_turns=1,history_token_cap=100)
@@ -231,7 +286,7 @@ async def test_large_recent_tool_chain_can_only_compact_when_closed(runtime,clos
     service=Capture(store)
     await compact_session(service,session,'coordinator',cfg,'instructions',[],output,'继续回答原批次问题')
     if closed:
-        assert plan['keep']==0 and plan['tail_input_tokens']+plan['summary_reserve_tokens']>plan['input_budget']
+        assert plan['keep']==0 and plan['original_tail_input_tokens']+plan['summary_reserve_tokens']>plan['input_budget']
         assert service.calls==1
         after=await session.get_items()
         assert len(after)==1 and '仍待最终答复' in after[0]['content']

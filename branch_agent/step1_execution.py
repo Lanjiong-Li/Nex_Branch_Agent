@@ -252,13 +252,17 @@ async def run_view(engine, child, token, source_ref, source_text, windowed):
                 child, run, session, values = engine._start_run(
                     child, 1, materials, recovery=bool(resume), fresh_allowance=not resume,
                     session_key_override=f"step1:{child['parent_task_id']}:{view}:" +
-                    (str(cursor) if windowed else "full"))
+                    (str(cursor) if windowed else "full") +
+                    (':' + data['repair_session_key'] if data.get('repair_session_key') else ''))
                 if values.get("output", {}).get("structured", {}).get(f"step1.{view}", True) is False:
                     raise WorkflowBlocked("source_view_output_type_required", {"view": view})
                 data = engine._task_data(child)
                 data["model_dispatched"] = not bool(resume)
                 engine._save_task_data(child, data)
             request = data.get("request", "分析原作")
+            if data.get('repair_brief'):
+                request += ('\nHarness 校验修复单（仅按需读取候选，不继承失败 Run 历史）：\n' +
+                            json.dumps(data['repair_brief'], ensure_ascii=False))
             window = (await _budgeted_window(engine, child, run, session, values,
                        materials, source_text, cursor, view, previous_analysis, previous_characters, request)
                       if windowed and not resume else
@@ -349,7 +353,13 @@ async def run_view(engine, child, token, source_ref, source_text, windowed):
                  "source_analysis_incomplete", "source_window_empty_interval_unverified",
                  "output_schema_invalid"))
             if repairable and run:
-                engine._repair_execution(child, run, str(error))
+                category=engine._repair_category(error, reason)
+                feedback=str(error)
+                if category=='legacy' and getattr(error, 'details', None):
+                    feedback += ': ' + json.dumps(error.details, ensure_ascii=False)
+                engine._repair_execution(child, run, feedback,
+                    category=category,
+                    diagnostics=getattr(error, 'details', None))
                 child = engine.store.get(child["id"], project_id=project)
                 if child["state"] == "running":
                     run = None

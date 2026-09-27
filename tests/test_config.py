@@ -57,6 +57,62 @@ def test_summary_uses_its_own_agent_and_auxiliary_assignment_selects_profile(run
     assert baseline['values']['auxiliary_configs']['aux.summary']==original
 
 
+def test_format_repair_agent_and_limits_are_frozen_separately(runtime):
+    store,task,run,_,old=runtime;pid=task['project_id'];service=ConfigService(store)
+    baseline,_=initial_values()
+    assert baseline['context']['history_token_cap']==500000
+    assert baseline['repair']=={'max_rounds':2,'content_max_rounds':5,'format_max_rounds':1}
+    assert old['auxiliary_configs']['aux.format_repair']['prompts']['stage_agents']['aux.format_repair']=='format_repairer'
+    assert old['auxiliary_configs']['aux.format_repair']['output']['structured']['aux.format_repair'] is False
+    assert 'candidate_sha256' in instructions('aux.format_repair',old['auxiliary_configs']['aux.format_repair'])
+
+    profile=service.draft(pid,{'model':{'reasoning_effort':'low'},
+        'prompts':{'harness':{'agents':{'source_global_parser':'格式校验专用执行规则'}}}},
+        scope_kind='agent',scope_key='source_global_parser')
+    service.publish(pid,profile['id'])
+    configured=service.draft(pid,{'model':{'name':'gpt-5-nano'},
+        'prompts':{'layout_version':3,'stage_agents':{'aux.format_repair':'source_global_parser'},
+                   'stage':'只做指定路径上的局部格式修复'}},
+        scope_kind='auxiliary',scope_key='aux.format_repair')
+    service.publish(pid,configured['id'])
+    limits=service.draft(pid,{'repair':{'content_max_rounds':4,'format_max_rounds':2}},
+        scope_kind='stage',scope_key='step1')
+    service.publish(pid,limits['id'])
+
+    fresh=service.resolve(pid,'step1')['values']
+    repair=fresh['auxiliary_configs']['aux.format_repair']
+    assert fresh['repair']=={'max_rounds':2,'content_max_rounds':4,'format_max_rounds':2}
+    assert stage_agent('aux.format_repair',repair)=='source_global_parser'
+    assert repair['model']['name']=='gpt-5-nano' and repair['model']['reasoning_effort']=='low'
+    assert '只做指定路径上的局部格式修复' in instructions('aux.format_repair',repair)
+    assert '格式校验专用执行规则' in instructions('aux.format_repair',repair)
+    assert service.view(pid,'aux.format_repair')['selected_agent']=='source_global_parser'
+    assert store.get(run['config_version_id'],pid)['values']==old
+
+
+@pytest.mark.parametrize('field,value',[
+    ('content_max_rounds',-1),('format_max_rounds',-1),
+    ('content_max_rounds',True),('format_max_rounds','1'),
+])
+def test_format_and_content_repair_limits_require_nonnegative_integers(runtime,field,value):
+    store,task,_,_,_=runtime;service=ConfigService(store)
+    values,_=service.values(task['project_id'],'step1')
+    schemas=values.pop('schemas')
+    values['repair'][field]=value
+    with pytest.raises(ValueError,match=f'repair.{field}'):
+        service.validate_candidate(values,schemas,'step1.global')
+
+
+def test_format_repair_agent_cannot_bind_stage_output_type(runtime):
+    store,task,_,_,_=runtime;service=ConfigService(store)
+    values,_=service.values(task['project_id'],'aux.format_repair')
+    schemas=values.pop('schemas')
+    assert service.validate_candidate(values,schemas,'aux.format_repair')['enabled'] is False
+    values['output']['structured']['aux.format_repair']=True
+    with pytest.raises(ValueError,match='内部纯文本产物'):
+        service.validate_candidate(values,schemas,'aux.format_repair')
+
+
 def test_summary_layout_upgrade_changes_only_the_old_default_binding(runtime):
     store,task,_,_,_=runtime;pid=task['project_id'];service=ConfigService(store)
     old={'prompts':{'layout_version':2,'stage_agents':{

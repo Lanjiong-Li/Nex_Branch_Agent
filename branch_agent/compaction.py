@@ -65,25 +65,39 @@ def compaction_layout(items, config, instructions, tool_defs, output_schema, req
     keep=min(len(groups),max(1,config['context']['recent_turns']))
     fixed=max(0,total-history_size)
     target=max(0,min(config['context']['history_token_cap'],int(cap*config['compaction']['target_ratio'])-fixed))
-    reserve=config['summary']['target_tokens']*2
+    summary_target=config.get('auxiliary_configs',{}).get('aux.summary',config)['summary']['target_tokens']
+    reserve=summary_target*2
     for item in items:
         if item.get('role')=='user' and isinstance(item.get('content'),str):
             try:
                 if isinstance(json.loads(item['content']),dict) and 'working_summary' in json.loads(item['content']):
                     reserve=max(reserve,tokens(item,model))
             except ValueError:pass
-    while keep>1 and tokens([i for g in groups[-keep:] for i in g],model)+config['summary']['target_tokens']>target:
+    while keep>1 and tokens([i for g in groups[-keep:] for i in g],model)+summary_target>target:
         keep-=1
     tail=[i for g in groups[-keep:] for i in g] if keep else []
-    tail_input_tokens=size(tail)
+    original_tail_input_tokens=size(tail)
     # Keeping a large recent tool result must not force repeated summaries of
     # only the older prefix. The original current request is separately resent.
-    if keep and tail_input_tokens+reserve>cap and complete_tools(items):
+    if total>cap and keep and original_tail_input_tokens+reserve>cap and complete_tools(items):
         keep=0;tail=[]
     prefix=[i for g in (groups[:-keep] if keep else groups) for i in g]
+    # A tiny old prefix cannot repay even the planned summary envelope. If the
+    # complete invocation is already over its hard cap, widen the archive to
+    # whole request groups instead of summarizing that tiny prefix repeatedly.
+    # A soft trigger may still keep recent turns intact and skip compaction.
+    if total>cap and complete_tools(items) and (
+            not prefix or not complete_tools(prefix) or not complete_tools(tail)
+            or tokens(prefix,model)<=reserve or size(tail)+reserve>cap):
+        for candidate_keep in range(keep-1,-1,-1):
+            candidate_prefix=[i for g in (groups[:-candidate_keep] if candidate_keep else groups) for i in g]
+            candidate_tail=[i for g in groups[-candidate_keep:] for i in g] if candidate_keep else []
+            if not complete_tools(candidate_prefix) or not complete_tools(candidate_tail):continue
+            keep,prefix,tail=candidate_keep,candidate_prefix,candidate_tail
+            if tokens(prefix,model)>reserve and size(tail)+reserve<=cap:break
     return {'prefix':prefix,'tail':tail,'keep':keep,'total':total,'history_tokens':history_size,
-        'fixed_input_tokens':size([]),'tail_input_tokens':tail_input_tokens,
-        'summary_reserve_tokens':reserve,'input_budget':cap}
+        'fixed_input_tokens':size([]),'original_tail_input_tokens':original_tail_input_tokens,
+        'tail_input_tokens':size(tail),'summary_reserve_tokens':reserve,'input_budget':cap}
 
 
 def summary_problem(service,pid,value,cfg,covered):
@@ -157,7 +171,7 @@ async def compact_session(service, persistent, stage, config, instructions, tool
                           control=None, live_events=False):
     from .model_service import all_records, ref
     if stage=='aux.summary':return
-    store=service.store;pid=persistent.task['project_id'];model=config['model']['name']
+    store=service.store;pid=persistent.task['project_id'];parent_model=config['model']['name']
     items=await persistent.get_items()
     if not items:return
     plan=compaction_layout(items,config,instructions,tool_defs,output.json_schema() if output else None,request)
@@ -170,6 +184,10 @@ async def compact_session(service, persistent, stage, config, instructions, tool
     prefix=plan['prefix'];tail=plan['tail']
     if not prefix:return
     if not complete_tools(prefix) or not complete_tools(tail):return
+    # The planned replacement contains the summary plus its SDK envelope.
+    # When the original call fits, an old prefix smaller than that reserve is
+    # an optional, predictably counterproductive compaction attempt.
+    if total<=cap and tokens(prefix,parent_model)<=plan['summary_reserve_tokens']:return
     original=store.get(persistent.session_id,pid)
     rows=all_records(store,pid,'session_item',{'session_id':original['id'],'generation':original['generation']})
     rows.sort(key=lambda r:r['sequence'])
@@ -200,7 +218,6 @@ async def compact_session(service, persistent, stage, config, instructions, tool
     # All summary pages read original archives, rather than repeatedly summarizing
     # the previous prose. A later page also gets the current summary as continuity.
     cfg=deepcopy(config.get('auxiliary_configs',{}).get('aux.summary',config))
-    model=cfg['model']['name']
     from .prompts import instructions as summary_instructions
     plan_state={'project_id':pid,'task_id':persistent.task['id'],'session_id':original['id'],
         'generation':original['generation'],'last_item_seq':original['last_item_seq'],
@@ -211,6 +228,7 @@ async def compact_session(service, persistent, stage, config, instructions, tool
     plan_hash=digest(plan_state)
     safe=max(1000,input_budget(cfg)-6000-cfg['summary']['target_tokens']*2)
     if not archives:return
+    summary_model=cfg['model']['name']
     parent=persistent.task;started=time.monotonic();child=None;summary=None;seen=[]
     try:
         with store.transaction():
@@ -241,7 +259,7 @@ async def compact_session(service, persistent, stage, config, instructions, tool
                     index+=1;continue
             if not window:
                 for archive in archives[len(seen):]:
-                    if window and tokens(window+[archive],model)>safe:break
+                    if window and tokens(window+[archive],summary_model)>safe:break
                     window.append(archive)
             local_repairs=0
             while True:
@@ -307,10 +325,23 @@ async def compact_session(service, persistent, stage, config, instructions, tool
             state=store.projection_get(runtime_key);state['active_ms']=int((time.monotonic()-started)*1000);store.projection_put(runtime_key,state)
             index+=1
         replacement={'role':'user','content':json.dumps({'working_summary':summary,'note':'工作摘要只供参考；有效约束以正式记录为准。工具执行完成不表示当前用户请求完成；当前请求会另行提供。'},ensure_ascii=False)}
-        if tokens([replacement]+tail,model)>=history_size:
-            raise BudgetExceeded('summary_not_smaller','摘要未缩小工作历史，保留原工作历史')
+        after_tokens=tokens([replacement]+tail,parent_model)
         final_input=tokens({'instructions':instructions,'input':[replacement]+tail+[{'role':'user','content':request}],
-            'tools':tool_defs,'output_schema':output.json_schema() if output else None},config['model']['name'])
+            'tools':tool_defs,'output_schema':output.json_schema() if output else None},parent_model)
+        if total<=cap and (after_tokens>=history_size or final_input>cap):
+            # A valid summary can still exceed its target. The unchanged input
+            # is executable, so keep its original generation and let Runner
+            # proceed instead of pausing an otherwise valid task.
+            with store.transaction():
+                live_child=store.get(child['id'],pid);live_child['state']='succeeded';store.update(live_child,live_child['row_version'])
+                event(store,pid,'session.compaction_skipped',{'session_id':original['id'],
+                    'preserved_generation':original['generation'],
+                    'reason':'summary_not_smaller' if after_tokens>=history_size else 'summary_not_fitting',
+                    'before_tokens':history_size,'candidate_after_tokens':after_tokens,
+                    'original_input_tokens':total,'candidate_input_tokens':final_input},task=child['id'],run=run['id'])
+            return
+        if after_tokens>=history_size:
+            raise BudgetExceeded('summary_not_smaller','摘要未缩小工作历史，保留原工作历史')
         if final_input>cap:
             raise BudgetExceeded('summary_not_fitting','实际摘要与必需输入仍超预算，原工作历史保持不变',
                 {'input_tokens':final_input,'input_budget':cap})
@@ -337,7 +368,7 @@ async def compact_session(service, persistent, stage, config, instructions, tool
             persistent.row=store.update(live,live['row_version'])
             event(store,pid,'session.compacted',{'session_id':live['id'],'from_generation':original['generation'],
                 'to_generation':live['generation'],'summary_ref':ref(saved),'covered_message_ids':covered,
-                'before_tokens':history_size,'after_tokens':tokens([replacement]+tail,model),'target_ratio':config['compaction']['target_ratio']},
+                'before_tokens':history_size,'after_tokens':after_tokens,'target_ratio':config['compaction']['target_ratio']},
                 task=child['id'],run=run['id'],conversation=parent['conversation_id'])
             live_child=store.get(child['id'],pid);live_child['state']='succeeded';store.update(live_child,live_child['row_version'])
     except BaseException:

@@ -697,7 +697,7 @@ def create_app(store=None,engine=None,model_service=None,data_dir=None):
         step1_view=body.get('step1_view')
         if not isinstance(values,dict) or not isinstance(stage,str) or stage not in (
                 'coordinator',*[f'step{i}' for i in range(1,12)],
-                'aux.summary','aux.history_answer','aux.subtask') or step1_mode not in ('full','window') or (
+                'aux.summary','aux.format_repair','aux.history_answer','aux.subtask') or step1_mode not in ('full','window') or (
                 step1_view is not None and (stage!='step1' or step1_view not in ('global','character'))):
             raise HTTPException(400,'预览需要有效的配置与阶段')
         from .prompts import instructions_preview

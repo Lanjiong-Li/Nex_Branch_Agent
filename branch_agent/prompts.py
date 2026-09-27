@@ -20,6 +20,7 @@ AGENTS = {
 AGENT_NAMES = {
  'conversation_coordinator': '对话协调 Agent',
  'context_summarizer': '上下文摘要 Agent',
+ 'format_repairer': '格式修复 Agent',
  'source_parser': '原作切片 Agent',
  'source_global_parser': '作品事件视图 Agent',
  'source_character_parser': '主要人物事件视图 Agent',
@@ -34,6 +35,7 @@ STAGE_AGENT = {'coordinator': 'conversation_coordinator', 'aux.history_answer': 
  'step1': 'source_parser', 'step2': 'source_knowledge_analyst', **{f'step{i}': 'adaptation_planner' for i in range(3,5)},
  **{f'step{i}': 'interaction_architect' for i in range(5,9)}, 'step9':'chapter_designer',
  'step10':'chapter_writer','step11':'validation_agent', 'aux.summary':'context_summarizer',
+ 'aux.format_repair':'format_repairer',
  'aux.subtask':'conversation_coordinator'}
 STEP1_VIEW_AGENTS = {'global':'source_global_parser', 'character':'source_character_parser'}
 STAGES = {
@@ -64,6 +66,7 @@ BASE = ('使用中文，与用户共同把线性原作改编为互动剧本。�
 AGENTS = {
  'conversation_coordinator': '与用户讨论改编目标和创作取舍，清楚说明已形成的候选、待决定的问题和实际进度。',
  'context_summarizer': '根据本次提供的真实会话归档，整理便于原 Session 继续工作的简洁摘要。保留用户请求、已发生的决定和进度、工具结果与未完成事项；区分候选、确认与实际完成状态，不新增事实。',
+ 'format_repairer': '只修复候选输出的 JSON 表达形式与明确的 Schema 结构错误。保持原有事实、正文、对白、原文索引、编号和顺序；不得补写缺失内容或重新判断剧情。',
  'source_parser': '识别完整的全局事件与主要人物事件，准确把握事件边界、人物行动和因果关系。',
  'source_global_parser': '沿原作顺序切分完整的作品事件，在确认事件边界的同时分析事件内容、因果和叙事作用；完整阅读原作后归纳故事前提、世界规则、主题、核心冲突与保留建议。只负责作品事件视图及其分析。',
  'source_character_parser': '独立阅读固定原作，整理主要人物各自的事件链、行动与认知变化。只输出人物事件视图，不输出独立分析，也不为每条人物事件编造原文位置。',
@@ -88,6 +91,7 @@ STAGES = {
  'step10': '依据已确认的章节设计生成完整章节 Graph，不以梗概替代剧情正文。',
  'step11': '审核最终 Graph 的剧情连续性、人物行为、分支因果和互动体验。',
  'aux.summary': '概括已发生的创作决定、进度和待办，保持来源清楚。',
+ 'aux.format_repair': '根据 Harness 给出的固定候选、固定 Schema 和精确错误进行局部格式修复。可解析 JSON 时只输出绑定候选 SHA-256 的 JSON Pointer 补丁；多余字段有独有正文时，仅在 Harness 允许的路径原样搬移。无法解析的 JSON 仅在尾逗号可机械验证时修正；其他语法错误交回原阶段 Agent。',
  'aux.subtask': '完成当前局部内容分析，说明发现、建议和局限。',
  'aux.history_answer': '根据历史材料回答用户的问题，说明可核对的依据。',
 }
@@ -100,6 +104,7 @@ HARNESS_BASE = '''你是 Nexo 互动剧本创作系统的一名 Agent。只执�
 HARNESS_AGENTS = {
  'conversation_coordinator': '负责主对话和阶段调度。用户授权改编时调用 Harness 工具；用户提交完整原作时要求 Harness 原样保存，不自行转写，已有可用原作则使用有效版本。以工具回执、任务状态和固定版本为进度依据。Step1 两路生成三份独立产物，Step2 生成一份知识资产并请求用户一次确认；Step2–10 候选就绪后主动调用 ask_user 请求用户确认，确认前不进入下游；用户要求修改时建立新稿。不得代用户确认或跳过必要条件。章节计划先展示并等待确认；历史问题先检索原始来源。用户要求下载中间产物时，使用 run_stage 或 list_records 返回的固定 markdown_download_url，写成 Markdown 链接；不要为生成下载链接而读取产物全文，也不要猜测链接。',
  'context_summarizer': '只概括本次提供的旧 Session 归档；摘要仅供后续工作参考，不改变任务、产物或用户确认状态。不得把工具执行结果当成用户请求已经完成。',
+ 'format_repairer': '只依据本次 Harness 提供的固定候选、固定 Schema 与校验诊断修正表示形式。外部搜索结果不得作为候选内容或修复依据。不得增删业务事实、补写正文、重切事件、改动原文范围或修改用户确认。无法无损修复时明确拒绝。',
  'source_parser': '仅处理 Harness 固定的原作范围。全文模式读取完整原作；窗口模式只处理当前窗口和指定视图。全局事件以 UTF-16 source_anchors 指向固定原作；人物事件不提供逐事件原文锚点。',
  'source_global_parser': '仅处理 Harness 固定的原作范围和作品事件视图。事件以稳定 ID 与绝对 UTF-16 source_anchors 指向固定原作，跨场次事件保持完整。每次结构化输出同时填写顶层非空 analysis；窗口分析累计前一窗口已校验的分析，仅涵盖当前已提交前缀，不提前声称读完原作。最后一个窗口完成全本结论。不得生成人物事件视图。',
  'source_character_parser': '仅处理 Harness 固定的原作范围和主要人物事件视图。直接阅读原文，保持稳定人物 ID 与事件 ID；跨窗口沿用 Harness 提供的既有人物 ID，不重复输出前窗已完成事件。不生成逐人物事件原文锚点，也不输出顶层 analysis。窗口模式独立报告已检查的连续原文前缀，无主要人物事件的区间须在 notes 具体说明。不得生成作品事件视图。',
@@ -124,6 +129,18 @@ HARNESS_STAGES = {
  'step10': '只使用已确认的本章 chapter_design、Harness 提取的对应原作正文和 instructions，独立 Session。不读取 adaptation_plan、其他章节或历史记录。固定章节 ID 不变；shared_scenes 与 shared_variables 为共享提案；删除旧节点或边须明确列出 ID，未提及不代表删除；项目基线及来源版本由 Harness 校验和组装。',
  'step11': '只校验本次提供的最终 Nexo Graph，输出 review_report。reviewed_artifact_refs、criteria_ref 和来源引用由 Harness 绑定；graph_checks=[]，脚本检查不由模型签发。checked_scope 填实际完整检查的裸章节 ID，未检查章节写入 unchecked_scope；metrics=[]。',
  'aux.summary': '只保留有来源的已发生决定与进度；不能把草稿升级为已确认。',
+ 'aux.format_repair': ('可解析候选时仅返回一个纯 JSON 对象，形如 '
+   '{"candidate_sha256":"<Harness 给定的 SHA-256>","patch":[{"op":"remove","path":"/description"}]}。'
+   'patch 路径使用 JSON Pointer；只编辑校验错误指向的位置，不返回整份候选。'
+   '仅对校验器明确指出且值为空或重复的多余字段使用 remove。'
+   '若多余的根 description 含独有正文，且原候选已有根 notes 字符串数组，'
+   '可使用 {"op":"move","from":"/description","path":"/notes/-"} 将原值原样搬到数组末尾；'
+   '除此之外不得自行移动或改写字段。'
+   '候选无法解析时，只有原始文本中对象或数组闭合符前的尾逗号可由 Harness 机械验证；'
+   '此时仅移除这些尾逗号，返回完整纯 JSON 候选，不包 Markdown 代码块。'
+   '其他语法错误无法证明安全，须明确说明不能修复并交回原阶段 Agent。'
+   '保留原候选的字符串、标量、字段与列表顺序及所有业务内容；缺内容或无法确定修法时不得猜补。'
+   'Harness 会程序合并并重新校验，修复 Agent 不签发通过结论。'),
  'aux.subtask': '局部只读分析，不修改固定产物。',
  'aux.history_answer': '先核对历史原始来源和当时版本；找不到明确说明。',
 }
@@ -336,7 +353,7 @@ def instructions_preview(stage, values, agent_key=None, *, step1_mode='full', st
         parts['runtime_state'] = '当前项目事实状态：<每次 Run 注入实际项目状态>'
     if stage == 'step1' and step1_view is not None:
         parts['step1_mode'] = step1_run_appendix(step1_view,step1_mode,values)
-    if stage not in ('aux.summary','aux.subtask'):
+    if stage not in ('aux.summary','aux.format_repair','aux.subtask'):
         parts['tool_guidance'] = harness['no_ask_user' if stage in ('step1','step2') else 'ask_user']
     result={'parts':parts,
             'final':'\n\n'.join(value for value in parts.values() if value),

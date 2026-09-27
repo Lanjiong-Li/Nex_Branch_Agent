@@ -423,6 +423,39 @@ def test_summary_agent_configuration_preview_and_publication(api):
     assert summary['prompts']['stage_agents']['aux.summary'] == 'context_summarizer'
 
 
+def test_format_repair_agent_configuration_preview_and_publication(api):
+    client, _, _ = api
+    project = client.post(BASE+'/projects', json={'title':'格式修复配置验证'}).json()['id']
+    current = client.get(BASE+'/account/config?stage=aux.format_repair')
+    assert current.status_code == 200, current.text
+    assert current.json()['selected_agent'] == 'format_repairer'
+    values = deepcopy(current.json()['values'])
+    values['prompts']['stage'] = '按精确错误做指定位置的格式修正。'
+    preview = client.post(BASE+'/account/config/instructions-preview', json={
+        'stage':'aux.format_repair', 'values':values})
+    assert preview.status_code == 200, preview.text
+    assert preview.json()['parts']['creative_stage'] == values['prompts']['stage']
+    assert 'candidate_sha256' in preview.json()['final']
+    assert 'tool_guidance' not in preview.json()['parts']
+    checked = client.post(BASE+'/account/config/validate', json={
+        'stage':'aux.format_repair', 'values':values, 'schemas':current.json()['schemas']})
+    assert checked.status_code == 200, checked.text
+    assert checked.json()['enabled'] is False
+
+    client.headers['Idempotency-Key'] = str(uuid.uuid4())
+    draft = client.post(BASE+'/account/config', json={
+        'scope_kind':'auxiliary', 'scope_key':'aux.format_repair',
+        'values':{'prompts':{'layout_version':3,'stage':values['prompts']['stage']},
+                  'model':{'reasoning_effort':'low'}}})
+    assert draft.status_code == 200, draft.text
+    client.headers['Idempotency-Key'] = str(uuid.uuid4())
+    published = client.post(BASE+f'/account/config/{draft.json()["id"]}/publish', json={})
+    assert published.status_code == 200, published.text
+    repair = client.app.state.config.resolve(project, 'coordinator')['values']['auxiliary_configs']['aux.format_repair']
+    assert repair['prompts']['stage'] == values['prompts']['stage']
+    assert repair['model']['reasoning_effort'] == 'low'
+
+
 def test_account_editor_autosave_keeps_incomplete_schema_without_publishing(api):
     client,store,identity=api
     original=client.get(BASE+'/account/config?stage=step5').json()

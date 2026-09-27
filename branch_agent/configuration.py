@@ -91,7 +91,8 @@ def initial_values():
     values = {k:v for k,v in raw.items() if k not in ('contract_version','status','stage_overrides')}
     values = merge(values, {
         'prompts':prompt_defaults(), 'run':{'max_turns':10}, 'retry':{'max_retries':2},
-        'repair':{'max_rounds':2}, 'task':{'max_active_seconds':3600,'max_cost':{'amount':'20.00','currency':'USD'},'disabled_limits':[]},
+        'repair':{'max_rounds':2,'content_max_rounds':5,'format_max_rounds':1},
+        'task':{'max_active_seconds':3600,'max_cost':{'amount':'20.00','currency':'USD'},'disabled_limits':[]},
         'recovery':{'max_attempts':3,'backoff_seconds':[5,30,120]},
         'runtime':{'lease_seconds':60,'heartbeat_seconds':15,'stop_grace_seconds':30},
         'tools':{'enabled':list(READ_TOOL_NAMES),'ask_user_enabled':True,
@@ -99,7 +100,7 @@ def initial_values():
         'retrieval':{'top_k':8,'snippet_tokens':200,'neighbor_messages':2},
         'compaction':{'trigger_ratio':0.75,'target_ratio':0.5},
         'summary':{'target_tokens':1500,'checkpoint_events':['confirmation','stage.completed']},
-        'context':{'recent_turns':6,'history_token_cap':6000,
+        'context':{'recent_turns':6,'history_token_cap':500000,
            'stage_inputs':deepcopy(STAGE_INPUT_DEFAULTS),
            'session_sharing':deepcopy(SESSION_SHARING_DEFAULTS),
            'profiles':json.loads((ROOT/'docs/context/stage-materials.json').read_text())},
@@ -111,7 +112,8 @@ def initial_values():
                   'structured':{'coordinator':True,
                       **{f'step{i}': True for i in range(2,12)},
                       'step1.global':True,'step1.character':True,
-                      'aux.summary':False,'aux.history_answer':True,'aux.subtask':True}},
+                      'aux.summary':False,'aux.format_repair':False,
+                      'aux.history_answer':True,'aux.subtask':True}},
         'model':{'temperature':None}, 'pricing':{'version':'multi-provider-2026-09-25-peak-usd',
             'source':'https://api-docs.deepseek.com/quick_start/pricing/',
             'models':{'deepseek-flash':{'input_per_million':'0.30','cached_input_per_million':'0.006',
@@ -157,7 +159,7 @@ def validate_values(values, schemas):
     names=prompts.get('agent_names')
     assignments=prompts.get('stage_agents')
     executable={'coordinator',*[f'step{i}' for i in range(1,12)],
-                'aux.summary','aux.history_answer','aux.subtask'}
+                'aux.summary','aux.format_repair','aux.history_answer','aux.subtask'}
     if not isinstance(agents,dict) or not agents:
         raise ValueError('Agent 库不能为空')
     if any(not isinstance(key,str) or not re.fullmatch(r'[a-z][a-z0-9_]{0,63}',key)
@@ -190,8 +192,9 @@ def validate_values(values, schemas):
     allowed=executable|step1_outputs
     if set(structured)-set(allowed):
         raise ValueError('存在未注册的 output_type 阶段开关')
-    if structured.get('aux.summary') is True:
-        raise ValueError('压缩摘要是内部纯文本产物，不绑定 output_type')
+    for auxiliary in ('aux.summary','aux.format_repair'):
+        if structured.get(auxiliary) is True:
+            raise ValueError(f'{auxiliary} 是内部纯文本产物，不绑定 output_type')
     if values['summary']['checkpoint_events']!=['confirmation','stage.completed']:
         raise ValueError('当前运行适配器固定在关键确认和阶段完成保存检查点，尚未注册其他检查点事件配置')
     if values['context']['version_mapping']!={'field_mappings':[],'dependency_scope':'selected_with_guards','extra_guard_paths':[],'transforms':[]}:
@@ -238,12 +241,15 @@ def validate_values(values, schemas):
     except (InvalidOperation,TypeError,ValueError):raise ValueError('费用必须是有限数字') from None
     if not cost.is_finite() or cost <= 0 or values['task']['max_cost']['currency'] != 'USD': raise ValueError('当前计费适配使用正数USD预算')
     if values['task']['max_active_seconds'] <= 0: raise ValueError('任务执行耗时必须为正数')
-    for group,fields in {'retry':['max_retries'],'repair':['max_rounds'],'recovery':['max_attempts'],
+    for group,fields in {'retry':['max_retries'],
+                         'repair':['max_rounds','content_max_rounds','format_max_rounds'],
+                         'recovery':['max_attempts'],
                          'context':['recent_turns','history_token_cap'], 'summary':['target_tokens'],
                          'tools':['read_token_cap'],'retrieval':['top_k','snippet_tokens','neighbor_messages']}.items():
         for field in fields:
             value=values[group][field]
-            minimum=0 if field in ('max_retries','max_rounds','neighbor_messages') else 1
+            minimum=0 if field in ('max_retries','max_rounds','content_max_rounds',
+                                    'format_max_rounds','neighbor_messages') else 1
             if type(value) is not int or value<minimum:raise ValueError(f'{group}.{field}必须是至少{minimum}的整数')
     if values['tools']['read_token_cap']<600:raise ValueError('工具读取预算至少600 tokens，需为引用及分页元数据留空间')
     for key in ('target_tokens','hard_max_tokens','max_items'):
@@ -611,13 +617,14 @@ class ConfigService:
         # Remove legacy published schemas and bindings.
         schemas.pop('work_summary',None)
         data.get('output',{}).get('bindings',{}).pop('aux.summary',None)
+        data.get('output',{}).get('bindings',{}).pop('aux.format_repair',None)
         data.get('summary',{}).pop('extra_fields',None)
         # Tool permissions are no longer configurable. Keep the legacy fields
         # in resolved snapshots for compatibility, but override old per-Agent
         # switches so every new Run receives the registered tools.
         data['tools']['enabled']=list(READ_TOOL_NAMES)
         data['tools']['ask_user_enabled']=True
-        if stage in ('step1','aux.summary'):
+        if stage in ('step1','aux.summary','aux.format_repair'):
             # Each branch snapshot must resolve its own Agent profile and
             # instructions. A summary Run must likewise use the Agent profile
             # selected before the auxiliary override's ordinary values merge.
@@ -632,7 +639,7 @@ class ConfigService:
             values,ids=self.values(project_id,stage,agent_key=agent_key); validate_values(values,values['schemas'])
             if not stage.startswith('aux.'):
                 values['auxiliary_configs']={}
-                for auxiliary in ('aux.summary','aux.subtask'):
+                for auxiliary in ('aux.summary','aux.format_repair','aux.subtask'):
                     data,source_ids=self.values(project_id,auxiliary);validate_values(data,data['schemas'])
                     values['auxiliary_configs'][auxiliary]=data
                     ids=list(dict.fromkeys(ids+source_ids))
@@ -667,7 +674,8 @@ class ConfigService:
     def validate_candidate(self, values, schemas, stage='coordinator'):
         """Validate an editor candidate without saving or publishing it."""
         allowed={'coordinator',*[f'step{i}' for i in range(1,12)],
-                 'aux.summary','aux.history_answer','aux.subtask','step1.global','step1.character'}
+                 'aux.summary','aux.format_repair','aux.history_answer','aux.subtask',
+                 'step1.global','step1.character'}
         if stage not in allowed:
             raise ValueError('未知的 output_type 阶段')
         candidate=deepcopy(values)
@@ -707,7 +715,8 @@ class ConfigService:
             row=self.store.get(config_id,None)
             if (not row or row['record_type']!='config_version' or row['state']!='draft'
                     or row.get('owner_account_id')!=account_id): raise ValueError('配置草稿不存在')
-            for stage in ['coordinator',*[f'step{i}' for i in range(1,12)],'aux.summary','aux.history_answer','aux.subtask']:
+            for stage in ['coordinator',*[f'step{i}' for i in range(1,12)],
+                          'aux.summary','aux.format_repair','aux.history_answer','aux.subtask']:
                 data,_=self.values_for_account(account_id,stage,row); available=validate_values(data,data['schemas'])
                 if stage=='step1':
                     for view in ('global','character'):

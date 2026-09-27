@@ -218,6 +218,42 @@ async def test_real_sdk_audits_input_output_usage_and_session(runtime):
 
 
 @pytest.mark.asyncio
+async def test_completed_schema_failure_exposes_exact_archived_format_finding(runtime):
+    store, task, run, session, values = runtime
+    response = provider_response()
+    value = json.loads(response['output'][0]['content'][0]['text'])
+    value['description'] = ''
+    response['output'][0]['content'][0]['text'] = json.dumps(value, ensure_ascii=False)
+    client = AsyncOpenAI(api_key='local-mock-not-real',
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(
+            lambda _: httpx.Response(200, json=response))), max_retries=0)
+    with pytest.raises(ModelRunError) as failure:
+        await ModelService(store, client).run('coordinator', task, run, session, values, [], '你好')
+    issue = failure.value.details['output_failure']
+    assert issue['category'] == 'format'
+    assert issue['schema_id'] == 'coordinator_response'
+    assert issue['problems'][0]['validator'] == 'additionalProperties'
+    assert issue['problems'][0]['unexpected_properties'] == ['description']
+    assert store.get(issue['history_record_id'], task['project_id'])['record_type'] == 'history_record'
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_unique_fenced_json_is_recovered_without_second_model_call(runtime):
+    store, task, run, session, values = runtime
+    response = provider_response()
+    raw = response['output'][0]['content'][0]['text']
+    response['output'][0]['content'][0]['text'] = '结果：\n```json\n' + raw + '\n```'
+    client = AsyncOpenAI(api_key='local-mock-not-real',
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(
+            lambda _: httpx.Response(200, json=response))), max_retries=0)
+    result = await ModelService(store, client).run('coordinator', task, run, session, values, [], '你好')
+    assert result['payload']['reply'] == '你好，请提交原作。'
+    assert len(store.list(task['project_id'], 'model_call')) == 1
+    await client.close()
+
+
+@pytest.mark.asyncio
 async def test_provider_routing_uses_isolated_clients_and_keeps_openai_available(monkeypatch):
     monkeypatch.setenv('DEEPSEEK_API_KEY','mock-deepseek-key')
     monkeypatch.setenv('OPENAI_API_KEY','mock-openai-key')
@@ -344,7 +380,8 @@ async def test_tool_execution_is_archived_and_second_turn_receives_result(runtim
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('stage', [
-    'coordinator', 'step1', 'step2', 'aux.summary', 'aux.history_answer'])
+    'coordinator', 'step1', 'step2', 'aux.summary', 'aux.format_repair',
+    'aux.history_answer'])
 @pytest.mark.parametrize('configured', [False, True])
 async def test_web_search_tool_is_available_to_every_agent_when_key_is_configured(
         runtime, monkeypatch, stage, configured):
@@ -386,11 +423,13 @@ async def test_web_search_tool_is_available_to_every_agent_when_key_is_configure
                 workflow.save(pid, 'source_global_analysis', '甲与乙相遇。',
                     stage=1, inputs=[source_ref, ref(global_events)], effective=True)
             materials = workflow.materials(pid, 2)
-        else:
+        elif stage in ('aux.summary', 'aux.history_answer'):
             archive = store.get(base_task['requested_by_message_id'], pid)
             materials = [{'builtin': 'runtime.archive_window', 'content': {
                 'history_refs': [ref(archive)], 'decision_refs': [], 'artifact_refs': [],
                 'tool_call_refs': []}, 'required': True}]
+        else:
+            materials = []
         task = store.put(new_record('task', pid, conversation_id=base_task['conversation_id'],
             requested_by_message_id=base_task['requested_by_message_id'],
             intent='generate', state='running'))
@@ -413,7 +452,7 @@ async def test_web_search_tool_is_available_to_every_agent_when_key_is_configure
         materials, '处理', **({'step1_view': 'global'} if stage == 'step1' else {}))
     names = {tool['name'] for tool in requests[0].get('tools', [])}
     assert ('web_search' in names) is configured
-    if stage == 'aux.summary':
+    if stage in ('aux.summary', 'aux.format_repair'):
         assert names == ({'web_search'} if configured else set())
     else:
         assert {'list_records', 'read_record'} <= names
