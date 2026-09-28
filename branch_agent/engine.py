@@ -582,19 +582,33 @@ class Engine:
                 else:
                     # Root workflows waiting for child completion may advance without a model call.
                     for root in [t for t in tasks if self._task_data(t).get("is_workflow") and t["state"] in ("queued", "running", "waiting_user")]:
-                        if not self._task_data(root).get("manager_controlled"):
+                        root_data = self._task_data(root)
+                        if not root_data.get("manager_controlled") or root_data.get("harness_scheduled"):
                             self._advance_root(root)
-                    requests = sorted(all_records(self.store, project, "queued_request", conversation_id=cid), key=lambda q: q["sequence"])
-                    gate = self._control(project, cid)
-                    hold_times = [self.store.get(h["basis_event_id"], project_id=project)["created_at"] for h in self._effective_holds(project, gate)]
-                    if hold_times:
-                        for request in requests:
-                            if request["state"] == "pending" and request["mode"] == "queue" and request["created_at"] <= max(hold_times) and not self._single_queue_release_valid(request):
-                                update(self.store, request, state="blocked", blocked_reason="queue_hold")
+                    # Advancing a root can enqueue its next specialist. Run it
+                    # in this tick, instead of leaving an avoidable scheduler
+                    # cycle between an approval and the next authorized stage.
+                    tasks = all_records(self.store, project, "task", conversation_id=cid)
+                    queued = sorted([t for t in tasks if (t["state"] == "queued" or (t["state"] == "running" and t["current_run_id"] is None)) and not self._task_data(t).get("is_workflow") and not self._task_data(t).get("parent_owned") and not self._task_data(t).get("batch_owned") and (not self._task_data(t).get("coordinator") or self._task_data(t).get("chapter_planning"))], key=lambda t: t["created_at"])
+                    executable = next((t for t in queued if self._ancestors_allow(t)
+                                       and (not self._task_data(t).get("next_retry_at") or self._task_data(t)["next_retry_at"] <= self.store.now())), None)
+                    if executable:
+                        selected = ("task", executable)
+                        continue_to_queue = False
+                    else:
+                        continue_to_queue = True
+                    if continue_to_queue:
                         requests = sorted(all_records(self.store, project, "queued_request", conversation_id=cid), key=lambda q: q["sequence"])
-                    pending = next((q for q in requests if q["state"] == "pending" and q["mode"] == "queue"
-                                    and self._projection(project, "queue_context", q["id"]).get("request_hash")), None)
-                    selected = ("queue", pending) if pending else None
+                        gate = self._control(project, cid)
+                        hold_times = [self.store.get(h["basis_event_id"], project_id=project)["created_at"] for h in self._effective_holds(project, gate)]
+                        if hold_times:
+                            for request in requests:
+                                if request["state"] == "pending" and request["mode"] == "queue" and request["created_at"] <= max(hold_times) and not self._single_queue_release_valid(request):
+                                    update(self.store, request, state="blocked", blocked_reason="queue_hold")
+                            requests = sorted(all_records(self.store, project, "queued_request", conversation_id=cid), key=lambda q: q["sequence"])
+                        pending = next((q for q in requests if q["state"] == "pending" and q["mode"] == "queue"
+                                        and self._projection(project, "queue_context", q["id"]).get("request_hash")), None)
+                        selected = ("queue", pending) if pending else None
             if selected:
                 if selected[0] == "task":
                     await self._execute(selected[1], token)
@@ -740,6 +754,12 @@ class Engine:
             if root["state"] != state:
                 self._transition(root, state)
             return
+        def dispatch(stage, chapter=None):
+            self._dispatch(root, stage, chapter)
+            current = self.store.get(root["id"], project_id=root["project_id"])
+            if current["state"] != "running":
+                self._transition(current, "running")
+
         stages = data.get("stages", list(range(1, 12)))
         for stage in stages:
             if stage in (9, 10):
@@ -751,17 +771,17 @@ class Engine:
             # run; require a successful stage-6 child before advancing.
             if stage == 6 and not any(t["scope"].get("stage") == 6 and t["state"] == "succeeded"
                                      for t in children):
-                self._dispatch(root, stage)
+                dispatch(stage)
                 return
             if (data.get('fresh_start') or stage in (3, 4)) and not any(
                     t['scope']['stage'] == stage and t['state'] == 'succeeded' for t in children):
-                self._dispatch(root, stage)
+                dispatch(stage)
                 return
             try:
                 for output_kind in STAGE_OUTPUTS.get(stage, (STAGES[stage],)):
                     self.workflow.resolve(root["project_id"], output_kind)
             except WorkflowBlocked:
-                self._dispatch(root, stage)
+                dispatch(stage)
                 return
         chapter_ids = data.get("chapter_ids", [])
         if any(s in stages for s in (9, 10, 11)) and not chapter_ids:
@@ -779,15 +799,15 @@ class Engine:
             pairs = [(s, c) for s in (9, 10) if s in stages for c in chapter_ids]
         for stage, chapter in pairs:
             if data.get('fresh_start') and not any(t['scope']['stage'] == stage and chapter in t['scope']['chapter_ids'] and t['state'] == 'succeeded' for t in children):
-                self._dispatch(root, stage, chapter)
+                dispatch(stage, chapter)
                 return
             try:
                 self.workflow.resolve(root["project_id"], STAGES[stage], chapter)
             except WorkflowBlocked:
-                self._dispatch(root, stage, chapter)
+                dispatch(stage, chapter)
                 return
         if 11 in stages and not any(t["scope"]["stage"] == 11 and t["state"] == "succeeded" for t in children):
-            self._dispatch(root, 11)
+            dispatch(11)
             return
         if root["state"] != "succeeded":
             self._transition(root, "succeeded")
@@ -846,7 +866,8 @@ class Engine:
         step2 = self._new_task(project, conversation, message, 'generate', is_workflow=True,
             stages=[2], chapter_ids=[], request='使用已确认的两份 Step1 固定事件视图生成原作知识资产。',
             source_ref=review['source_ref'], step1_input_refs=deepcopy(review['artifact_refs']),
-            manager_controlled=True, triggered_by_step1_task_id=root['id'])
+            manager_controlled=True, harness_scheduled=True,
+            fresh_start=True, triggered_by_step1_task_id=root['id'])
         data['step1_continuation_task_id'] = step2['id']
         self._save_task_data(root, data)
         self._event(project, 'source.step2_queued', {
@@ -2661,6 +2682,7 @@ class Engine:
                     if manager_halt.get("status") == "prerequisite_pending":
                         roots = [candidate for candidate in all_records(self.store, project, "task", conversation_id=cid)
                                  if self._task_data(candidate).get("manager_controlled")
+                                 and not self._task_data(candidate).get("harness_scheduled")
                                  and candidate["state"] in ("queued", "running", "waiting_user")]
                         if roots:
                             self._transition(roots[-1], "paused", "manager_prerequisite_pending")
@@ -2707,6 +2729,8 @@ class Engine:
                              if self._task_data(candidate).get("manager_controlled")
                              and candidate["state"] in ("queued", "running", "waiting_user")]
                     for root in roots:
+                        if self._task_data(root).get('harness_scheduled'):
+                            continue
                         members = [root] + all_records(self.store, project, "task", parent_task_id=root["id"])
                         if not any(item["state"] == "open" for member in members
                                    for item in self._task_data(member).get("pending_user_items", [])):
@@ -2918,7 +2942,8 @@ class Engine:
         # confirmation). Always inspect the current row before a second state
         # change; the passed snapshot may carry an obsolete row_version.
         root = self.store.get(root["id"], project_id=root["project_id"])
-        if not self._task_data(root).get("manager_controlled"):
+        data = self._task_data(root)
+        if not data.get("manager_controlled") or data.get("harness_scheduled"):
             return None
         project, conversation = root["project_id"], root["conversation_id"]
         key = f"{project}:manager_resume:{message['id']}"

@@ -175,11 +175,20 @@ def build_manager_tools(engine, coordinator_task, coordinator_run, source_messag
             if not engine._task_data(target).get("is_workflow"):
                 raise WorkflowBlocked("manager_workflow_missing")
             data = engine._task_data(target)
-            data["manager_controlled"] = True
+            if not data.get("source_ref"):
+                raise WorkflowBlocked("missing_material", {"kind": "source_text"})
+            data.update(manager_controlled=True, harness_scheduled=True, fresh_start=True)
             engine._save_task_data(target, data)
             selected["root_id"] = target["id"]
-            return _json({"status": "started", "workflow_id": target["id"],
-                          "stages": data["stages"], "source_available": bool(data.get("source_ref"))})
+            # Creating a workflow is the authorization boundary. Schedule its
+            # first eligible child here so model prose cannot leave Step1 idle.
+            engine._advance_root(target)
+            current = engine.store.get(target["id"], project_id=project)
+            children = all_records(engine.store, project, "task", parent_task_id=target["id"])
+            return _json({"status": "started" if current["state"] != "paused" else "paused",
+                          "workflow_id": target["id"], "stages": data["stages"],
+                          "source_available": True,
+                          "stage_task_id": children[-1]["id"] if children else None})
 
     @function_tool(failure_error_function=None)
     async def run_stage(stage: int, chapter_id: str | None = None) -> str:
@@ -206,6 +215,17 @@ def build_manager_tools(engine, coordinator_task, coordinator_run, source_messag
             pending = [{"id": item["id"], "task_id": task["id"], "stage": engine._task_data(task).get("stage")}
                        for task in [workflow] + children
                        for item in engine._task_data(task).get("pending_user_items", []) if item["state"] == "open"]
+            if data.get("harness_scheduled"):
+                # A model can still call the legacy tool, including for a
+                # downstream stage whose prerequisites are absent. It must not
+                # seize a child or pause the automatic workflow.
+                active = next((task for task in reversed(children)
+                               if task["state"] in ("queued", "running", "waiting_user")), None)
+                return _json({"status": "needs_user_input" if pending else "harness_scheduled",
+                              "workflow_id": workflow["id"], "state": workflow["state"],
+                              "stage_task_id": active["id"] if active else None,
+                              "active_stage": engine._task_data(active).get("stage") if active else None,
+                              "pending": pending})
             if pending:
                 return _json({"status": "needs_user_input", "pending": pending})
             candidates = [task for task in children if task["state"] == "waiting_user"
@@ -331,8 +351,14 @@ def build_manager_tools(engine, coordinator_task, coordinator_run, source_messag
                 raise WorkflowBlocked("answer_required")
             data = engine._task_data(task)
             data["request"] = data.get("request", "") + f"\n问题 {item.get('question_id') or item['id']}：{item['description']}\n用户明确答复（{source_message['id']}）：{answer}"
-            item.update(state="resolved", answer_message_ids=[source_message["id"]])
-            data["parent_owned"] = True
+            for pending_item in data["pending_user_items"]:
+                if pending_item["id"] == pending_item_id:
+                    pending_item.update(state="resolved", answer_message_ids=[source_message["id"]])
+                    break
+            if not engine._task_data(workflow).get("harness_scheduled"):
+                data["parent_owned"] = True
+            else:
+                data.pop("parent_owned", None)
             engine._save_task_data(task, data)
             if not any(p["state"] == "open" for p in data["pending_user_items"]):
                 engine._transition(task, "queued", source=source_message["id"])

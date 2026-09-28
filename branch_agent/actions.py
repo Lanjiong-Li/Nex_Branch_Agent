@@ -311,16 +311,31 @@ class ActionService:
                 self.engine.control_task(pid, ctx['task']['id'], 'continue', additional_seconds=int(seconds), additional_cost=str(amount))
                 self._resume_waiting_ancestors(pid, cid, ctx['task'], message)
                 root = ctx['root']
-                if self.engine._task_data(root).get('manager_controlled'):
+                root_data = self.engine._task_data(root)
+                if root_data.get('manager_controlled'):
+                    if not root_data.get('harness_scheduled'):
+                        # Resuming an old manager workflow is an explicit
+                        # recovery decision. Let the Harness own the remaining
+                        # stages instead of requiring another coordinator turn.
+                        root_data['harness_scheduled'] = True
+                        children = all_records(self.store, pid, 'task', parent_task_id=root['id'])
+                        if (1 in root_data.get('stages', []) and not root_data.get('recovery_stage')
+                                and not any(not self.engine._task_data(child).get('superseded_by_task_id')
+                                            for child in children)):
+                            # An old root with no Stage 1 child never executed
+                            # its own source analysis, even if another run has
+                            # effective views for the same project.
+                            root_data['fresh_start'] = True
+                        self.engine._save_task_data(root, root_data)
                     for task in self._tasks(pid, cid):
                         if task['parent_task_id'] != root['id'] or task['state'] != 'queued':
                             continue
                         data = self.engine._task_data(task)
-                        if data.get('stage') in STAGES and not data.get('batch_owned'):
-                            data['parent_owned'] = True
+                        if data.get('stage') in STAGES and data.get('parent_owned') and not data.get('batch_owned'):
+                            data.pop('parent_owned')
                             self.engine._save_task_data(task, data)
                     root = self.store.get(root['id'], project_id=pid)
-                    self.engine._queue_manager_resume(root, message)
+                    self.engine._advance_root(root)
                 receipt = {'status': 'queued', 'task_id': ctx['task']['id']}
             else:
                 receipt = self._restart(pid, cid, ctx, action_id, values, message)
@@ -351,6 +366,21 @@ class ActionService:
             self.engine._save_projection(pid, 'conversation_control', cid, gate)
             self.engine._event(pid, 'queue.gate_changed', {'released_holds': released, 'holds': gate['holds'],
                 'reason': 'explicit_child_resumed', 'source_message_id': message['id']}, conversation=cid, task=task['id'], source=message['id'])
+
+    def _resume_harness_parent(self, parent, message):
+        if not parent:
+            return
+        parent = self.store.get(parent['id'], project_id=parent['project_id'])
+        data = self.engine._task_data(parent)
+        if parent['state'] != 'waiting_user' or not data.get('harness_scheduled'):
+            return
+        if any(item['state'] == 'open' for item in data.get('pending_user_items', [])):
+            return
+        children = all_records(self.store, parent['project_id'], 'task', parent_task_id=parent['id'])
+        if any(child['state'] == 'waiting_user' and not self.engine._task_data(child).get('superseded_by_task_id')
+               for child in children):
+            return
+        self.engine._transition(parent, 'running', source=message['id'])
 
     def _pending(self, pid, cid, ctx, action_id, values, message):
         task, item = ctx['task'], ctx['pending']
@@ -412,12 +442,14 @@ class ActionService:
                 self.engine._transition(task, 'succeeded', source=message['id'])
             else:
                 parent = self.store.get(task['parent_task_id'], project_id=pid) if task['parent_task_id'] else None
-                if action_id != 'confirm' and parent and self.engine._task_data(parent).get('manager_controlled'):
+                parent_data = self.engine._task_data(parent) if parent else {}
+                if action_id != 'confirm' and parent_data.get('manager_controlled') and not parent_data.get('harness_scheduled'):
                     data['parent_owned'] = True
                     self.engine._save_task_data(task, data)
                 self.engine._transition(task, 'succeeded' if action_id == 'confirm' else 'queued', source=message['id'])
-                if parent and self.engine._task_data(parent).get('manager_controlled'):
+                if parent_data.get('manager_controlled') and not parent_data.get('harness_scheduled'):
                     self.engine._queue_manager_resume(parent, message)
+                self._resume_harness_parent(parent, message)
             if data.get('batch_owned') and task['parent_task_id']:
                 parent = self.store.get(task['parent_task_id'], project_id=pid)
                 pdata = self.engine._task_data(parent)
@@ -439,11 +471,12 @@ class ActionService:
                 chapter_ids=deepcopy(data.get('chapter_ids', [])),
                 source_ref=review['source_ref'], fresh_start=True,
                 manager_controlled=manager_controlled,
+                harness_scheduled=bool(data.get('harness_scheduled')),
                 request=data.get('request', '') + '\n根据用户意见重新执行 Step1 两路事件视图：' + text,
                 replaces_task_id=task['id'])
             _, tree = self._tree(task, self._tasks(pid, cid))
             self._supersede(pid, cid, tree, replacement, message)
-            if manager_controlled and schedule_manager_resume:
+            if manager_controlled and not data.get('harness_scheduled') and schedule_manager_resume:
                 self.engine._queue_manager_resume(replacement, message)
             return {'status': 'queued', 'task_id': replacement['id']}
         if data.get('chapter_plan') and data.get('is_workflow'):
@@ -456,7 +489,7 @@ class ActionService:
                     p.update(state='resolved', answer_message_ids=[message['id']])
             self.engine._save_task_data(task, data)
             self.engine._transition(task, 'queued', source=message['id'])
-            if schedule_manager_resume and data.get('manager_controlled'):
+            if schedule_manager_resume and data.get('manager_controlled') and not data.get('harness_scheduled'):
                 self.engine._queue_manager_resume(task, message)
             return {'status': 'queued', 'task_id': task['id']}
         if data.get('stage') not in STAGES or data.get('batch_owned'):
@@ -467,13 +500,15 @@ class ActionService:
         if not parent:
             replacement = update(self.store, replacement, budget_root_task_id=task['budget_root_task_id'])
         self._freeze(replacement, data['stage'])
-        if parent and self.engine._task_data(parent).get('manager_controlled'):
+        parent_data = self.engine._task_data(parent) if parent else {}
+        if parent_data.get('manager_controlled') and not parent_data.get('harness_scheduled'):
             replacement_data = self.engine._task_data(replacement)
             replacement_data['parent_owned'] = True
             self.engine._save_task_data(replacement, replacement_data)
         self._supersede(pid, cid, [task], replacement, message)
-        if schedule_manager_resume and parent and self.engine._task_data(parent).get('manager_controlled'):
+        if schedule_manager_resume and parent_data.get('manager_controlled') and not parent_data.get('harness_scheduled'):
             self.engine._queue_manager_resume(parent, message)
+        self._resume_harness_parent(parent, message)
         return {'status': 'queued', 'task_id': replacement['id']}
 
     def _freeze(self, task, stage):
@@ -532,18 +567,18 @@ class ActionService:
             chapter_ids=[] if fresh else deepcopy(rootdata.get('chapter_ids', [])),
             request=request, fresh_start=fresh, source_ref=ref(ctx['source']), replaces_task_id=root['id'],
             manager_controlled=bool(rootdata.get('manager_controlled')),
+            # A recovery restart creates a fresh root. Migrate even a legacy
+            # manager workflow to deterministic dispatch; the archived task
+            # tree remains available for audit.
+            harness_scheduled=bool(rootdata.get('manager_controlled') or rootdata.get('harness_scheduled')),
             recovery_stage=stage if rootdata.get('manager_controlled') else None)
         limits = deepcopy(newroot['budget'])
         limits.update(max_cost={'amount': str(cost), 'currency': 'USD'} if cost is not None else None,
                       max_active_seconds=int(seconds), disabled_limits=[] if self.engine.cost_gates_enabled else ['cost'])
         newroot = update(self.store, newroot, budget=limits)
         self._supersede(pid, cid, ctx['tree'], newroot, message)
-        if rootdata.get('manager_controlled'):
-            self.engine._queue_manager_resume(newroot, message)
-            child = None
-        else:
-            child = self.engine._dispatch(newroot, stage, None if fresh else olddata.get('chapter_id'), request=request)
-            self._freeze(child, stage)
+        child = self.engine._dispatch(newroot, stage, None if fresh else olddata.get('chapter_id'), request=request)
+        self._freeze(child, stage)
         if self.engine.cost_gates_enabled and ctx['unknown_calls']:
             self.engine._event(pid, 'usage.unknown_accepted', {'model_call_refs': [ref(c) for c in ctx['unknown_calls']],
                 'old_budget_root_task_id': root['budget_root_task_id'], 'new_budget_root_task_id': newroot['id'],

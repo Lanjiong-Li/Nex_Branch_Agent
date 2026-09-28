@@ -231,7 +231,7 @@ def test_fresh_restart_rebuilds_step_one_even_when_previous_effective_exists(run
     assert any(t['scope']['stage']==1 and t['state']=='succeeded' for t in children)
 
 
-def test_manager_restart_returns_dispatch_to_coordinator(runtime):
+def test_legacy_manager_restart_migrates_to_harness_dispatch(runtime):
     engine, _, pid, cid = runtime
     service = ActionService(engine)
     root, child = initial_task(runtime)
@@ -246,15 +246,17 @@ def test_manager_restart_returns_dispatch_to_coordinator(runtime):
                      {'max_cost_usd': '2', 'max_active_seconds': 600})
     replacement = engine.store.get(receipt['task_id'], pid)
     assert engine._task_data(replacement)['manager_controlled'] is True
+    assert engine._task_data(replacement)['harness_scheduled'] is True
     assert engine._task_data(replacement)['recovery_stage'] == 1
-    assert not engine.store.list(pid, 'task', filters={'parent_task_id': replacement['id']})
-    pending = [item for item in engine.store.list(pid, 'queued_request', filters={'conversation_id': cid})
-               if item['state'] == 'pending']
-    assert len(pending) == 1
-    assert engine._projection(pid, 'queue_context', pending[0]['id'])['manager_resume'] is True
+    stage = engine.store.get(receipt['stage_task_id'], pid)
+    assert stage['parent_task_id'] == replacement['id']
+    assert stage['scope']['stage'] == 1
+    assert not engine._task_data(stage).get('parent_owned')
+    assert not [item for item in engine.store.list(pid, 'queued_request', filters={'conversation_id': cid})
+                if engine._projection(pid, 'queue_context', item['id']).get('manager_resume')]
 
 
-def test_manager_resume_leaves_stage_for_manager_tool(runtime):
+def test_legacy_manager_resume_migrates_stage_to_harness(runtime):
     engine, _, pid, cid = runtime
     service = ActionService(engine)
     root, child = initial_task(runtime)
@@ -262,16 +264,157 @@ def test_manager_resume_leaves_stage_for_manager_tool(runtime):
         data = engine._task_data(root)
         data['manager_controlled'] = True
         engine._save_task_data(root, data)
+        child_data = engine._task_data(child)
+        child_data['parent_owned'] = True
+        engine._save_task_data(child, child_data)
         engine._transition(child, 'paused', 'repair_exhausted')
         engine._transition(root, 'paused', 'child_blocked')
-    shown = card(service, pid, cid, 'task:' + child['id'])
+    shown = card(service, pid, cid, 'task:' + root['id'])
     submit(service, pid, cid, shown, 'resume')
     assert engine.store.get(child['id'], pid)['state'] == 'queued'
-    assert engine._task_data(child)['parent_owned'] is True
-    pending = [item for item in engine.store.list(pid, 'queued_request', filters={'conversation_id': cid})
-               if item['state'] == 'pending']
-    assert len(pending) == 1
-    assert engine._projection(pid, 'queue_context', pending[0]['id'])['manager_resume'] is True
+    assert engine._task_data(engine.store.get(root['id'], pid))['harness_scheduled'] is True
+    assert not engine._task_data(child).get('parent_owned')
+    assert not [item for item in engine.store.list(pid, 'queued_request', filters={'conversation_id': cid})
+                if engine._projection(pid, 'queue_context', item['id']).get('manager_resume')]
+
+
+def test_legacy_manager_root_without_child_resumes_by_scheduling_step1(runtime):
+    engine, _, pid, cid = runtime
+    service = ActionService(engine)
+    imported = engine.import_source(pid, cid, '甲见乙。', '原作')
+    with engine.store.transaction():
+        seed_knowledge_asset(engine, pid)
+        message = engine._message(pid, cid, '开始改编', role='user')
+        root = engine._new_task(pid, cid, message, 'generate', is_workflow=True,
+                                stages=[1], request='开始改编', source_ref=ref(imported['source']),
+                                manager_controlled=True)
+        engine._transition(root, 'paused', 'manager_no_progress')
+
+    shown = card(service, pid, cid, 'task:' + root['id'])
+    receipt = submit(service, pid, cid, shown, 'resume')
+    assert receipt['task_id'] == root['id']
+    current = engine.store.get(root['id'], pid)
+    assert engine._task_data(current)['harness_scheduled'] is True
+    assert engine._task_data(current)['fresh_start'] is True
+    children = engine.store.list(pid, 'task', filters={'parent_task_id': root['id']})
+    assert len(children) == 1
+    assert children[0]['scope']['stage'] == 1 and children[0]['state'] == 'queued'
+    assert not engine._task_data(children[0]).get('parent_owned')
+    assert not [item for item in engine.store.list(pid, 'queued_request', filters={'conversation_id': cid})
+                if engine._projection(pid, 'queue_context', item['id']).get('manager_resume')]
+
+
+def test_legacy_manager_stage_rerun_dispatches_exact_failed_stage(runtime):
+    engine, _, pid, cid = runtime
+    service = ActionService(engine)
+    root, child = initial_task(runtime, stage=2)
+    with engine.store.transaction():
+        seed_knowledge_asset(engine, pid)
+        data = engine._task_data(root)
+        data['manager_controlled'] = True
+        engine._save_task_data(root, data)
+        engine._transition(child, 'paused', 'repair_exhausted')
+        engine._transition(root, 'paused', 'child_blocked')
+
+    shown = card(service, pid, cid, 'task:' + child['id'])
+    assert not next(a for a in shown['actions'] if a['id'] == 'rerun_published')['disabled_reason']
+    receipt = submit(service, pid, cid, shown, 'rerun_published',
+                     {'max_cost_usd': '2', 'max_active_seconds': 600})
+    replacement = engine.store.get(receipt['task_id'], pid)
+    stage = engine.store.get(receipt['stage_task_id'], pid)
+    assert engine._task_data(replacement)['harness_scheduled'] is True
+    assert engine._task_data(replacement)['recovery_stage'] == 2
+    assert stage['parent_task_id'] == replacement['id']
+    assert stage['scope']['stage'] == 2 and stage['state'] == 'queued'
+    assert not engine._task_data(stage).get('parent_owned')
+
+
+def test_harness_scheduled_restart_dispatches_step1_without_manager_resume(runtime):
+    engine, _, pid, cid = runtime
+    service = ActionService(engine)
+    root, child = initial_task(runtime)
+    with engine.store.transaction():
+        data = engine._task_data(root)
+        data.update(manager_controlled=True, harness_scheduled=True)
+        engine._save_task_data(root, data)
+        engine._transition(child, 'paused', 'repair_exhausted')
+        engine._transition(root, 'paused', 'child_blocked')
+
+    receipt = submit(service, pid, cid, card(service, pid, cid, 'task:' + child['id']),
+                     'restart', {'max_cost_usd': '2', 'max_active_seconds': 600})
+    replacement = engine.store.get(receipt['task_id'], pid)
+    stage = engine.store.get(receipt['stage_task_id'], pid)
+    assert engine._task_data(replacement)['harness_scheduled'] is True
+    assert engine._task_data(replacement)['manager_controlled'] is True
+    assert stage['parent_task_id'] == replacement['id']
+    assert stage['scope']['stage'] == 1
+    assert not engine._task_data(stage).get('parent_owned')
+    assert not [q for q in engine.store.list(pid, 'queued_request')
+                if engine._projection(pid, 'queue_context', q['id']).get('manager_resume')]
+
+
+def test_harness_scheduled_resume_keeps_stage_executable_without_manager_resume(runtime):
+    engine, _, pid, cid = runtime
+    service = ActionService(engine)
+    root, child = initial_task(runtime)
+    with engine.store.transaction():
+        data = engine._task_data(root)
+        data.update(manager_controlled=True, harness_scheduled=True)
+        engine._save_task_data(root, data)
+        engine._transition(child, 'paused', 'repair_exhausted')
+        engine._transition(root, 'paused', 'child_blocked')
+
+    submit(service, pid, cid, card(service, pid, cid, 'task:' + child['id']), 'resume')
+    resumed = engine.store.get(child['id'], pid)
+    assert resumed['state'] == 'queued'
+    assert engine._ancestors_allow(resumed)
+    assert not engine._task_data(resumed).get('parent_owned')
+    assert not [q for q in engine.store.list(pid, 'queued_request')
+                if engine._projection(pid, 'queue_context', q['id']).get('manager_resume')]
+
+
+def test_harness_scheduled_answer_requeues_stage_without_parent_ownership(runtime):
+    engine, _, pid, cid = runtime
+    service = ActionService(engine)
+    child = pending_question(runtime, ('唯一问题',))
+    root = engine.store.get(child['parent_task_id'], pid)
+    with engine.store.transaction():
+        data = engine._task_data(root)
+        data.update(manager_controlled=True, harness_scheduled=True)
+        engine._save_task_data(root, data)
+        engine._transition(root, 'waiting_user')
+
+    item = engine._task_data(child)['pending_user_items'][0]
+    submit(service, pid, cid, card(service, pid, cid, 'pending:' + item['id']),
+           'answer', {'answer': '保留'})
+    assert engine.store.get(child['id'], pid)['state'] == 'queued'
+    assert engine.store.get(root['id'], pid)['state'] == 'running'
+    assert not engine._task_data(child).get('parent_owned')
+    assert not [q for q in engine.store.list(pid, 'queued_request')
+                if engine._projection(pid, 'queue_context', q['id']).get('manager_resume')]
+
+
+def test_harness_scheduled_stage_revision_is_executable_without_manager_resume(runtime):
+    engine, _, pid, cid = runtime
+    service = ActionService(engine)
+    child, _ = pending_confirmation(runtime)
+    root = engine.store.get(child['parent_task_id'], pid)
+    with engine.store.transaction():
+        data = engine._task_data(root)
+        data.update(manager_controlled=True, harness_scheduled=True)
+        engine._save_task_data(root, data)
+        engine._transition(root, 'waiting_user')
+
+    item = engine._task_data(child)['pending_user_items'][0]
+    receipt = submit(service, pid, cid, card(service, pid, cid, 'pending:' + item['id']),
+                     'request_changes', {'text': '调整人物关系'})
+    replacement = engine.store.get(receipt['task_id'], pid)
+    assert replacement['parent_task_id'] == root['id']
+    assert replacement['state'] == 'queued'
+    assert engine.store.get(root['id'], pid)['state'] == 'running'
+    assert not engine._task_data(replacement).get('parent_owned')
+    assert not [q for q in engine.store.list(pid, 'queued_request')
+                if engine._projection(pid, 'queue_context', q['id']).get('manager_resume')]
 
 
 def test_resume_keeps_frozen_config_and_budget_without_silent_increment(runtime):

@@ -159,6 +159,57 @@ def step1_view_message(engine, project, original, request_data):
     return message(result)
 
 
+@pytest.mark.asyncio
+async def test_begin_adaptation_queues_step1_without_a_manager_run_stage_call(runtime):
+    store, project, conversation = runtime
+    original = "甲见乙。"
+    calls = []
+
+    def handler(request):
+        data = json.loads(request.content)
+        calls.append(data)
+        if len(calls) == 1:
+            return httpx.Response(200, json=call("begin_adaptation", {
+                "request": "完整改编", "source_is_current_message": False,
+                "stage": None, "chapter_id": None}, 1))
+        if len(calls) == 2:
+            return httpx.Response(200, json=message({
+                "result_kind": "ready", "payload": {"reply": "已开始处理原作。",
+                    "source_message_kind": "request", "task_requests": []},
+                "questions": [], "evidence_refs": [], "notes": []}))
+        if len(calls) in (3, 4):
+            return httpx.Response(200, json=step1_view_message(engine, project, original, data))
+        pytest.fail("Step1 审阅前不应自动调用其他 Agent")
+
+    client = AsyncOpenAI(api_key="local-mock", http_client=httpx.AsyncClient(
+        transport=mock_transport(handler)), max_retries=0)
+    engine = Engine(store, ModelService(store, client), ConfigService(store))
+    engine.import_source(project, conversation, original, "测试原作")
+    engine.submit_message(project, conversation, "开始改编")
+    await engine.tick(project, conversation)
+
+    root = next(task for task in all_records(store, project, "task")
+                if engine._task_data(task).get("manager_controlled"))
+    step1 = [task for task in all_records(store, project, "task")
+             if task["parent_task_id"] == root["id"]
+             and engine._task_data(task).get("stage") == 1]
+    assert len(step1) == 1 and step1[0]["state"] == "queued"
+    assert engine._task_data(root)["harness_scheduled"] is True
+    assert not [item for item in all_records(store, project, "queued_request")
+                if item["state"] == "pending"
+                and engine._projection(project, "queue_context", item["id"]).get("manager_resume")]
+
+    await engine.tick(project, conversation)
+    assert store.get(root["id"], project_id=project)["state"] == "waiting_user"
+    assert {task["agent_key"] for task in all_records(store, project, "run")
+            if task["task_id"] in {child["id"] for child in all_records(store, project, "task")
+                                   if child["parent_task_id"] == step1[0]["id"]}} == {
+        "source_global_parser", "source_character_parser"}
+    assert not [tool for tool in all_records(store, project, "tool_call")
+                if tool["tool_name"] == "run_stage"]
+    await client.close()
+
+
 def test_ask_user_result_requires_a_real_tool_marker():
     assert ask_user_request('{"result_kind":"needs_input"}') is None
     assert ask_user_request('{"_harness_tool":"ask_user","questions":['
@@ -180,6 +231,14 @@ def test_completed_workflow_receipt_stops_the_manager_before_another_model_turn(
             output=json.dumps({"status": "completed", "workflow_id": "workflow-1"}))])
         assert result.is_final_output
         assert manager_halt_request(result.final_output)["status"] == "completed"
+
+
+def test_harness_scheduled_receipt_stops_the_manager_before_another_model_turn():
+    result = manager_tool_behavior(None, [SimpleNamespace(
+        tool=SimpleNamespace(name="run_stage"),
+        output=json.dumps({"status": "harness_scheduled", "workflow_id": "workflow-1"}))])
+    assert result.is_final_output
+    assert manager_halt_request(result.final_output)["status"] == "harness_scheduled"
 
 
 @pytest.mark.asyncio
@@ -214,7 +273,7 @@ async def test_step11_delivery_closes_manager_workflow_without_model_finish_call
 
 
 @pytest.mark.asyncio
-async def test_child_question_stops_manager_before_next_stage_or_duplicate_confirmation(runtime):
+async def test_child_question_stops_next_stage_and_chat_answer_requeues_harness_child(runtime):
     store, project, conversation = runtime
     calls = []
 
@@ -225,9 +284,19 @@ async def test_child_question_stops_manager_before_next_stage_or_duplicate_confi
             return httpx.Response(200, json=call("begin_adaptation", {"request": "完整改编",
                 "source_is_current_message": False, "stage": None, "chapter_id": None}, number))
         if number == 2:
-            return httpx.Response(200, json=call("run_stage", {"stage": 1,
-                "chapter_id": None}, number))
-        pytest.fail("等待用户回答后不应再次调用模型")
+            return httpx.Response(200, json=message({"result_kind": "ready", "payload": {
+                "reply": "已开始处理原作。", "source_message_kind": "request", "task_requests": []},
+                "questions": [], "evidence_refs": [], "notes": []}))
+        if number == 3:
+            child = next(task for task in all_records(store, project, "task")
+                         if engine._task_data(task).get("stage") == 1)
+            pending_id = engine._task_data(child)["pending_user_items"][0]["id"]
+            return httpx.Response(200, json=call("answer_pending", {"pending_item_id": pending_id}, number))
+        if number == 4:
+            return httpx.Response(200, json=message({"result_kind": "ready", "payload": {
+                "reply": "已记录时间顺序。", "source_message_kind": "request", "task_requests": []},
+                "questions": [], "evidence_refs": [], "notes": []}))
+        pytest.fail("回答问题后不应执行其他 Agent")
 
     client = AsyncOpenAI(api_key="local-mock", http_client=httpx.AsyncClient(
         transport=mock_transport(handler)), max_retries=0)
@@ -245,6 +314,8 @@ async def test_child_question_stops_manager_before_next_stage_or_duplicate_confi
     engine.import_source(project, conversation, "甲见乙。", "测试原作")
     engine.submit_message(project, conversation, "开始改编")
     await engine.tick(project, conversation)
+    await engine.tick(project, conversation)
+    await engine.tick(project, conversation)  # Reflect the child question on its root.
     assert len(calls) == 2
     root = next(task for task in all_records(store, project, "task")
                 if engine._task_data(task).get("manager_controlled"))
@@ -269,13 +340,23 @@ async def test_child_question_stops_manager_before_next_stage_or_duplicate_confi
     assert receipt["status"] == "needs_user_input"
     assert receipt["pending"][0]["task_id"] == children[0]["id"]
     assert len(all_records(store, project, "task", parent_task_id=root["id"])) == 1
+    engine.submit_message(project, conversation, "按故事先后顺序")
+    await engine.tick(project, conversation)
+    answered = store.get(children[0]["id"], project_id=project)
+    assert answered["state"] == "queued"
+    assert store.get(root["id"], project_id=project)["state"] == "running"
+    assert not engine._task_data(answered).get("parent_owned")
+    assert not [item for item in engine._task_data(answered)["pending_user_items"]
+                if item["state"] == "open"]
+    assert len(calls) == 4
     await client.close()
 
 
 @pytest.mark.asyncio
-async def test_missing_upstream_does_not_dispatch_child_or_create_user_question(runtime):
+async def test_manual_stage_request_cannot_preempt_harness_scheduled_step1(runtime):
     store, project, conversation = runtime
     calls = []
+    before_stage_call = {}
 
     def handler(request):
         calls.append(json.loads(request.content))
@@ -283,8 +364,16 @@ async def test_missing_upstream_does_not_dispatch_child_or_create_user_question(
             return httpx.Response(200, json=call("begin_adaptation", {"request": "完整改编",
                 "source_is_current_message": False, "stage": None, "chapter_id": None}, 1))
         if len(calls) == 2:
+            root = next(task for task in all_records(store, project, "task")
+                        if engine._task_data(task).get("manager_controlled"))
+            child = next(task for task in all_records(store, project, "task", parent_task_id=root["id"])
+                         if engine._task_data(task).get("stage") == 1)
+            before_stage_call.update(root_id=root["id"], root_state=root["state"],
+                                     child_id=child["id"], child_state=child["state"])
             return httpx.Response(200, json=call("run_stage", {"stage": 4, "chapter_id": None}, 2))
-        pytest.fail("上游材料缺失后不应继续调用模型")
+        if len(calls) in (3, 4):
+            return httpx.Response(200, json=step1_view_message(engine, project, "甲见乙。", json.loads(request.content)))
+        pytest.fail("Step1 审阅前不应执行其他 Agent")
 
     client = AsyncOpenAI(api_key="local-mock", http_client=httpx.AsyncClient(
         transport=mock_transport(handler)), max_retries=0)
@@ -294,10 +383,18 @@ async def test_missing_upstream_does_not_dispatch_child_or_create_user_question(
     await engine.tick(project, conversation)
     root = next(task for task in all_records(store, project, "task")
                 if engine._task_data(task).get("manager_controlled"))
-    assert root["state"] == "paused"
-    assert root["pause_reason"] == "manager_prerequisite_pending"
-    assert all_records(store, project, "task", parent_task_id=root["id"]) == []
-    assert ActionService(engine).list_cards(project, conversation)["cards"] == []
+    assert root["id"] == before_stage_call["root_id"]
+    assert root["state"] == before_stage_call["root_state"]
+    step1 = [task for task in all_records(store, project, "task", parent_task_id=root["id"])
+             if engine._task_data(task).get("stage") == 1]
+    assert len(step1) == 1 and step1[0]["id"] == before_stage_call["child_id"]
+    assert step1[0]["state"] == before_stage_call["child_state"] == "queued"
+    assert not engine._task_data(step1[0]).get("parent_owned")
+    assert not any(task["scope"]["stage"] == 4 for task in all_records(store, project, "task"))
+    await engine.tick(project, conversation)
+    assert store.get(root["id"], project_id=project)["state"] == "waiting_user"
+    assert len([card for card in ActionService(engine).list_cards(project, conversation)["cards"]
+                if card["kind"] == "confirmation"]) == 1
     await client.close()
 
 
@@ -380,7 +477,7 @@ async def test_coordinator_does_not_duplicate_an_existing_pending_confirmation(r
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("structured", [True, False])
-async def test_manager_dispatches_stage_with_separate_audited_run(runtime, structured):
+async def test_harness_dispatches_stage_with_separate_audited_run(runtime, structured):
     store, project, conversation = runtime
     original = "甲见乙。"
     calls = []
@@ -394,7 +491,9 @@ async def test_manager_dispatches_stage_with_separate_audited_run(runtime, struc
             return httpx.Response(200, json=call("begin_adaptation", {"request": "只执行 Step1", "source_is_current_message": False,
                 "stage": 1, "chapter_id": None}, 1))
         if len(calls) == 2:
-            return httpx.Response(200, json=call("run_stage", {"stage": 1, "chapter_id": None}, 2))
+            return httpx.Response(200, json=message({"result_kind": "ready", "payload": {
+                "reply": "已开始处理原作。", "source_message_kind": "request", "task_requests": []},
+                "questions": [], "evidence_refs": [], "notes": []}))
         if len(calls) in (3, 4):
             if "当前独立产物：作品事件视图" in data.get("instructions", ""):
                 event_schema = data["text"]["format"]["schema"]["properties"]["payload"]["anyOf"][0]["properties"]["global_events"]["items"]
@@ -410,6 +509,7 @@ async def test_manager_dispatches_stage_with_separate_audited_run(runtime, struc
         engine.config_service.publish(project, draft["id"])
     engine.import_source(project, conversation, original, "测试原作")
     engine.submit_message(project, conversation, "开始改编")
+    await engine.tick(project, conversation)
     await engine.tick(project, conversation)
     stages = [(task["scope"]["stage"], task["state"])
               for task in all_records(store, project, "task")]
@@ -430,10 +530,12 @@ async def test_manager_dispatches_stage_with_separate_audited_run(runtime, struc
     trace_rows=store._connection().execute(
         'SELECT run_id,kind,name FROM sdk_trace_spans WHERE project_id=%s',(project,)).fetchall()
     assert any(str(row['run_id'])==coordinator_runs[0]['id'] and row['kind']=='function'
-               and row['name']=='run_stage' for row in trace_rows)
+               and row['name']=='begin_adaptation' for row in trace_rows)
     assert all(any(str(row['run_id']) == child['id'] and row['kind'] == 'agent'
                    for row in trace_rows) for child in child_runs)
-    assert {item["tool_name"] for item in all_records(store, project, "tool_call")} >= {"begin_adaptation", "run_stage"}
+    assert {item["tool_name"] for item in all_records(store, project, "tool_call")} >= {"begin_adaptation"}
+    assert not [item for item in all_records(store, project, "tool_call")
+                if item["tool_name"] == "run_stage"]
     root = next(task for task in all_records(store, project, "task")
                 if engine._task_data(task).get("manager_controlled"))
     assert len(calls) == 4
@@ -470,29 +572,21 @@ async def test_scoped_step1_approval_runs_step2_from_approved_fixed_views(runtim
                 "request": "只执行 Step1", "source_is_current_message": False,
                 "stage": 1, "chapter_id": None}, number))
         if number == 2:
-            return httpx.Response(200, json=call("run_stage", {
-                "stage": 1, "chapter_id": None}, number))
+            return httpx.Response(200, json=message({"result_kind": "ready", "payload": {
+                "reply": "已开始处理原作。", "source_message_kind": "request", "task_requests": []},
+                "questions": [], "evidence_refs": [], "notes": []}))
         if number in (3, 4):
             return httpx.Response(200, json=step1_view_message(engine, project, original, data))
         if number == 5:
-            assert "run_stage" in {tool["name"] for tool in data["tools"]}
-            return httpx.Response(200, json=call("run_stage", {
-                "stage": 2, "chapter_id": None}, number))
-        if number == 6:
             return httpx.Response(200, json=message(step2_response()))
-        if number == 7:
-            step2 = next(task for task in all_records(store, project, "task")
-                         if engine._task_data(task).get("stage") == 2)
-            return httpx.Response(200, json=call("ask_user", {"questions": [{
-                "prompt": "确认原作知识资产？", "suggested_answers": ["确认"],
-                "confirmation_task_id": step2["id"]}]}, number))
-        pytest.fail("确认 Step1 后不应再次创建流程或继续其他阶段")
+        pytest.fail("确认 Step1 后只应执行 Step2 Agent")
 
     client = AsyncOpenAI(api_key="local-mock", http_client=httpx.AsyncClient(
         transport=mock_transport(handler)), max_retries=0)
     engine = Engine(store, ModelService(store, client), ConfigService(store))
     engine.import_source(project, conversation, original, "测试原作")
     engine.submit_message(project, conversation, "开始 Step1")
+    await engine.tick(project, conversation)
     await engine.tick(project, conversation)
     assert len(calls) == 4
     old_root = next(task for task in all_records(store, project, "task")
@@ -516,16 +610,17 @@ async def test_scoped_step1_approval_runs_step2_from_approved_fixed_views(runtim
     assert len([task for task in all_records(store, project, "task")
                 if task["parent_task_id"] == step2_root["id"]]) == 0
 
-    await engine.tick(project, conversation)
-    assert len(calls) == 7
-    run = next(run for run in all_records(store, project, "run")
-               if run["agent_key"] == "source_knowledge_analyst")
-    assert {json.dumps(fixed_ref, sort_keys=True) for fixed_ref in run["input_refs"]} == {
-        json.dumps(fixed_ref, sort_keys=True) for fixed_ref in approved_refs.values()}
+    await engine.tick(project, conversation)  # Harness selects and executes Step2.
+    assert len(calls) == 5
     step2_child = next(task for task in all_records(store, project, "task")
                        if task["parent_task_id"] == step2_root["id"]
                        and engine._task_data(task).get("stage") == 2)
     assert step2_child["state"] == "waiting_user"
+    run = next(run for run in all_records(store, project, "run")
+               if run["agent_key"] == "source_knowledge_analyst")
+    assert {json.dumps(fixed_ref, sort_keys=True) for fixed_ref in run["input_refs"]} == {
+        json.dumps(fixed_ref, sort_keys=True) for fixed_ref in approved_refs.values()}
+    assert len(engine._task_data(step2_child)["pending_user_items"]) == 1
     assert store.get(old_root["id"], project_id=project)["state"] == "succeeded"
     await client.close()
 
@@ -544,27 +639,20 @@ async def test_manager_confirms_single_step2_knowledge_asset(runtime, via_messag
         if number == 1:
             return httpx.Response(200, json=call("begin_adaptation", {"request": "完整改编",
                 "source_is_current_message": False, "stage": None, "chapter_id": None}, number))
-        if number in (2, 5):
-            return httpx.Response(200, json=call("run_stage", {"stage": 1 if number == 2 else 2,
-                "chapter_id": None}, number))
+        if number == 2:
+            return httpx.Response(200, json=message({"result_kind": "ready", "payload": {
+                "reply": "已开始处理原作。", "source_message_kind": "request", "task_requests": []},
+                "questions": [], "evidence_refs": [], "notes": []}))
         if number in (3, 4):
             return httpx.Response(200, json=step1_view_message(engine, project, original, data))
-        if number == 6:
+        if number == 5:
             return httpx.Response(200, json=message(step2_response()))
-        if number == 7:
-            step2 = next(task for task in all_records(store, project, "task")
-                         if engine._task_data(task).get("stage") == 2)
-            assert step2["state"] == "waiting_user"
-            assert not engine._task_data(step2)["pending_user_items"]
-            assert engine.workflow.resolve(project, "source_knowledge_asset", effective=False)
-            return httpx.Response(200, json=call("ask_user", {"questions": [{
-                "prompt": "这份原作知识资产是否可以作为后续改编依据？",
-                "suggested_answers": ["确认"], "confirmation_task_id": step2["id"]}]}, number))
-        if number == 8 and via_message:
+        if number == 6 and via_message:
             step2 = next(task for task in all_records(store, project, "task")
                          if engine._task_data(task).get("stage") == 2)
             pending_id = engine._task_data(step2)["pending_user_items"][0]["id"]
             return httpx.Response(200, json=call("confirm_pending", {"pending_item_id": pending_id}, number))
+        assert number == 7 and via_message
         final = {"result_kind": "ready", "payload": {"reply": "已收到确认。",
                  "source_message_kind": "request", "task_requests": []},
                  "questions": [], "evidence_refs": [], "notes": []}
@@ -575,6 +663,7 @@ async def test_manager_confirms_single_step2_knowledge_asset(runtime, via_messag
     engine = Engine(store, ModelService(store, client), ConfigService(store))
     engine.import_source(project, conversation, original, "测试原作")
     engine.submit_message(project, conversation, "开始改编")
+    await engine.tick(project, conversation)
     await engine.tick(project, conversation)
     root = next(task for task in all_records(store, project, "task")
                 if engine._task_data(task).get("manager_controlled"))
@@ -587,7 +676,7 @@ async def test_manager_confirms_single_step2_knowledge_asset(runtime, via_messag
         fixed_ref["record_id"] for fixed_ref in approved_refs.values()}
     actions.submit(project, conversation, step1_card["id"], "confirm", step1_card["revision"], {})
     assert store.get(root["id"], project_id=project)["state"] == "queued"
-    await engine.tick(project, conversation)
+    await engine.tick(project, conversation)  # Harness selects and executes Step2.
     step2_run = next(run for run in all_records(store, project, "run")
                      if run["agent_key"] == "source_knowledge_analyst")
     assert {json.dumps(fixed_ref, sort_keys=True) for fixed_ref in step2_run["input_refs"]} == {
@@ -597,7 +686,7 @@ async def test_manager_confirms_single_step2_knowledge_asset(runtime, via_messag
     assert step2["state"] == "waiting_user"
     assert len(engine._task_data(step2)["pending_user_items"]) == 1
     assert len(engine._task_data(step2)["pending_user_items"][0]["targets"]) == 1
-    assert actions.list_cards(project, conversation)["cards"][0]["description"] == "这份原作知识资产是否可以作为后续改编依据？"
+    assert actions.list_cards(project, conversation)["cards"][0]["kind"] == "confirmation"
     if via_message:
         engine.submit_message(project, conversation, "确认这份知识资产")
         await engine.tick(project, conversation)
@@ -607,15 +696,13 @@ async def test_manager_confirms_single_step2_knowledge_asset(runtime, via_messag
                          if card["id"] == "pending:" + item["id"])
             actions.submit(project, conversation, shown["id"], "confirm", shown["revision"], {})
     assert store.get(step2["id"], project_id=project)["state"] == "succeeded"
-    assert store.get(root["id"], project_id=project)["state"] == "queued"
-    pending = [item for item in all_records(store, project, "queued_request") if item["state"] == "pending"]
-    assert len(pending) == 1
-    assert engine._projection(project, "queue_context", pending[0]["id"])["manager_resume"] is True
-    if not via_message:
-        await engine.tick(project, conversation)
+    assert store.get(root["id"], project_id=project)["state"] in ("queued", "running", "waiting_user")
+    assert not [item for item in all_records(store, project, "queued_request")
+                if item["state"] == "pending"
+                and engine._projection(project, "queue_context", item["id"]).get("manager_resume")]
     assert len([run for run in all_records(store, project, "run")
-                if run["agent_key"] == "conversation_coordinator"]) == 3
-    assert len(calls) == (9 if via_message else 8)
+                if run["agent_key"] == "conversation_coordinator"]) == (2 if via_message else 1)
+    assert len(calls) == (7 if via_message else 5)
     await client.close()
 
 
@@ -633,25 +720,22 @@ async def test_step2_waits_for_knowledge_asset_confirmation_before_advancing(run
             return httpx.Response(200, json=call("begin_adaptation", {
                 "request": "完整改编", "source_is_current_message": False,
                 "stage": None, "chapter_id": None}, number))
-        if number in (2, 5):
-            return httpx.Response(200, json=call("run_stage", {
-                "stage": 1 if number == 2 else 2, "chapter_id": None}, number))
+        if number == 2:
+            return httpx.Response(200, json=message({"result_kind": "ready", "payload": {
+                "reply": "已开始处理原作。", "source_message_kind": "request", "task_requests": []},
+                "questions": [], "evidence_refs": [], "notes": []}))
         if number in (3, 4):
             return httpx.Response(200, json=step1_view_message(engine, project, original, data))
-        if number == 6:
+        if number == 5:
             return httpx.Response(200, json=message(step2_response()))
-        assert number == 7
-        step2 = next(task for task in all_records(store, project, "task")
-                     if engine._task_data(task).get("stage") == 2)
-        return httpx.Response(200, json=call("ask_user", {"questions": [{
-            "prompt": "确认知识资产？", "suggested_answers": ["确认"],
-            "confirmation_task_id": step2["id"]}]}, number))
+        pytest.fail("Step2 确认卡由 Harness 直接创建，不需要协调 Agent 提问")
 
     client = AsyncOpenAI(api_key="local-mock", http_client=httpx.AsyncClient(
         transport=mock_transport(handler)), max_retries=0)
     engine = Engine(store, ModelService(store, client), ConfigService(store))
     engine.import_source(project, conversation, original, "测试原作")
     engine.submit_message(project, conversation, "开始改编")
+    await engine.tick(project, conversation)
     await engine.tick(project, conversation)
 
     root = next(task for task in all_records(store, project, "task")
@@ -664,28 +748,27 @@ async def test_step2_waits_for_knowledge_asset_confirmation_before_advancing(run
     ActionService(engine).submit(project, conversation, cards[0]["id"],
                                  "confirm", cards[0]["revision"], {})
     await engine.tick(project, conversation)
+    await engine.tick(project, conversation)
     step2 = next(task for task in all_records(store, project, "task")
                  if task["parent_task_id"] == root["id"] and engine._task_data(task).get("stage") == 2)
     assert step2["state"] == "waiting_user"
     targets = engine._task_data(step2)["pending_user_items"][0]["targets"]
     assert len(targets) == 1
-    presented = engine._projection(project, "presentations", conversation)["targets"]
-    manager_run = next(run for run in all_records(store, project, "run")
-                       if run["agent_key"] == "conversation_coordinator")
-    for index, target in enumerate(targets):
-        with store.transaction():
-            answer = engine._message(project, conversation, f"确认分析 {index + 1}", role="user")
-            receipt = engine._apply_request({"intent": "confirm", "stage": 2,
-                "chapter_id": None, "target_ref": target["subject"],
-                "requested_confirmation_paths": [""],
-                "source_message_ids": [answer["id"]]}, answer, presented,
-                root, manager_run)
-        assert receipt["status"] == "confirmed"
-        current = store.get(step2["id"], project_id=project)
-        assert current["state"] == "succeeded"
-        assert len([item for item in engine._task_data(current)["pending_user_items"]
-                    if item["state"] == "open"]) == 0
-    assert len(calls) == 7  # Step2 has its own structured model call.
+    assert not [task for task in all_records(store, project, "task")
+                if engine._task_data(task).get("stage") == 3]
+    step2_card = next(card for card in ActionService(engine).list_cards(project, conversation)["cards"]
+                      if card["kind"] == "confirmation")
+    assert step2_card["targets"] == [target["subject"] for target in targets]
+    receipt = ActionService(engine).submit(project, conversation, step2_card["id"],
+                                           "confirm", step2_card["revision"], {})
+    assert receipt["status"] == "confirmed"
+    current = store.get(step2["id"], project_id=project)
+    assert current["state"] == "succeeded"
+    assert not [item for item in engine._task_data(current)["pending_user_items"]
+                if item["state"] == "open"]
+    assert not [task for task in all_records(store, project, "task")
+                if task["parent_task_id"] == root["id"] and engine._task_data(task).get("stage") == 3]
+    assert len(calls) == 5  # Step2 has its own structured model call.
     await client.close()
 
 
@@ -738,6 +821,30 @@ async def test_begin_adaptation_preserves_same_message_idempotency(runtime):
     receipt = json.loads(await tool.on_invoke_tool(SimpleNamespace(tool_name="begin_adaptation"),
         '{"request":"开始 Step1","stage":1,"chapter_id":null}'))
     assert receipt == {"status": "already_started", "workflow_id": existing["id"], "stages": [1]}
+
+
+@pytest.mark.asyncio
+async def test_duplicate_begin_adaptation_keeps_one_harness_step1_child(runtime):
+    store, project, conversation = runtime
+    engine = Engine(store, ModelService(store), ConfigService(store))
+    engine.import_source(project, conversation, "甲见乙。", "原作")
+    with store.transaction():
+        origin = engine._message(project, conversation, "开始改编", role="user")
+
+    from branch_agent.manager import build_manager_tools
+    tool = next(tool for tool in build_manager_tools(engine, None, None, origin,
+                     [], None) if tool.name == "begin_adaptation")
+    args = '{"request":"开始改编","source_is_current_message":false,"stage":1,"chapter_id":null}'
+    first = json.loads(await tool.on_invoke_tool(SimpleNamespace(tool_name="begin_adaptation"), args))
+    second = json.loads(await tool.on_invoke_tool(SimpleNamespace(tool_name="begin_adaptation"), args))
+    assert first["status"] == "started"
+    assert second == {"status": "already_started", "workflow_id": first["workflow_id"], "stages": [1]}
+    root = store.get(first["workflow_id"], project_id=project)
+    assert engine._task_data(root)["harness_scheduled"] is True
+    children = all_records(store, project, "task", parent_task_id=root["id"])
+    assert len(children) == 1
+    assert children[0]["id"] == first["stage_task_id"]
+    assert children[0]["scope"]["stage"] == 1
 
 
 @pytest.mark.asyncio

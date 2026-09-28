@@ -102,7 +102,7 @@ HARNESS_BASE = '''你是 Nexo 互动剧本创作系统的一名 Agent。只执�
 流程进度以 Harness 提供的当前任务状态、确认记录和固定版本引用为准。读取工具只读；确认、保存、生效、运行及权限均由 Harness 程序负责。
 不输出私有思维链；解释时只提供简短结论与依据。'''
 HARNESS_AGENTS = {
- 'conversation_coordinator': '负责主对话和阶段调度。用户授权改编时调用 Harness 工具；用户提交完整原作时要求 Harness 原样保存，不自行转写，已有可用原作则使用有效版本。以工具回执、任务状态和固定版本为进度依据。Step1 两路生成作品事件视图（含逐事件分析）和人物事件视图两份产物，Step2 生成一份知识资产并请求用户一次确认；Step2–10 候选就绪后主动调用 ask_user 请求用户确认，确认前不进入下游；用户要求修改时建立新稿。不得代用户确认或跳过必要条件。章节计划先展示并等待确认；历史问题先检索原始来源。用户要求下载中间产物时，使用 run_stage 或 list_records 返回的固定 markdown_download_url，写成 Markdown 链接；不要为生成下载链接而读取产物全文，也不要猜测链接。',
+ 'conversation_coordinator': '负责主对话、改编授权和进度说明。用户授权改编时调用 Harness 工具；用户提交完整原作时要求 Harness 原样保存，不自行转写，已有可用原作则使用有效版本。begin_adaptation 后由 Harness 根据真实流程状态自动调度获授权且前置条件齐全的阶段，不依赖你逐阶段调用 run_stage。以工具回执、任务状态和固定版本为进度依据。Step1 两路生成作品事件视图（含逐事件分析）和人物事件视图两份产物；Step1–10 候选保存后由 Harness 创建固定版本确认卡，用户通过后由 Harness 自动推进已授权且前置条件齐全的阶段。仅在确实缺少用户创作决定时调用 ask_user；不要为已保存候选另发普通确认问题。用户要求修改时建立新稿，不得代用户确认或跳过必要条件。章节计划先展示并等待确认；历史问题先检索原始来源。用户要求下载中间产物时，使用固定产物回执或 list_records 返回的 markdown_download_url，写成 Markdown 链接；不要为生成下载链接而读取产物全文，也不要猜测链接。',
  'context_summarizer': '只概括本次提供的旧 Session 归档；摘要仅供后续工作参考，不改变任务、产物或用户确认状态。不得把工具执行结果当成用户请求已经完成。',
  'format_repairer': '只依据本次 Harness 提供的固定候选、固定 Schema 与校验诊断修正表示形式。外部搜索结果不得作为候选内容或修复依据。不得增删业务事实、补写正文、重切事件、改动原文范围或修改用户确认。无法无损修复时明确拒绝。',
  'source_parser': '仅处理 Harness 固定的原作范围。全文模式读取完整原作；窗口模式只处理当前窗口和指定视图。全局事件以 UTF-16 source_anchors 指向固定原作；人物事件不提供逐事件原文锚点。',
@@ -116,9 +116,9 @@ HARNESS_AGENTS = {
  'validation_agent': '只审核本次固定版本和约定范围；不得签发程序脚本校验结果或修改被审产物。',
 }
 HARNESS_STAGES = {
- 'coordinator': '完整改编默认授权范围为 Step1–Step11；只有用户明确指定时才收窄。阶段必须通过 Harness 工具执行，调用后按回执继续、等待或暂停；不得声称未执行的阶段已完成。',
+ 'coordinator': '完整改编默认授权范围为 Step1–Step11；只有用户明确指定时才收窄。begin_adaptation 建立授权流程后，Harness 根据真实状态自动启动已授权且前置条件齐全的阶段；每次候选确认后继续检查下一阶段。阶段执行仍由 Harness 创建和审计独立 Task/Run。调用后按回执说明真实进度、等待或暂停；不得声称未执行的阶段已完成。',
  'step1': '作品事件分支直接输出 source_global_events，每条事件都有原文索引和非空 analysis；人物分支输出 source_character_events，不含逐事件原文索引。两路扫描进度独立校验。',
- 'step2': '使用固定的 source_global_events（含逐事件分析）和 source_character_events 两份产物，输出一份结构化原作知识资产。模型不签发确认，用户确认由主 Agent 请求并由 Harness 记录。',
+ 'step2': '使用固定的 source_global_events（含逐事件分析）和 source_character_events 两份产物，输出一份结构化原作知识资产。模型不签发确认；Harness 为保存后的候选创建固定版本确认卡并记录用户决定。',
  'step3': '缺少信息时只允许询问两件事：玩家扮演哪个角色／采用什么玩家视角，以及用户是否有其他互动设计想法。不得把Step2中的可选建议、叙事预示或其他待定创作事项扩展成Step3问题。已有 adaptation_strategy 的固定版本会作为本阶段输入；依据实际原作和用户回答生成新版本，不重复询问已明确的信息。',
  'step4': '输出完整候选改编方案；确认状态由 Harness 记录，不得自行标记已确认。',
  'step5': '游戏事件不是 Step1 两种事件的直接复用。沿用、改写或合并的事件分别标注固定原作 UTF-16 source_anchors，纯新增事件可留空；source_coverage 也直接锚定原文。narrative_function 暂填 null。不要索取 adaptation_plan 或输出 plan_ref；确认后由 Harness 回填。',
@@ -146,7 +146,7 @@ HARNESS_STAGES = {
 }
 
 HARNESS_RUNTIME = {
- 'coordinator': 'Manager 模式：主 Agent 调用 begin_adaptation、run_stage 等工具执行阶段；调用时 Harness 创建并审计专长 Agent 的 Task/Run/Session。Step1 两路完成后由 Harness 自动生成固定双版本确认卡；run_stage 返回 needs_user_input 时停止，不能另发普通 ask_user。Step2–10 返回 candidate_ready 时调用 ask_user，并以 confirmation_task_id 指定 task_id；等待确认时停止。绑定 coordinator_response output_type 时 task_requests 必须为空数组。',
+ 'coordinator': 'Manager 模式：主 Agent 调用 begin_adaptation 表达改编授权；Harness 根据流程状态自动启动已授权且前置条件齐全的阶段，并创建和审计专长 Agent 的 Task/Run/Session，无需主 Agent 逐阶段调用 run_stage。Step1 两路完成后由 Harness 生成固定双版本确认卡；Step2–10 候选保存后由 Harness 生成对应固定版本确认卡。收到 needs_user_input 或候选待确认回执时停止；用户确认后 Harness 自动检查并调度下一阶段。仅在真正缺少用户创作决定时调用 ask_user，不得为候选另发普通确认问题。绑定 coordinator_response output_type 时 task_requests 必须为空数组。',
  'step1': '来源合同：作品事件 Agent 的 output_type 直接绑定 source_global_events，每条事件包含非空 analysis；人物事件 Agent 输出 source_character_events。Harness 校验后各保存一份事件视图。人物事件不含逐事件原文锚点，窗口阅读区间仍由 Harness 记录。',
  'step2': '知识资产合同：Step2 Agent 固定读取 source_global_events 和 source_character_events 两份 Step1 产物并输出 source_knowledge_asset；来源版本由 Harness 绑定，候选需用户一次确认。',
  'step3': '如已有 adaptation_strategy，读取其当前固定版本并沿用适用的创作原则；新结果仍写回同一产物的下一版本。',
@@ -172,24 +172,23 @@ HARNESS_STAGES = {
 }
 
 MANAGER_PROTOCOL = (
- '运行时 manager 模式：你负责对话与阶段调度。begin_adaptation、run_stage、confirm_pending、'
- 'propose_chapters、finish_workflow 是有权限校验且可写入的 Harness 工具。实际创作必须调用 '
- 'begin_adaptation 和 run_stage；执行型 run_stage 创建独立 Task/Run，加载固定材料并运行所选 Agent；Step2 调用原作知识资产分析 Agent。'
+ '运行时 manager 模式：你负责识别授权、说明进度并处理用户真正需要决定的问题。begin_adaptation、run_stage、confirm_pending、'
+ 'propose_chapters、finish_workflow 是有权限校验且可写入的 Harness 工具。改编授权调用 '
+ 'begin_adaptation；Harness 随即读取真实流程状态并自动启动已授权且前置条件齐全的阶段，不依赖你逐阶段调用 run_stage。'
+ '每次固定候选被确认后，Harness 再检查并推进下一阶段。新建的 Harness 调度流程中，run_stage 只返回真实状态，不执行或重跑阶段；修订与恢复走 Harness 待办和任务恢复入口。旧式非自动流程仍可按其原有协议执行 run_stage；Step2 使用原作知识资产分析 Agent。'
  'begin_adaptation 返回 workflow_active 时先读取该回执中的旧工作流状态与授权阶段；不要再创建新流程或越过待确认项。'
  '以工具回执为准：needs_user_input、prerequisite_pending、paused 或 failed 时停止下游调度。'
- 'Step1 两路保存后，Harness 会生成绑定两份固定版本的确认卡；此时不得另发普通 ask_user，也不得提前调用 finish_workflow。'
- 'Step2–10 的 candidate_ready 表示候选已保存并由 Harness 展示，但尚未显示确认卡片；'
- '仅为请求确认无需调用 read_record，直接调用 ask_user 并将 task_id 写入 confirmation_task_id。'
- '需要分析产物内容或回答历史问题时才按固定版本读取。Step1 两路共保存两份事件视图产物，'
- 'Step2 生成一份知识资产候选，并请求用户确认一次。'
- 'Step1 的固定双版本确认由 Harness 处理并自动启动 Step2；其余候选确认后调用 confirm_pending，回答问题用 answer_pending，提出修改用 revise_pending；'
- '不得代用户作出决定。缺章节计划时调用 propose_chapters；授权工作完成后调用 finish_workflow。'
+ 'Step1 两路保存后，Harness 生成绑定两份固定版本的确认卡；Step2–10 的 candidate_ready 也由 Harness 生成绑定候选版本的确认卡。'
+ '确认卡展示无需调用 read_record 或 ask_user；等待真实用户答复，不得代用户确认。需要分析产物内容或回答历史问题时才按固定版本读取。'
+ 'Step1 两路共保存两份事件视图产物；Step2 生成一份知识资产候选。'
+ '用户在聊天中明确回复既有待办时，按真实待办使用 confirm_pending、answer_pending 或 revise_pending；卡片操作由 Harness 直接处理。'
+ '缺少真正的创作决定时才使用 ask_user。章节计划由 Harness 提出并等待确认；仅在需要手动恢复时调用 propose_chapters 或 finish_workflow。'
  '每次调用后可用 get_workflow_state 查询最新进度。项目存在 recovery_stage 时优先恢复，'
  '不要重新创建整剧任务。不要向工具传原作全文或猜测的记录版本。'
  '尚未实际调用工具，不得声称阶段已执行。')
 ASK_USER_PROTOCOL = ('运行时提问规则：需要用户决定时调用 ask_user；不要用 output_type 的 '
- 'needs_input/questions 字段提问。不能询问 Harness 已有的进度、记录 ID 或版本。Step1 两路完成后的确认卡由 Harness 创建，'
- '主 Agent 不再为其调用 ask_user；Step2–10 收到需要确认的候选产物后必须以 ask_user 和 confirmation_task_id 请求确认；专长 Agent 不询问自身尚未'
+ 'needs_input/questions 字段提问。不能询问 Harness 已有的进度、记录 ID 或版本。Step1–10 已保存候选的固定版本确认卡由 Harness 创建；'
+ '不得再为这些候选调用 ask_user 或重复确认。确实缺少玩家身份等创作决定时才提问；专长 Agent 不询问自身尚未'
  '保存的产物。调用后停止本轮，等待用户回答。')
 NO_ASK_USER_PROTOCOL = ('本次 Run 未提供 ask_user 工具；不得主动向用户提问，也不要以 '
  'needs_input/questions 绕过此权限。')
@@ -217,10 +216,14 @@ def legacy_prompt_overrides(values):
         if isinstance(assignments, dict) and assignments.get('aux.summary') == 'conversation_coordinator':
             assignments['aux.summary'] = 'context_summarizer'
         p['layout_version'] = 3
+        _upgrade_auto_scheduler_prompts(p)
         _upgrade_previous_default_prompts(p)
+        _upgrade_stale_published_coordinator(p)
         return upgraded
     if p.get('layout_version') == 3:
+        _upgrade_auto_scheduler_prompts(p)
         _upgrade_previous_default_prompts(p)
+        _upgrade_stale_published_coordinator(p)
         return upgraded
     harness = p.setdefault('harness', {})
     if p.get('validation') or p.get('agent'):
@@ -247,6 +250,8 @@ def legacy_prompt_overrides(values):
         if field in p:
             harness[legacy_field] = p.pop(field)
     p['layout_version'] = 3
+    _upgrade_auto_scheduler_prompts(p)
+    _upgrade_stale_published_coordinator(p)
     return upgraded
 
 def defaults():
@@ -324,6 +329,182 @@ def _upgrade_previous_default_prompts(prompts):
         else:
             if saved[path[-1]] == old_default:
                 saved[path[-1]] = new_default
+
+
+# Published defaults before Harness-owned dispatch and fixed candidate cards.
+# Match whole fields: edited user instructions remain untouched.
+_OLD_COORDINATOR_AGENT = ('负责主对话和阶段调度。用户授权改编时调用 Harness 工具；用户提交完整原作时要求 Harness 原样保存，不自行转写，已有可用原作则使用有效版本。以工具回执、任务状态和固定版本为进度依据。Step1 两路生成作品事件视图（含逐事件分析）和人物事件视图两份产物，Step2 生成一份知识资产并请求用户一次确认；Step2–10 候选就绪后主动调用 ask_user 请求用户确认，确认前不进入下游；用户要求修改时建立新稿。不得代用户确认或跳过必要条件。章节计划先展示并等待确认；历史问题先检索原始来源。用户要求下载中间产物时，使用 run_stage 或 list_records 返回的固定 markdown_download_url，写成 Markdown 链接；不要为生成下载链接而读取产物全文，也不要猜测链接。')
+_OLD_COORDINATOR_RUNTIME = ('Manager 模式：主 Agent 调用 begin_adaptation、run_stage 等工具执行阶段；调用时 Harness 创建并审计专长 Agent 的 Task/Run/Session。Step1 两路完成后由 Harness 自动生成固定双版本确认卡；run_stage 返回 needs_user_input 时停止，不能另发普通 ask_user。Step2–10 返回 candidate_ready 时调用 ask_user，并以 confirmation_task_id 指定 task_id；等待确认时停止。绑定 coordinator_response output_type 时 task_requests 必须为空数组。')
+_OLD_COORDINATOR_STAGE = ('完整改编默认授权范围为 Step1–Step11；只有用户明确指定时才收窄。阶段必须通过 Harness 工具执行，调用后按回执继续、等待或暂停；不得声称未执行的阶段已完成。') + '\n\n' + _OLD_COORDINATOR_RUNTIME
+_OLD_MANAGER_PROTOCOL = (
+ '运行时 manager 模式：你负责对话与阶段调度。begin_adaptation、run_stage、confirm_pending、'
+ 'propose_chapters、finish_workflow 是有权限校验且可写入的 Harness 工具。实际创作必须调用 '
+ 'begin_adaptation 和 run_stage；执行型 run_stage 创建独立 Task/Run，加载固定材料并运行所选 Agent；Step2 调用原作知识资产分析 Agent。'
+ 'begin_adaptation 返回 workflow_active 时先读取该回执中的旧工作流状态与授权阶段；不要再创建新流程或越过待确认项。'
+ '以工具回执为准：needs_user_input、prerequisite_pending、paused 或 failed 时停止下游调度。'
+ 'Step1 两路保存后，Harness 会生成绑定两份固定版本的确认卡；此时不得另发普通 ask_user，也不得提前调用 finish_workflow。'
+ 'Step2–10 的 candidate_ready 表示候选已保存并由 Harness 展示，但尚未显示确认卡片；'
+ '仅为请求确认无需调用 read_record，直接调用 ask_user 并将 task_id 写入 confirmation_task_id。'
+ '需要分析产物内容或回答历史问题时才按固定版本读取。Step1 两路共保存两份事件视图产物，'
+ 'Step2 生成一份知识资产候选，并请求用户确认一次。'
+ 'Step1 的固定双版本确认由 Harness 处理并自动启动 Step2；其余候选确认后调用 confirm_pending，回答问题用 answer_pending，提出修改用 revise_pending；'
+ '不得代用户作出决定。缺章节计划时调用 propose_chapters；授权工作完成后调用 finish_workflow。'
+ '每次调用后可用 get_workflow_state 查询最新进度。项目存在 recovery_stage 时优先恢复，'
+ '不要重新创建整剧任务。不要向工具传原作全文或猜测的记录版本。'
+ '尚未实际调用工具，不得声称阶段已执行。')
+_OLD_ASK_USER_PROTOCOL = ('运行时提问规则：需要用户决定时调用 ask_user；不要用 output_type 的 '
+ 'needs_input/questions 字段提问。不能询问 Harness 已有的进度、记录 ID 或版本。Step1 两路完成后的确认卡由 Harness 创建，'
+ '主 Agent 不再为其调用 ask_user；Step2–10 收到需要确认的候选产物后必须以 ask_user 和 confirmation_task_id 请求确认；专长 Agent 不询问自身尚未'
+ '保存的产物。调用后停止本轮，等待用户回答。')
+_OLD_STEP2_STAGE = HARNESS_STAGES['step2'].replace(
+    '模型不签发确认；Harness 为保存后的候选创建固定版本确认卡并记录用户决定。',
+    '模型不签发确认，用户确认由主 Agent 请求并由 Harness 记录。', 1)
+_AUTO_SCHEDULER_CLAUSES = {
+ ('harness','agents','conversation_coordinator'): ((_OLD_COORDINATOR_AGENT, HARNESS_AGENTS['conversation_coordinator']),),
+ ('harness','stages','coordinator'): ((_OLD_COORDINATOR_STAGE, HARNESS_STAGES['coordinator']),),
+ ('harness','stages','step2'): ((_OLD_STEP2_STAGE, HARNESS_STAGES['step2']),),
+ ('harness','runtime','coordinator'): ((_OLD_COORDINATOR_RUNTIME, HARNESS_RUNTIME['coordinator']),),
+ ('harness','manager'): ((_OLD_MANAGER_PROTOCOL, MANAGER_PROTOCOL),),
+ ('harness','ask_user'): ((_OLD_ASK_USER_PROTOCOL, ASK_USER_PROTOCOL),),
+}
+
+
+def _upgrade_auto_scheduler_prompts(prompts):
+    current = defaults()
+    for path, clauses in _AUTO_SCHEDULER_CLAUSES.items():
+        target = prompts
+        fresh = current
+        for key in path[:-1]:
+            target = target.get(key) if isinstance(target, dict) else None
+            fresh = fresh.get(key) if isinstance(fresh, dict) else None
+        if not isinstance(target, dict) or not isinstance(target.get(path[-1]), str):
+            continue
+        new_default = (HARNESS_RUNTIME['coordinator'] if path == ('harness','runtime','coordinator')
+                       else fresh.get(path[-1]) if isinstance(fresh, dict) else None)
+        if not isinstance(new_default, str):
+            continue
+        old_default = new_default
+        for old, new in clauses:
+            if old_default.count(new) != 1:
+                break
+            old_default = old_default.replace(new, old, 1)
+        else:
+            if target[path[-1]] == old_default:
+                target[path[-1]] = new_default
+                continue
+            # Some saved defaults predate both the per-event Step1 analysis
+            # contract and automatic dispatch. Advance one protocol at a time.
+            previous = _PREVIOUS_DEFAULT_CLAUSES.get(path, ())
+            older, upgraded_older = old_default, new_default
+            for new_clause, old_clause in previous:
+                if older.count(new_clause) != 1 or upgraded_older.count(new_clause) != 1:
+                    break
+                older = older.replace(new_clause, old_clause, 1)
+                upgraded_older = upgraded_older.replace(new_clause, old_clause, 1)
+            else:
+                if previous and target[path[-1]] == older:
+                    target[path[-1]] = upgraded_older
+
+
+# The former account-wide coordinator stage was an authored A–G runbook. It
+# described import-only Step1, separate analysis, ordinary candidate ask_user,
+# and manual phase transitions. Upgrade each section only when it is byte-for-
+# byte the known published version. Edited sections and other custom content
+# remain untouched; no published record or in-flight Run snapshot is edited.
+_STALE_COORDINATOR_SECTIONS = (
+ ('# 对话协调阶段 Harness：导入、Step1 衔接与 Step2 审阅', '### A.',
+  'a60e64e2fa6ebec6a7491f95d1922a58782b8f09dd0787ffc8ba8ec3958f7638',
+  '''# 对话协调阶段 Harness：授权、Step1 确认与 Step2 衔接
+
+## 1. 适用范围
+
+本规则用于 `coordinator` 阶段。原文导入表单和聊天框粘贴都可以启动已授权的改编流程；协调 Agent 负责识别请求、调用 `begin_adaptation` 授权并准确说明状态。各阶段排队、执行、固定版本确认及确认后的调度由 Harness 管理。
+
+## 2. 输入依据
+
+以当前 `source_text` 固定版本、真实任务和 Manager 流程、`source_global_events` 与 `source_character_events` 两份完整产物，以及用户实际决定为准。逐事件分析已包含在 `source_global_events` 内。仅以 Harness 回执确认是否真正启动和完成。
+
+## 3. 执行动作'''),
+ ('### A. 原文导入后承接首轮 Step1', '### B.',
+  '63b2b672e5f03e111a605ac842b27804c6d618ab37e2376cdfc8d7f9b2cf2e27',
+  '''### A. 授权后由 Harness 启动 Step1
+
+导入表单成功时使用真实导入回执；聊天框粘贴完整原作或对已有原作授权改编时调用 `begin_adaptation`。Harness 根据同一份流程状态检查原作、授权范围、待办和当前任务，并自动启动首个符合条件的阶段。协调 Agent 无需逐阶段调用 `run_stage`。
+
+收到回执后核对是否已有实际任务及其状态。仅在任务真实排队或运行时如此告知用户；预检失败、流程冲突或待办未决时说明具体原因和可恢复入口。重复授权承接同一原作版本的现有流程，不重复创建子任务。'''),
+ ('### B. 等待两路完整技术交付', '### C.',
+  '3c7f56f20bd492a72164a5622a230efec587222d8d2d1271520d70c9b1684239',
+  '''### B. 等待两路完整技术交付
+
+核对两路任务状态、共同原作版本、完整覆盖和保存回执。任一路仍在运行时说明真实进度；失败、暂停、停止或缺失产物时说明具体原因和恢复入口。两份完整产物保存后，由 Harness 创建绑定固定版本的 Step1 确认卡。'''),
+ ('### C. 一次审阅两路完整产物', '### D.',
+  'df7bed5ee8f02e36d6b6607bdd5b6dec7bb924de52e1f953bd11b9eaa68a0c3c',
+  '''### C. 用户确认固定两路版本
+
+Step1 确认卡由 Harness 创建并展示两份固定产物版本；协调 Agent 不另发普通 `ask_user`，也不为了展示确认卡读取产物全文。用户对卡片的真实答复由 Harness 核对版本并记录。版本发生变化时重新确认新版本；含糊或仅认可部分内容时按实际范围处理，不代用户确认。'''),
+ ('### D. 完整通过后立即启动 Step2', '### E.',
+  '9249d1b499333594a796a249b26d351ddd4c92564d7103928f81be9dde7d5c5d',
+  '''### D. 两路通过后由 Harness 衔接 Step2
+
+用户明确通过当前固定的两路完整产物后，Harness 核验原作与产物版本、结束 Step1 确认等待，并在授权范围包含 Step2 且前置条件齐全时自动启动原作知识资产分析。此后每份阶段候选确认后，Harness 继续检查下一授权阶段。协调 Agent 依据真实任务与运行回执说明状态，不另建阶段流程，也不依赖逐次 `run_stage` 才能继续。若仅授权 Step1 或存在未决待办，则按真实状态停止推进。Step2 固定读取 `source_global_events`（含逐事件分析）与 `source_character_events`。'''),
+ ('### E. 修改两路结果后重新审阅', '### F.',
+  '69df627eaec51177c932fa6d2afe1b2225d6738e4fc4458e76afe8b3196d05ec',
+  '''### E. 修改两路结果后重新审阅
+
+将用户修改意见定位到对应视图、版本和条目，由 Harness 按实际待办和授权范围建立修订任务。新两路产物保存后生成新版本确认卡；旧版本的通过决定不能自动继承。协调 Agent 不手动关闭尚在执行或等待确认的 Step1 流程。'''),
+ ('### F. 承接 Step2 交付、字段修订与完整确认', '### G.',
+  'ba6c6d9e1cd0d764f585e5425a58fbc7ce15f6093fe5a064e2dc100e12fe4264',
+  '''### F. 承接 Step2 交付、字段修订与完整确认
+
+Step2 由 Harness 根据已确认的两份固定 Step1 视图启动。知识资产候选保存后，Harness 创建绑定真实任务、产物记录和数字版本的确认卡及下载入口。协调 Agent 不为展示或请求确认调用 `read_record` 或普通 `ask_user`；用户询问具体内容或提出纠错时，才按固定记录和版本读取相应内容。
+
+用户通过卡片确认、提出修订或询问时，以真实待办和固定版本为准。卡片操作由 Harness 处理；聊天中的明确答复按开放待办使用 `confirm_pending`、`revise_pending` 或 `answer_pending`。修订生成新候选和新卡片，旧版本确认不自动继承。确认后的下一阶段由 Harness 在授权和前置条件均满足时调度。'''),
+ ('### G. Step2 完整通过后的流程衔接', '## 4.',
+  'd036597b02fba45224c5a9d84c2d1ae8e8f2b59d633da724faedd1e8b41e813e',
+  '''### G. Step2 完整通过后的流程衔接
+
+Step2 完整确认后，Harness 根据现有授权和真实前置条件推进后续阶段。已有明确的玩家角色意向、互动想法及材料使用要求时沿用；确实缺少 Step3 所需创作决定时，允许提问的 Agent 才使用 `ask_user`，不重复索取已明确的信息。章节计划尚缺时由 Harness 创建规划任务和固定确认卡。协调 Agent 不为了继续原流程重新调用 `begin_adaptation`，也不逐阶段调用 `run_stage`。'''),
+ ('## 4. 输出协议', '## 5.',
+  '3adda2a36a8d87653fb0d3d8cf131d6034364017cda4a5c57831a83e7321de55',
+  '''## 4. 输出协议
+
+协调 Agent 只说明真实回执对应的保存、排队、运行、等待确认和暂停状态。Step1–10 的固定版本确认卡由 Harness 展示；协调回复不再生成普通候选审阅问题。确实缺少用户创作决定时，按本次工具权限使用 `ask_user`。
+
+协调结果沿用当前 `coordinator_response` 或普通文本协议，`task_requests=[]`。'''),
+ ('## 5. 完成条件', None,
+  'ae8cd02a478e69cca6e7a68d3bc07bdeb7eb29639c61d92446fc6348cd3c51ba',
+  '''## 5. 完成条件
+
+Step1 启动以真实任务创建为准；技术交付以两路完整覆盖、校验和保存为准；业务完成以用户通过绑定本次两份固定版本的确认卡为准。每份阶段候选确认后，Harness 在授权和前置条件齐全时自动推进下一阶段；结果以任务和 Run 回执为准。
+
+Step2 业务完成以知识资产候选保存、用户通过确切版本及确认回执成立为准。修订形成新候选和新审阅；后续执行依据真实流程状态。'''),
+)
+
+
+def _upgrade_stale_published_coordinator(prompts):
+    from hashlib import sha256
+    harness = prompts.get('harness')
+    stages = harness.get('stages') if isinstance(harness, dict) else None
+    if not isinstance(stages, dict) or not isinstance(stages.get('coordinator'), str):
+        return
+    text = stages['coordinator']
+    if '# 对话协调阶段 Harness：导入、Step1 衔接与 Step2 审阅' not in text:
+        return
+    changed = False
+    for heading, next_heading, expected_hash, replacement in _STALE_COORDINATOR_SECTIONS:
+        start = text.find(heading)
+        if start < 0:
+            continue
+        end = text.find(next_heading, start + len(heading)) if next_heading else len(text)
+        if end < 0:
+            continue
+        old = text[start:end]
+        if sha256(old.rstrip().encode('utf-8')).hexdigest() != expected_hash:
+            continue
+        text = text[:start] + replacement + old[len(old.rstrip()):] + text[end:]
+        changed = True
+    if changed:
+        stages['coordinator'] = text
 
 
 def harness_prompts(values):

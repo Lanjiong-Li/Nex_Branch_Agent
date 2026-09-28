@@ -75,14 +75,22 @@ def test_step1_confirmation_closes_root_and_starts_one_step2_from_both_fixed_vie
     roots = step2_roots(engine, project, conversation)
     assert len(roots) == 1
     assert engine._task_data(roots[0])["manager_controlled"] is True
+    assert engine._task_data(roots[0])["harness_scheduled"] is True
     assert engine._task_data(roots[0])["source_ref"] == ref(imported["source"])
-    assert any(queue["state"] == "pending" for queue in all_records(engine.store, project, "queued_request"))
+    assert not [queue for queue in all_records(engine.store, project, "queued_request")
+                if engine._projection(project, "queue_context", queue["id"]).get("manager_resume")]
     assert model.calls.count("step2") == 0
 
     with pytest.raises(WorkflowBlocked, match="action_not_found|action_stale"):
         ActionService(engine).submit(project, conversation, card["id"], "confirm", card["revision"], {})
     assert len(step2_roots(engine, project, conversation)) == 1
     assert len(all_records(engine.store, project, "confirmation")) == 2
+
+    asyncio.run(engine.tick(project, conversation))
+    step2_children = all_records(engine.store, project, "task", parent_task_id=roots[0]["id"])
+    assert len(step2_children) == 1 and step2_children[0]["scope"]["stage"] == 2
+    assert step2_children[0]["state"] == "waiting_user"
+    assert model.calls.count("step2") == 1
 
 
 @pytest.mark.parametrize("changed", ["view", "source"])
@@ -132,6 +140,24 @@ def test_manager_controlled_step1_change_queues_manager_resume_without_step2(run
                engine._projection(project, "queue_context", queue["id"]).get("manager_resume")
                for queue in all_records(engine.store, project, "queued_request"))
     assert model.calls.count("step2") == 0
+
+
+def test_harness_scheduled_step1_change_keeps_autoscheduling_without_manager_resume(runtime):
+    engine, _, project, conversation, _, root, card = completed_step1(
+        runtime, manager_controlled=True)
+    with engine.store.transaction():
+        data = engine._task_data(root)
+        data["harness_scheduled"] = True
+        engine._save_task_data(root, data)
+
+    receipt = ActionService(engine).submit(project, conversation, card["id"], "request_changes",
+                                           card["revision"], {"text": "重新核对事件边界"})
+    replacement = engine.store.get(receipt["task_id"], project_id=project)
+    assert engine._task_data(replacement)["manager_controlled"] is True
+    assert engine._task_data(replacement)["harness_scheduled"] is True
+    assert replacement["state"] == "queued"
+    assert not [queue for queue in all_records(engine.store, project, "queued_request")
+                if engine._projection(project, "queue_context", queue["id"]).get("manager_resume")]
 
 
 def test_step1_confirmation_api_replay_does_not_start_a_second_step2(action_api):

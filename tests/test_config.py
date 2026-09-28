@@ -8,6 +8,7 @@ from branch_agent.prompts import (instructions, instruction_parts, instructions_
                                   legacy_prompt_overrides, stage_agent, step1_agent,
                                   step1_run_appendix, LEGACY_HARNESS_RUNTIME,
                                   LEGACY_HARNESS_STAGES, _PREVIOUS_DEFAULT_CLAUSES,
+                                  _AUTO_SCHEDULER_CLAUSES,
                                   defaults as prompt_defaults)
 from branch_agent.records import new_record
 from branch_agent.workflow import session_key
@@ -183,6 +184,73 @@ def test_previous_default_prompts_upgrade_exactly_and_preserve_edits(layout_vers
         original_parent, _ = field(customized, path)
         assert parent[key] == original_parent[key], path
     assert legacy_prompt_overrides(customized_result) == customized_result
+
+
+def test_coordinator_default_authorizes_then_harness_dispatches_step1():
+    values = {'prompts': prompt_defaults(), 'output': {'structured': {'coordinator': True}}}
+    final = instructions_preview('coordinator', values)['final']
+    assert 'begin_adaptation 后由 Harness 根据真实流程状态自动调度' in final
+    assert '不依赖你逐阶段调用 run_stage' in final
+    assert 'Step1–10 候选保存后由 Harness 创建固定版本确认卡' in final
+    assert '不得再为这些候选调用 ask_user' in final
+    assert 'run_stage 只返回真实状态，不执行或重跑阶段' in final
+    assert '修订与恢复走 Harness 待办和任务恢复入口' in final
+    assert 'confirmation_task_id 请求确认' not in final
+    assert '实际创作必须调用 begin_adaptation 和 run_stage' not in final
+
+
+def test_old_coordinator_defaults_upgrade_without_overwriting_user_edits():
+    current = prompt_defaults()
+    old = deepcopy(current)
+
+    def at(tree, path):
+        node = tree
+        for key in path[:-1]:
+            node = node[key]
+        return node, path[-1]
+
+    for path, clauses in _AUTO_SCHEDULER_CLAUSES.items():
+        if path == ('harness', 'runtime', 'coordinator'):
+            continue  # Runtime overrides are optional and absent from defaults.
+        node, key = at(old, path)
+        for previous, replacement in clauses:
+            assert node[key].count(replacement) == 1
+            node[key] = node[key].replace(replacement, previous, 1)
+    upgraded = legacy_prompt_overrides({'prompts': old})['prompts']
+    for path in _AUTO_SCHEDULER_CLAUSES:
+        if path == ('harness', 'runtime', 'coordinator'):
+            continue
+        node, key = at(upgraded, path)
+        expected, _ = at(current, path)
+        assert node[key] == expected[key]
+
+    edited = deepcopy(old)
+    edited['harness']['agents']['conversation_coordinator'] += '\n用户自定义：先解释剧情因果。'
+    edited_result = legacy_prompt_overrides({'prompts': edited})['prompts']
+    assert edited_result['harness']['agents']['conversation_coordinator'] == edited['harness']['agents']['conversation_coordinator']
+
+
+def test_known_old_published_coordinator_route_migrates_only_unchanged_sections():
+    old_a = '''### A. 原文导入后承接首轮 Step1
+
+触发条件：原文解析保存且导入预检通过。该次导入包含首轮 Step1 执行授权，由程序直接创建 Step1 任务并排队执行。
+
+- `step1_started=true`：沿真实 `step1_task_id` 核对任务和原文版本，承接该任务。排队时说明“原文已保存，Step1 已排队，将分别整理作品事件和人物经历”；实际运行时依据两路状态说明哪位 Agent 正在处理什么。
+- `step1_started=false`：读取 `step1_reason` 与具体回执。输入预算不足时说明对应配置及范围；在途流程冲突时定位该流程。先处理实际原因，再使用当前可用的恢复或重新运行入口。
+- 相同原文版本已有排队、运行或等待用户的任务时，继续承接该任务及真实待办。协调器用于状态判断的 `get_workflow_state().workflow` 与自动导入任务分别核对。'''
+    custom_b = '### B. 自定义检查\n\n用户自定义：核对来源。'
+    text = ('# 对话协调阶段 Harness：导入、Step1 衔接与 Step2 审阅\n\n'
+            '用户自定义开头。\n\n' + old_a + '\n\n' + custom_b + '\n\n### F. 用户自定义结尾')
+    values = {'prompts': {'layout_version': 3, 'harness': {'stages': {'coordinator': text}}}}
+    migrated = legacy_prompt_overrides(values)['prompts']['harness']['stages']['coordinator']
+    assert '### A. 授权后由 Harness 启动 Step1' in migrated
+    assert '该次导入包含首轮 Step1 执行授权' not in migrated
+    assert custom_b in migrated and '用户自定义结尾' in migrated
+    assert legacy_prompt_overrides({'prompts': {'layout_version': 3, 'harness': {'stages': {'coordinator': migrated}}}})['prompts']['harness']['stages']['coordinator'] == migrated
+
+    edited = text.replace('触发条件：', '用户自定义触发条件：')
+    untouched = legacy_prompt_overrides({'prompts': {'layout_version': 3, 'harness': {'stages': {'coordinator': edited}}}})['prompts']['harness']['stages']['coordinator']
+    assert untouched == edited
 
 
 def test_config_version_assignment_uses_database_max_in_scope(runtime):

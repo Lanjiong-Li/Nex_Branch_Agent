@@ -85,7 +85,7 @@ def manager_tool_behavior(_context, tool_results):
         if not isinstance(receipt, dict):
             continue
         status = receipt.get("status")
-        if status in ("needs_user_input", "prerequisite_pending", "paused", "failed", "stopped", "completed") \
+        if status in ("needs_user_input", "prerequisite_pending", "harness_scheduled", "paused", "failed", "stopped", "completed") \
                 or item.tool.name == "propose_chapters" and status == "waiting_user":
             return ToolsToFinalOutputResult(True, json.dumps({
                 "_harness_tool": "manager_halt", "receipt": receipt}, ensure_ascii=False))

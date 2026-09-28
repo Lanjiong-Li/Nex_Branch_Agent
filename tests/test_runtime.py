@@ -97,7 +97,7 @@ def test_import_source_starts_step1_from_exact_saved_version(runtime):
     asyncio.run(engine.tick(project, conversation))
     children = all_records(engine.store, project, "task", parent_task_id=root["id"])
     assert len(children) == 1 and children[0]["scope"]["stage"] == 1
-    assert model.calls == []
+    assert model.calls == ["step1", "step1"]
 
 
 def coordinator(task, materials):
