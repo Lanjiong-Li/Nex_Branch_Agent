@@ -46,12 +46,97 @@ class ActionService:
                     and details.get('terminal_status') in ('incomplete', 'failed', 'completed'))
         return received and not (call['usage'].get('reported_cost') or call['usage'].get('estimated_cost'))
 
+    def _unresolved_remote_calls(self, calls):
+        """An acknowledged old unknown call is historical only in its replaced tree."""
+        unknown = [call for call in calls if call['state'] == 'unknown']
+        accepted = {}
+        if unknown:
+            pid = unknown[0]['project_id']
+            for event in all_records(self.store, pid, 'runtime_event', event_name='recovery.uncertain_model_rerun_authorized'):
+                payload = event['payload']
+                if (payload.get('explicit_acknowledgement') is not True
+                        or payload.get('old_remote_outcome') != 'unknown'):
+                    continue
+                for call_ref in payload.get('old_model_call_refs', []):
+                    accepted[call_ref.get('record_id')] = (payload.get('new_budget_root_task_id'),
+                                                            set(payload.get('old_task_ids', [])))
+        unresolved = []
+        for call in calls:
+            if call['state'] != 'unknown' or call['id'] not in accepted:
+                unresolved.append(call)
+                continue
+            replacement_id, old_task_ids = accepted[call['id']]
+            old_task = self.store.get(call['task_id'], project_id=call['project_id'])
+            old_run = self.store.get(call['run_id'], project_id=call['project_id'])
+            replacement = self.store.get(replacement_id, project_id=call['project_id']) if replacement_id else None
+            if (not old_task or call['task_id'] not in old_task_ids
+                    or self.engine._task_data(old_task).get('superseded_by_task_id') != replacement_id
+                    or not old_run or old_run['task_id'] != call['task_id']
+                    or old_run['state'] in ('created', 'running')
+                    or not replacement or replacement['budget_root_task_id'] != replacement_id):
+                unresolved.append(call)
+        return unresolved
+
     def _remote_block(self, tasks, calls):
-        if any(c['state'] in ('pending', 'running', 'unknown') for c in calls):
+        if any(c['state'] in ('pending', 'running', 'unknown') for c in self._unresolved_remote_calls(calls)):
             return '仍有远端结果未知或正在执行的调用，必须先核实，不能重复发起。'
+        if tasks:
+            task_ids = {task['id'] for task in tasks}
+            if any(tool['task_id'] in task_ids and tool['state'] in ('pending', 'running', 'unknown')
+                   for tool in all_records(self.store, tasks[0]['project_id'], 'tool_call')):
+                return '仍有结果未知或正在执行的工具调用，必须先核实。'
         if any(t['state'] in ('running', 'stopping') and t['current_run_id'] for t in tasks):
             return '会话仍有执行中的任务，请等待停止完成。'
         return None
+
+    def _uncertain_step5_rerun_calls(self, pid, task, tree):
+        """Allow a new Step5 tree without resolving an old, fenced model request.
+
+        This is only for an explicit replacement. The old call remains unknown;
+        continuing its Task or releasing an unrelated queue is still blocked.
+        """
+        data = self.engine._task_data(task)
+        if (data.get('stage') != 5 or task['state'] != 'paused'
+                or task['pause_reason'] != 'active_time_limit'):
+            return []
+        stage_ids = {task['id']}
+        while True:
+            expanded = stage_ids | {item['id'] for item in tree if item['parent_task_id'] in stage_ids}
+            if expanded == stage_ids:
+                break
+            stage_ids = expanded
+        project_tasks = all_records(self.store, pid, 'task')
+        unresolved = self._unresolved_remote_calls(all_records(self.store, pid, 'model_call'))
+        unknown = [call for call in unresolved if call['state'] == 'unknown']
+        if (not unknown or any(call['task_id'] not in stage_ids for call in unknown)
+                or any(call['state'] in ('pending', 'running') for call in unresolved)
+                or any(item['state'] in ('queued', 'running', 'stopping', 'waiting_user')
+                       or item['current_run_id'] for item in project_tasks)):
+            return []
+        tool_calls = all_records(self.store, pid, 'tool_call')
+        if any(tool['state'] in ('pending', 'running', 'unknown') for tool in tool_calls):
+            return []
+        runs = [run for run in all_records(self.store, pid, 'run') if run['task_id'] in stage_ids]
+        run_ids = {run['id'] for run in runs}
+        if (any(run['state'] in ('created', 'running') for run in runs)
+                or any(call['run_id'] not in run_ids for call in unknown)):
+            return []
+        if any(self.engine._task_data(item).get('result_ref') or self.engine._task_data(item).get('result_refs')
+               for item in tree if item['id'] in stage_ids):
+            return []
+        uncertain_run_ids = {call['run_id'] for call in unknown}
+        for run in runs:
+            if run['id'] not in uncertain_run_ids:
+                continue
+            output = self.engine._projection(pid, 'run_result', run['id']).get('output')
+            if isinstance(output, dict) and output.get('result_kind') == 'ready':
+                return []
+        for run in runs:
+            for version in all_records(self.store, pid, 'artifact_version', producer_run_id=run['id']):
+                artifact = self.store.get(version['artifact_id'], project_id=pid)
+                if artifact and artifact['artifact_kind'] == 'game_event_view':
+                    return []
+        return unknown
 
     def _source(self, pid):
         try:
@@ -176,7 +261,16 @@ class ActionService:
             if cost_gates and unknown:
                 budget_fields.insert(0, field('accept_unknown_cost', '我接受所列旧调用费用仍未知；它们不计入新任务独立预算', 'checkbox'))
             disabled = remote_block or (None if source else '请先导入原作。')
-            rerun_disabled = disabled
+            uncertain_rerun_calls = (self._uncertain_step5_rerun_calls(pid, task, tree)
+                                     if remote_block else [])
+            rerun_disabled = (None if uncertain_rerun_calls else remote_block) or (None if source else '请先导入原作。')
+            rerun_fields = list(budget_fields)
+            if uncertain_rerun_calls:
+                rerun_fields.insert(0, field('accept_unknown_model_outcome_and_cost',
+                    '我确认旧 Step5 模型调用结果和费用仍可能未知，并授权在新独立预算下重新发起', 'checkbox'))
+                details_unknown = ', '.join(call['id'] for call in uncertain_rerun_calls)
+            else:
+                details_unknown = None
             if stage not in STAGES:
                 rerun_disabled = rerun_disabled or '此任务不是可独立重跑的创作阶段，请从 Step1 重新开始。'
             else:
@@ -191,6 +285,8 @@ class ActionService:
                        {'label': '已发布配置输出上限', 'value': str(published['model']['max_output_tokens'])}]
             if cost_gates:
                 details.append({'label': '旧调用费用未知', 'value': ', '.join(c['id'] for c in unknown) or '无'})
+            if details_unknown:
+                details.append({'label': '旧 Step5 远端结果和费用未知', 'value': details_unknown})
             dependencies = all_records(self.store, pid, 'dependency')
             def step1_view_detail(kind, label):
                 try:
@@ -218,7 +314,9 @@ class ActionService:
                               '保留旧记录，替代此旧流程及其子任务；重新分段并逐阶段生成。' + ('新预算不包含未知旧费用。' if cost_gates else ''), budget_fields,
                               disabled or ('已有交付版本，请按具体阶段修订，或新建改编项目。' if has_delivery else None)),
                        action('rerun_published', '使用已发布配置重跑失败阶段',
-                              '创建新任务和配置快照，复用仍有效的上游产物；旧任务保持归档。', budget_fields, rerun_disabled)]
+                              '创建新任务和配置快照，复用仍有效的上游产物；旧任务保持归档。'
+                              + ('旧模型调用的远端结果和费用保持未知。' if uncertain_rerun_calls else ''),
+                              rerun_fields, rerun_disabled)]
             resume_disabled = remote_block or ('仍有费用未知，需先记录真实费用或明确接受后创建独立新任务。' if cost_gates and unknown else None)
             if task['state'] not in ('paused', 'stopped') or task['pause_reason'] in ('operation_uncertain', 'checkpoint_invalid', 'dependency_changed'):
                 resume_disabled = resume_disabled or '此状态不能安全按旧配置继续；请选择重跑或重新开始。'
@@ -240,7 +338,8 @@ class ActionService:
                  'details': details, 'targets': [ref(t) for t in tree], 'actions': actions},
                 [task, data, tree, tree_calls, gate['holds'], ref(source) if source else None,
                  hashlib.sha256(canonical_bytes(published)).hexdigest(), published_ids],
-                {'task': task, 'root': root, 'tree': tree, 'unknown_calls': unknown, 'source': source})
+                {'task': task, 'root': root, 'tree': tree, 'unknown_calls': unknown,
+                 'uncertain_rerun_calls': uncertain_rerun_calls, 'source': source})
         for queued in all_records(self.store, pid, 'queued_request', conversation_id=cid):
             if queued['state'] not in ('pending', 'blocked'):
                 continue
@@ -552,6 +651,10 @@ class ActionService:
 
     def _restart(self, pid, cid, ctx, action_id, values, message):
         old, root = ctx['task'], ctx['root']
+        uncertain_calls = ctx.get('uncertain_rerun_calls', [])
+        if uncertain_calls and (action_id != 'rerun_published'
+                                or values.get('accept_unknown_model_outcome_and_cost') is not True):
+            raise WorkflowBlocked('action_unavailable', {'reason': '必须明确确认旧模型调用的远端结果和费用未知。'})
         cost = self._amount(values.get('max_cost_usd'), 'max_cost_usd') if self.engine.cost_gates_enabled else None
         seconds = self._amount(values.get('max_active_seconds'), 'max_active_seconds')
         if seconds != seconds.to_integral_value():
@@ -560,10 +663,14 @@ class ActionService:
         rootdata = self.engine._task_data(root)
         fresh = action_id == 'restart'
         stage = 1 if fresh else olddata['stage']
+        authorized_stages = rootdata.get('stages', [stage])
+        if not fresh and stage not in authorized_stages:
+            raise WorkflowBlocked('action_unavailable', {'reason': '失败阶段不在原流程的授权范围内。'})
+        stages = list(range(1, 12)) if fresh else [value for value in authorized_stages if value >= stage]
         request = ('从当前原作 Step1 重新开始完整改编。' if fresh else f'使用新配置重跑 Step{stage} 并继续原授权流程。')
         request += '\n原始创作要求：' + rootdata.get('request', '')
         newroot = self.engine._new_task(pid, cid, message, 'generate', is_workflow=True,
-            stages=list(range(1,12)) if fresh else rootdata.get('stages', [stage]),
+            stages=stages,
             chapter_ids=[] if fresh else deepcopy(rootdata.get('chapter_ids', [])),
             request=request, fresh_start=fresh, source_ref=ref(ctx['source']), replaces_task_id=root['id'],
             manager_controlled=bool(rootdata.get('manager_controlled')),
@@ -577,8 +684,27 @@ class ActionService:
                       max_active_seconds=int(seconds), disabled_limits=[] if self.engine.cost_gates_enabled else ['cost'])
         newroot = update(self.store, newroot, budget=limits)
         self._supersede(pid, cid, ctx['tree'], newroot, message)
+        frozen_queue_request_ids = []
+        if uncertain_calls:
+            # The user's waiver authorizes this replacement, not unrelated
+            # requests that were still pending during the old pause.
+            for queued in all_records(self.store, pid, 'queued_request', conversation_id=cid):
+                if queued['mode'] == 'queue' and queued['state'] == 'pending':
+                    update(self.store, queued, state='blocked', blocked_reason='queue_hold')
+                    frozen_queue_request_ids.append(queued['id'])
         child = self.engine._dispatch(newroot, stage, None if fresh else olddata.get('chapter_id'), request=request)
         self._freeze(child, stage)
+        if uncertain_calls:
+            self.engine._event(pid, 'recovery.uncertain_model_rerun_authorized', {
+                'old_model_call_refs': [ref(call) for call in uncertain_calls],
+                'old_task_ids': sorted(item['id'] for item in ctx['tree']),
+                'old_budget_root_task_id': root['budget_root_task_id'],
+                'new_budget_root_task_id': newroot['id'], 'new_stage_task_id': child['id'],
+                'new_budget': limits, 'old_remote_outcome': 'unknown', 'old_usage': 'unknown',
+                'explicit_acknowledgement': values['accept_unknown_model_outcome_and_cost'],
+                'frozen_queue_request_ids': frozen_queue_request_ids,
+                'source_message_id': message['id']},
+                conversation=cid, task=newroot['id'], source=message['id'])
         if self.engine.cost_gates_enabled and ctx['unknown_calls']:
             self.engine._event(pid, 'usage.unknown_accepted', {'model_call_refs': [ref(c) for c in ctx['unknown_calls']],
                 'old_budget_root_task_id': root['budget_root_task_id'], 'new_budget_root_task_id': newroot['id'],
