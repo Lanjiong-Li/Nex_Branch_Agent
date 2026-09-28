@@ -24,6 +24,7 @@ const failureMessages={
   operation_uncertain:'模型请求的完成状态无法确认，需要先核对调用记录。',
   input_budget_exceeded:'本次请求的输入超出上下文预算。',
   source_index_migration_required:'旧版阶段产物缺少独立原文索引，需重新生成并确认对应阶段。',
+  source_event_analysis_migration_required:'旧版阶段协议不兼容，请按新配置重跑对应阶段；若作品事件缺少逐事件分析，需从 Step1 重跑。',
   tool_output_budget_exceeded:'工具读取结果超出本次读取预算。',
   cost_limit:'任务费用已达到预算上限。',active_time_limit:'任务活动耗时已达到预算上限。',
   turn_limit:'本次运行已达到模型轮次上限。',usage_uncertain:'调用用量尚未核验，暂不能开始新的请求。',

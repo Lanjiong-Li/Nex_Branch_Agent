@@ -389,6 +389,8 @@ class ActionService:
             data.setdefault('answered_needs_input_run_ids', []).append(data['current_run_id'])
             data.pop('resume_saved_result', None)
         self.engine._save_task_data(task, data)
+        if action_id == 'confirm' and not remaining and data.get('step1_review'):
+            return self.engine._approve_step1_review(task, message)
         if not remaining:
             if data.get('coordinator') and not data.get('chapter_planning'):
                 # The clarified input becomes an exact new user request. The old
@@ -427,6 +429,23 @@ class ActionService:
 
     def _request_changes(self, pid, cid, task, item, text, message, *, schedule_manager_resume=True):
         data = self.engine._task_data(task)
+        if data.get('step1_review') and data.get('is_workflow'):
+            review = data['step1_review']
+            manager_controlled = bool(data.get('manager_controlled'))
+            if review['source_ref'] != ref(self.engine.workflow.resolve(pid, 'source_text')):
+                raise WorkflowBlocked('dependency_changed', {'kind': 'source_text'})
+            replacement = self.engine._new_task(pid, cid, message, 'modify', is_workflow=True,
+                stages=deepcopy(data.get('stages', [1])),
+                chapter_ids=deepcopy(data.get('chapter_ids', [])),
+                source_ref=review['source_ref'], fresh_start=True,
+                manager_controlled=manager_controlled,
+                request=data.get('request', '') + '\n根据用户意见重新执行 Step1 两路事件视图：' + text,
+                replaces_task_id=task['id'])
+            _, tree = self._tree(task, self._tasks(pid, cid))
+            self._supersede(pid, cid, tree, replacement, message)
+            if manager_controlled and schedule_manager_resume:
+                self.engine._queue_manager_resume(replacement, message)
+            return {'status': 'queued', 'task_id': replacement['id']}
         if data.get('chapter_plan') and data.get('is_workflow'):
             data['request'] = data.get('request', '') + '\n用户要求调整章节：' + text
             data['chapter_plan_source_message_id'] = message['id']

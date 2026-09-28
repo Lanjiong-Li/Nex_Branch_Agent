@@ -6,7 +6,6 @@ def test_stage_result_is_presented_as_readable_prose_without_json_envelope():
         "result_kind": "ready",
         "payload": {
             "source_global_events_ref": {"record_id": "global", "version": "1", "item_id": None, "json_pointer": None},
-            "source_global_analysis_ref": {"record_id": "analysis", "version": "1", "item_id": None, "json_pointer": None},
             "source_character_events_ref": {"record_id": "character", "version": "1", "item_id": None, "json_pointer": None},
             "premise": "一个守塔人必须在真相与亲情之间做出选择。",
             "world_rules": [{"finding_id": "rule-1", "statement": "雾潮会抹去人的短期记忆。", "evidence_refs": []}],
@@ -74,12 +73,15 @@ def test_chapter_graph_presentation_contains_model_written_story_and_choices():
 def test_step1_markdown_keeps_event_id_but_not_source_anchor_and_escapes_html():
     result = {"payload": {"global_events": [{"event_id": "EVT-01", "title": "第一次相遇",
         "summary": "<script>alert(1)</script>",
+        "analysis": "这次相遇建立人物冲突。",
         "source_anchors": [{"start_utf16": 0, "end_utf16": 5}]}],
         "remaining_source_anchors": []}}
     document = artifact_to_markdown(result, stage=1,
         artifact_kind="source_global_events", version=2)
     assert document.startswith("# Step 1 · 作品事件视图（v2）")
     assert "EVT-01" in document
+    assert "#### 事件分析" in document
+    assert "这次相遇建立人物冲突。" in document
     assert "source_anchors" not in document
     assert "\\<script\\>" in document
     assert "请确认以上结果" not in document

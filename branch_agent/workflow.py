@@ -15,13 +15,13 @@ STAGES = {1: "source_global_events", 2: "source_knowledge_asset", 3: "adaptation
           7: "ending_routes", 8: "player_profiles", 9: "chapter_design",
           10: "chapter_graph", 11: "review_report"}
 STAGE_OUTPUTS = {
-    1: ("source_global_events", "source_global_analysis", "source_character_events"),
+    1: ("source_global_events", "source_character_events"),
 }
 AGENTS = {1: "source_parser", 2: "source_knowledge_analyst", 3: "adaptation_planner",
           4: "adaptation_planner", 5: "interaction_architect", 6: "interaction_architect",
           7: "interaction_architect", 8: "interaction_architect", 9: "chapter_designer",
           10: "chapter_writer", 11: "validation_agent"}
-REQUIRES = {1: ["source_text"], 2: ["source_global_events", "source_global_analysis", "source_character_events"],
+REQUIRES = {1: ["source_text"], 2: ["source_global_events", "source_character_events"],
             3: ["source_knowledge_asset"],
             4: ["source_knowledge_asset", "adaptation_strategy"],
             5: ["source_global_events", "source_character_events", "source_knowledge_asset"],
@@ -33,7 +33,7 @@ REQUIRES = {1: ["source_text"], 2: ["source_global_events", "source_global_analy
 PROGRAM_REQUIRES = {5: ["adaptation_plan"], 6: ["adaptation_plan"],
                     7: ["adaptation_plan"], 8: ["adaptation_plan"]}
 WHOLE = {"item_id": None, "json_pointer": ""}
-PLAIN_ARTIFACTS = {"source_text", "source_global_analysis"}
+PLAIN_ARTIFACTS = {"source_text"}
 
 
 class WorkflowBlocked(ValueError):
@@ -116,6 +116,9 @@ class Workflow:
     def materials(self, project_id, stage, chapter_id=None, input_kinds=None):
         # Program-only prerequisites gate the stage but are deliberately not
         # exposed to the model or frozen into its ContextSnapshot.
+        selected_kinds = list(REQUIRES[stage] if input_kinds is None else input_kinds)
+        if len(selected_kinds) != len(set(selected_kinds)):
+            raise WorkflowBlocked("invalid_stage_inputs", {"stage": stage})
         plan = None
         for kind in PROGRAM_REQUIRES.get(stage, ()):
             prerequisite = self.resolve(project_id, kind)
@@ -126,20 +129,27 @@ class Workflow:
         indexed_events = self.planned_game_events(project_id, plan=plan) if stage in (6, 7, 8, 9) else None
         indexed_routes = self.planned_ending_routes(project_id, plan=plan) if stage in (8, 9) else None
         indexed_profiles = self.planned_player_profiles(project_id, plan=plan) if stage == 9 else None
-        global_events = self.resolve(project_id, "source_global_events") if stage in (2, 5) else None
-        character_events = self.resolve(project_id, "source_character_events") if stage in (2, 5) else None
+        global_events = (self.resolve(project_id, "source_global_events")
+                         if stage in (2, 5) and ("source_global_events" in selected_kinds
+                                                  or stage == 5 and "source_text" in selected_kinds) else None)
+        character_events = (self.resolve(project_id, "source_character_events")
+                            if stage in (2, 5) and "source_character_events" in selected_kinds else None)
+        if stage in (2, 5) and global_events and character_events:
+            self.require_approved_step1_inputs(project_id, [
+                {"kind": "source_global_events", "record": global_events},
+                {"kind": "source_character_events", "record": character_events},
+            ])
         chapter_design = self.resolve(project_id, "chapter_design", chapter_id) if stage == 10 else None
         if global_events:
-            if ref(self.original_for(project_id, global_events)) != ref(self.original_for(project_id, character_events)):
+            if character_events and ref(self.original_for(project_id, global_events)) != ref(self.original_for(project_id, character_events)):
                 raise WorkflowBlocked("source_reference_mismatch", {"kind": "step1_views"})
-        if stage == 2:
-            global_analysis = self.resolve(project_id, "source_global_analysis")
-            if ref(global_events) not in global_analysis["source_refs"]:
-                raise WorkflowBlocked("source_reference_mismatch", {"kind": "source_global_analysis"})
-            if ref(self.original_for(project_id, global_analysis)) != ref(self.original_for(project_id, global_events)):
-                raise WorkflowBlocked("source_reference_mismatch", {"kind": "source_global_analysis"})
-        if stage == 5:
             global_payload = body(self.store, global_events)["payload"]
+            if "source_global_events" in selected_kinds and any(
+                    not isinstance(event.get("analysis"), str) or not event["analysis"].strip()
+                    for event in global_payload["global_events"]):
+                raise WorkflowBlocked("source_event_analysis_migration_required",
+                                      {"kind": "source_global_events", "reason": "old_global_view"})
+        if stage == 5 and "source_global_events" in selected_kinds:
             if any(not event.get("source_anchors") for event in global_payload["global_events"]):
                 raise WorkflowBlocked("source_index_migration_required", {"kind": "source_global_events"})
         if indexed_events:
@@ -162,9 +172,6 @@ class Workflow:
                                          for source in indexed_profiles["source_refs"])
                                   for version in (indexed_events, indexed_routes)):
             raise WorkflowBlocked("dependency_changed", {"kind": "player_profiles.stage_artifact_refs"})
-        selected_kinds = list(REQUIRES[stage] if input_kinds is None else input_kinds)
-        if len(selected_kinds) != len(set(selected_kinds)):
-            raise WorkflowBlocked("invalid_stage_inputs", {"stage": stage})
         items = []
         for kind in selected_kinds:
             # A candidate full Project is frozen before audit but not yet deliverable.
@@ -210,6 +217,66 @@ class Workflow:
                               "required": True, "record": current, "content": body(self.store, current),
                               "state": self.state(current), "material_role": "current_stage_baseline"})
         return items
+
+    def require_approved_step1_inputs(self, project_id, materials):
+        """Reject unapproved or superseded views, including fixed Run recovery inputs."""
+        kinds = ("source_global_events", "source_character_events")
+        versions = {}
+        for kind in kinds:
+            matches = [material for material in materials
+                       if (material.get("kind") or material.get("schema_id")) == kind]
+            if len(matches) != 1:
+                raise WorkflowBlocked("invalid_stage_inputs", {"kind": kind})
+            material = matches[0]
+            versions[kind] = (material.get("record") or
+                              self.fixed_version(project_id, material["ref"]))
+        current_pair = {kind: ref(version) for kind, version in versions.items()}
+        for kind, version in versions.items():
+            if ref(self.resolve(project_id, kind)) != current_pair[kind]:
+                raise WorkflowBlocked("dependency_changed", {"kind": kind})
+        source_ref = ref(self.original_for(project_id, versions[kinds[0]]))
+        if ref(self.original_for(project_id, versions[kinds[1]])) != source_ref:
+            raise WorkflowBlocked("source_reference_mismatch", {"kind": "step1_views"})
+        if any(version.get("producer_run_id") for version in versions.values()):
+            if any(self.state(version)["confirmation_status"] != "confirmed"
+                   for version in versions.values()):
+                raise WorkflowBlocked("confirmation_required", {"kind": "step1_views"})
+        reviews = []
+        for task in all_records(self.store, project_id, "task"):
+            data = self.store.projection_get(f"{project_id}:task_runtime:{task['id']}") or {}
+            review = data.get("step1_review")
+            if review and review.get("source_ref") == source_ref:
+                reviews.append(data)
+        if reviews and not any(data.get("step1_approved_refs") == current_pair for data in reviews):
+            raise WorkflowBlocked("confirmation_required", {"kind": "step1_views"})
+
+    @staticmethod
+    def require_fixed_source_event_analysis(stage, materials):
+        """Reject pre-change Step1 inputs frozen by a Step2/5 Run."""
+        if stage not in (2, 5):
+            return
+        def kind(material):
+            return material.get("kind") or material.get("schema_id")
+        if any(kind(item) == "source_global_analysis" for item in materials):
+            raise WorkflowBlocked("source_event_analysis_migration_required",
+                                  {"reason": "old_analysis_artifact"})
+        global_views = [item for item in materials if kind(item) == "source_global_events"]
+        if len(global_views) > 1 or (stage == 2 and not global_views):
+            raise WorkflowBlocked("invalid_stage_inputs",
+                                  {"stage": stage, "kind": "source_global_events"})
+        if stage == 2 and sum(kind(item) == "source_character_events" for item in materials) != 1:
+            raise WorkflowBlocked("invalid_stage_inputs",
+                                  {"stage": stage, "kind": "source_character_events"})
+        if not global_views:
+            return
+        content = global_views[0].get("content")
+        payload = content.get("payload") if isinstance(content, dict) else None
+        events = payload.get("global_events") if isinstance(payload, dict) else None
+        if not isinstance(events, list) or any(
+                not isinstance(event, dict) or not isinstance(event.get("analysis"), str)
+                or not event["analysis"].strip() for event in events):
+            raise WorkflowBlocked("source_event_analysis_migration_required",
+                                  {"reason": "old_global_view"})
 
     def original_for(self, project_id, version, _seen=None):
         """Follow fixed provenance to the original text; never select the newest import."""
@@ -384,6 +451,13 @@ class Workflow:
             raise WorkflowBlocked("invalid_confirmation_source")
         target = request.get("target_ref")
         version = self.fixed_version(project_id, target)
+        artifact = self.store.get(version["artifact_id"], project_id=project_id)
+        state = self.state(version)
+        if artifact["latest_version"] != version["version"] or state["dependency_status"] != "valid":
+            raise WorkflowBlocked("confirmation_candidate_changed")
+        if (artifact["artifact_kind"] in ("source_global_events", "source_character_events")
+                and artifact["current_effective_version"] != version["version"]):
+            raise WorkflowBlocked("confirmation_candidate_changed")
         matching = [p for p in presented if p["subject"]["record_id"] == target["record_id"]
                     and p["subject"]["version"] == target["version"]]
         if not matching:
@@ -391,6 +465,9 @@ class Workflow:
         paths = request.get("requested_confirmation_paths") or []
         if not paths:
             raise WorkflowBlocked("confirmation_scope_required")
+        if (artifact["artifact_kind"] in ("source_global_events", "source_character_events")
+                and not any(path in ("", "/payload") for path in paths)):
+            raise WorkflowBlocked("confirmation_scope_incomplete")
         value = body(self.store, version)
         selections = []
         shown = {s["json_pointer"] for p in matching for s in p["selections"]}
@@ -414,16 +491,12 @@ class Workflow:
             selections=selections, action="confirm", basis="user_statement",
             source_message_ids=[message["id"]], carried_from_confirmation_ids=[],
             scope_mapping_ref=None, revokes_confirmation_ids=[], applied_run_id=run_id))
-        state = self.state(version)
         selections = state["effective_selections"] + [s for s in selections if s not in state["effective_selections"]]
         complete = "" in {s["json_pointer"] for s in selections}
         # A full payload is the complete business result; envelope metadata is never a user decision.
         complete |= "/payload" in {s["json_pointer"] for s in selections}
-        artifact = self.store.get(version["artifact_id"], project_id=project_id)
         selected_paths = [s["json_pointer"] for s in selections]
-        if artifact["artifact_kind"] == "source_global_analysis":
-            required = []
-        elif artifact["artifact_kind"] == "adaptation_strategy":
+        if artifact["artifact_kind"] == "adaptation_strategy":
             required = ["/payload/player_identity", "/payload/user_ideas", "/payload/strategy_basis"]
         else:
             required = ["/payload/" + field for field in value.get("payload", {})]

@@ -376,7 +376,7 @@ def test_unsaved_instruction_layers_have_server_preview_without_publication(api)
         'stage':'step1','values':source_values})
     assert source_preview.status_code==200,source_preview.text
     branches=source_preview.json()['views']
-    assert '只负责作品事件视图及其分析' in branches['global']['final']
+    assert '只负责作品事件视图及其中每条事件的分析' in branches['global']['final']
     assert '人物分支不输出顶层 analysis' in branches['character']['final']
     assert '滑动窗口固定协议' not in branches['global']['final']
     assert branches['global']['parts']['tool_guidance']==source_values['prompts']['harness']['no_ask_user']
@@ -658,7 +658,7 @@ def test_history_projects_knowledge_asset_to_readable_model_content(api):
     source=workflow.save(pid,'source_text','甲在雾港寻找失踪的妹妹。',origin='import',effective=True)
     from test_runtime import step2_response
     result=step2_response('甲必须在风暴抵达前找到妹妹。','保留兄妹关系。')
-    for key in ('source_global_events_ref','source_global_analysis_ref','source_character_events_ref'):
+    for key in ('source_global_events_ref','source_character_events_ref'):
         result['payload'][key]=ref(source)
     result['notes']=['保留兄妹关系。']
     version=workflow.save(pid,'source_knowledge_asset',result,stage=2)
@@ -684,7 +684,7 @@ def test_markdown_history_and_download_are_bound_to_the_presented_version(api):
     workflow=Workflow(store)
     source=workflow.save(pid,'source_text','甲在雾港寻找妹妹。',origin='import',effective=True)
     result=step2_response('旧版前提。','保留兄妹关系。')
-    for key in ('source_global_events_ref','source_global_analysis_ref','source_character_events_ref'):
+    for key in ('source_global_events_ref','source_character_events_ref'):
         result['payload'][key]=ref(source)
     first=workflow.save(pid,'source_knowledge_asset',result,stage=2)
     conversation=store.get(cid,pid);conversation['last_message_seq']=1

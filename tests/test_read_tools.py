@@ -64,6 +64,7 @@ def source_event_case(store, project, original, *, title='相遇', event_id='GEV
     output = {'result_kind': 'ready', 'payload': {
         'source_ref': source_ref,
         'global_events': [{'event_id': event_id, 'title': title, 'summary': '事件概要',
+                           'analysis': '事件推动人物关系变化。',
                            'narrative_order': 1, 'story_time': None, 'character_ids': [],
                            'source_anchors': anchors}],
         'covered_source_anchors': anchors, 'remaining_source_anchors': []},

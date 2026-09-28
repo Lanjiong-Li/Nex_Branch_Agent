@@ -54,7 +54,7 @@ Harness 必须保存项目内全部用户对话、版本化产物及关键决策
 | 阶段 | 工作 Session | 跨阶段保存的内容 |
 | --- | --- | --- |
 | Step1：原作双视图切片 | 全局事件 Agent 与主要人物事件 Agent 各用独立 Session，并行执行 | 固定原文版本、各自的 UTF-16 窗口游标、分别保存的全局事件视图与主要人物事件视图、用户对切片标准的修正 |
-| Step2：原作核心信息分析 | 与 Step3、Step4 共享“改编方向”Session | 分别保存全局事件分析与主要人物事件分析，以及各自的版本和确认记录 |
+| Step2：原作知识资产分析 | 独立 Session | 综合作品事件与人物事件的固定版本，保存结构化原作知识资产并等待一次确认 |
 | Step3：确认玩家角色与互动策略 | 与 Step2、Step4 共享 | 玩家身份、用户想法、策略变化、被否定方案及已记录理由 |
 | Step4：推导改编方案 | 与 Step2、Step3 共享；方案稳定后保存检查点 | 改编方案版本、依据、确认状态 |
 | Step5：游戏层面的事件视图 | 与 Step6 共享“宏观互动结构”Session | 已确认的游戏事件视图及写回改编方案的版本 |
@@ -155,7 +155,7 @@ Step1 默认在原作估算 token 数超过 500000 时启用 300000-token 滑动
 | 阶段 | 自动读取的必需来源与工作材料 | 按需补充材料 |
 | --- | --- | --- |
 | Step1：原作切片 | 两个 Agent 各自加载固定版本的全文或当前滑动窗口、目录／范围索引、切片规则及适用的用户修正；修改时加入对应视图和待修正问题 | 切片标准的历史讨论及既有结果依据；不得以补充读取代替当前应处理的原文范围 |
-| Step2：原作知识资产分析 | Step1 固定的全局事件、全局分析和主要人物事件 | 形成结构化 `source_knowledge_asset`，一次展示并等待确认 |
+| Step2：原作知识资产分析 | Step1 固定的作品事件视图（含逐事件 `analysis`）和主要人物事件视图 | 形成结构化 `source_knowledge_asset`，一次展示并等待确认 |
 | Step3：玩家身份与互动策略 | 已确认的原作知识资产、默认策略、用户当前互动想法 | 原作事件、对应原文与过去讨论 |
 | Step4：改编方案 | 原作知识资产、已确定的玩家身份与策略、适用保留要求和禁止事项 | 原作事件、人物细节、决策出处 |
 | Step5：游戏事件视图 | 原作全局事件视图、主要人物事件视图、原作知识资产及本次改编范围详细事件 | 原文、其他角色视图、相关历史理由；Step4 方案只作为 Harness 写回目标，不进入模型上下文 |
@@ -442,7 +442,7 @@ Agent 工具提供主动读取能力，Harness 内部接口负责自动记录、
 | Instructions | `prompts.base`、`prompts.agent`、`prompts.stage` | 共通要求、Agent 职责、阶段任务分别配置 | 文本／模板编辑器 |
 | 辅助提示词 | `prompts.summary`、`prompts.history_answer`、`prompts.validation` | 分别用于摘要、历史证据和可选校验 Agent；`prompts.validation` 默认为空，空值表示关闭 | 按任务编辑；填写并发布校验 instructions 后，仅对后续新运行启用校验 Agent |
 | 默认改编策略 | `adaptation.default_strategy` | 初值见 [defaults.json](context/defaults.json)；Step3 读取固定配置中的策略正文，用户明确采用后沿用；配置文本不替代玩家身份及创作决定确认 | 提示词区域的策略文本编辑与继承预览 |
-| 输出结构 | `output.schemas`、`output.bindings` | 使用第 6 节已注册的 v2 Schema；Step1 两个 Agent 分别绑定 `source_global_step1_result` 与 `source_character_step1_result`；Step2 绑定 `source_knowledge_asset`；逐章生成绑定 `chapter_graph`，整剧生成与最终组装结果绑定同一 `nexo_graph` | 结构化类型的字段树与 JSON Schema 编辑器；按版本绑定 Agent／阶段 |
+| 输出结构 | `output.schemas`、`output.bindings` | 使用第 6 节已注册的 v2 Schema；Step1 两个 Agent 分别绑定 `source_global_events` 与 `source_character_step1_result`；Step2 绑定 `source_knowledge_asset`；逐章生成绑定 `chapter_graph`，整剧生成与最终组装结果绑定同一 `nexo_graph` | 结构化类型的字段树与 JSON Schema 编辑器；按版本绑定 Agent／阶段 |
 | 展示与确认 | `output.field_ui`、`output.confirmation_selectors` | 中文标签、顺序、分组和确认条目路径；是否必须确认由流程规则决定 | 对话内产物预览、确认范围与版本展示 |
 | 消费与转换 | `output.consumer_bindings`、`output.result_mapping`、`output.export_targets`、`output.export_mappings` | 绑定下游语义、阶段信封路径、直接 `Project` 根路径、章节组装及 Nexo Graph JSON 导出映射版本 | 消费者影响、字段映射、标准转换和目标格式 |
 | 阶段材料 | `context.profiles` | 初值为 [stage-materials.json](context/stage-materials.json)；配置来源、字段路径、范围筛选、自动／按需、必需程度、展开方式和优先级；固定版本及元数据始终保留 | 按阶段选择材料与字段，查看依赖和缺失语义；恢复继承 |
@@ -667,7 +667,7 @@ Interrupt 不回滚既有产物和历史。等待确认或澄清时，Harness �
 | 职责 | 两个 Agent 并行、独立识别全局事件和主要人物事件；精确 UTF-16 位置换算和索引核验由程序负责 |
 | 阶段 | Step1：原作双视图切片 |
 | 输入 | 两个 Agent 各自读取同一固定原文版本；未超过触发阈值时各自读取全文，超过阈值时各自读取独立游标对应的当前窗口，并加载目录／范围索引、规则和适用修正 |
-| 输出 | 全局事件 Agent 只生成 `source_global_events`，人物事件 Agent 只生成 `source_character_events`；两个产物分别保存、引用和版本化，每个事件直接锚定原作 UTF-16 区间 |
+| 输出 | 全局事件 Agent 只生成 `source_global_events`，每个事件有非空 `analysis` 和原作 UTF-16 锚点；人物事件 Agent 只生成不带逐事件原文锚点的 `source_character_events`。两个产物分别保存、引用和版本化。 |
 | instructions | 两个 Agent 各有独立的创作与 Harness instructions，分别判断自身视图的事件边界，不要求人物事件引用全局事件 ID。保持时间顺序与跨段联系，区分原作事实和推测；窗口模式只提交已校验的连续覆盖前缀，不编造索引或跳过原文。 |
 | 工具 | `read_record` 核对定位、原文及既有产物；`list_records` 查找规则、产物和用户修正；工具分页不能替代 Harness 组装的全文或当前窗口正文 |
 | Session | 两个视图各有独立工作 Session 和 UTF-16 游标，可并行推进；修正、重试及恢复固定原文版本与各自覆盖进度 |
@@ -810,9 +810,9 @@ UTF-16 换算、读取范围记录、版本分配和确认记录由程序负责�
 | 使用位置 | output_type | 主要业务字段 |
 | --- | --- | --- |
 | 协调／历史回答 | 可选 [coordinator_response](/Users/llj/HKU/Agent_Harness_Develop/docs/output-schemas/v2/coordinator_response.schema.json) | 绑定时用 `reply` 答复且 `task_requests=[]`；关闭时直接返回普通文本，工具调度仍可运行 |
-| Step1：全局事件 Agent | [source_global_step1_result](/Users/llj/HKU/Agent_Harness_Develop/docs/output-schemas/v2/source_global_step1_result.schema.json) | `source_ref`、`global_events` 及各事件的 `source_anchors`、`covered_source_anchors`、`remaining_source_anchors`；非空顶层 `analysis` 另存为 `source_global_analysis` |
+| Step1：全局事件 Agent | [source_global_events](/Users/llj/HKU/Agent_Harness_Develop/docs/output-schemas/v2/source_global_events.schema.json) | `source_ref`、`global_events` 及各事件必填非空的 `analysis` 与 `source_anchors`、`covered_source_anchors`、`remaining_source_anchors`；模型结果直接保存为同名产物 |
 | Step1：主要人物事件 Agent | [source_character_step1_result](/Users/llj/HKU/Agent_Harness_Develop/docs/output-schemas/v2/source_character_step1_result.schema.json) | `source_ref`、`character_views[].events`、`covered_source_anchors`、`remaining_source_anchors`；人物事件没有逐事件原文索引或顶层分析 |
-| Step2 | [source_knowledge_asset](/Users/llj/HKU/Agent_Harness_Develop/docs/output-schemas/v2/source_knowledge_asset.schema.json) | 固定的三份 Step1 输入引用、世界规则、主题、人物关系、事件因果、原作保留项及不确定性 |
+| Step2 | [source_knowledge_asset](/Users/llj/HKU/Agent_Harness_Develop/docs/output-schemas/v2/source_knowledge_asset.schema.json) | 固定的两份 Step1 输入引用、世界规则、主题、人物关系、事件因果、原作保留项及不确定性 |
 | Step3 | [adaptation_strategy](/Users/llj/HKU/Agent_Harness_Develop/docs/output-schemas/v2/adaptation_strategy.schema.json) | `source_knowledge_asset_ref`、`player_identity`、`strategy_basis`、`experience_goals`、`user_ideas`、`adaptation_principles`、`interaction_principles`、`constraints` |
 | Step4 | [adaptation_plan](/Users/llj/HKU/Agent_Harness_Develop/docs/output-schemas/v2/adaptation_plan.schema.json) | `title`、`logline`、`premise_and_scope`、`source_knowledge_asset_ref`、`strategy_ref`、`player_role`、`experience_goals`、`world_and_character_changes`、`entity_specs`、`narrative_constraints`、`writing_style`、`stage_artifact_refs` |
 | Step5 | [game_event_view](/Users/llj/HKU/Agent_Harness_Develop/docs/output-schemas/v2/game_event_view.schema.json) | 独立游戏 `events` 及其原文 `source_anchors`、`event_links`、`source_coverage`；确认后由 Harness 将固定版本引用写入 `adaptation_plan.stage_artifact_refs.game_events` |
@@ -825,7 +825,7 @@ UTF-16 换算、读取范围记录、版本分配和确认记录由程序负责�
 | 局部子任务 | [subtask_result](/Users/llj/HKU/Agent_Harness_Develop/docs/output-schemas/v2/subtask_result.schema.json) | `task`、`findings`、`recommendations`、`limitations`、`artifact_refs` |
 | 最终整剧／整剧生成 | [nexo_graph](/Users/llj/HKU/Agent_Harness_Develop/docs/output-schemas/v2/nexo_graph.schema.json) | 根对象 `Project`，字段见 6.1 |
 
-同一 Agent 按任务选择对应类型。协调 Agent 的 `coordinator_response` 可在配置中关闭；关闭后工具调用照常执行，最终答复为普通文本。已注册阶段、局部子任务和最终 Graph 的输出结构均可配置。Step1 的全局分析与工作摘要为纯文本产物。
+同一 Agent 按任务选择对应类型。协调 Agent 的 `coordinator_response` 可在配置中关闭；关闭后工具调用照常执行，最终答复为普通文本。已注册阶段、局部子任务和最终 Graph 的输出结构均可配置。工作摘要为纯文本产物。
 
 ### 6.3 阶段返回格式
 
@@ -849,8 +849,8 @@ UTF-16 换算、读取范围记录、版本分配和确认记录由程序负责�
 
 | 类型 | 必须满足的规则 |
 | --- | --- |
-| `source_global_events` / `source_character_events` | 两个 Agent 根据同一固定原文版本，分别生成全局事件与主要人物事件；两类事件 ID 独立。全局事件逐条直接锚定原文，人物事件不含逐事件索引。滑窗模式各自维护连续覆盖前缀与剩余范围，只有全本覆盖且 `remaining_source_anchors=[]` 才完成；人物视图可提交已校验的无主要人物事件区间。 |
-| `source_global_analysis` / `source_knowledge_asset` | 全局分析由 Step1 全局 Agent 另存为纯文本；Step2 专用 Agent 综合三份 Step1 产物生成结构化知识资产并等待一次用户确认。 |
+| `source_global_events` / `source_character_events` | 两个 Agent 根据同一固定原文版本，分别生成作品事件与主要人物事件；两类事件 ID 独立。作品事件逐条包含非空 `analysis` 并直接锚定原文，人物事件不含逐事件索引。滑窗模式各自维护连续覆盖前缀与剩余范围，只有全本覆盖且 `remaining_source_anchors=[]` 才完成；人物视图可提交已校验的无主要人物事件区间。 |
+| `source_knowledge_asset` | Step2 专用 Agent 综合两份 Step1 产物生成结构化知识资产，并等待一次用户确认。 |
 | `adaptation_plan` | Step4 初稿的后续阶段引用可为 null；后续确认结果写入新的方案版本，已生成产物仍保留其原输入版本 |
 | `game_event_view` | Step5 游戏事件是独立于 Step1 两种事件的新设计，直接锚定固定原作；非纯新增事件必须有区间。Step6 必须复用 Step5 的全部事件 ID、事件关系和原文索引，只补充 `events[].narrative_function`；事件的时间、因果和备选关系在章节设计时转为具体路线 |
 | `ending_routes` | 明确候选结局、大致路线及进入条件；路线只引用输入事件视图中存在的业务事件 ID，来源版本由 Harness 记录 |

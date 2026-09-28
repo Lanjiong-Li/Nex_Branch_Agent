@@ -16,7 +16,8 @@ def anchor(start, end):
 def window_output(view, start, commit, window_end):
     event = {"title": "事件", "summary": "事件摘要", "narrative_order": 1,
              "story_time": None, "source_anchors": [anchor(start, commit)]}
-    global_events = [{**event, "event_id": "local-1", "character_ids": ["CHAR-甲"]}] if view == "global" else []
+    global_events = [{**event, "event_id": "local-1", "character_ids": ["CHAR-甲"],
+                      "analysis": f"事件分析：已核对原文 {start}–{commit}"}] if view == "global" else []
     character_views = ([{"character_id": "CHAR-甲", "name": "甲", "aliases": [],
                          "description": "主要人物", "events": [{
                          "character_event_id": "local-1", "title": event["title"],
@@ -26,9 +27,7 @@ def window_output(view, start, commit, window_end):
             "global_events": global_events, "character_views": character_views,
             "covered_source_anchors": [anchor(start, commit)],
             "remaining_source_anchors": [] if commit == window_end else [anchor(commit, window_end)]},
-            "questions": [], "evidence_refs": [], "notes": [],
-            **({"analysis": f"global independently analyzed source {start}–{commit}"}
-               if view == "global" else {})}
+            "questions": [], "evidence_refs": [], "notes": []}
 
 
 def separate_window_output(view, start, commit, window_end):
@@ -63,6 +62,8 @@ def test_independent_passes_only_advance_through_complete_events():
     global_result = combine_view_windows(validated, "global", SOURCE_REF, 5)
     character_result = combine_view_windows(validated, "character", SOURCE_REF, 5)
     assert [event["event_id"] for event in global_result["payload"]["global_events"]] == ["GEV-00001", "GEV-00002"]
+    assert [event["analysis"] for event in global_result["payload"]["global_events"]] == [
+        "事件分析：已核对原文 0–3", "事件分析：已核对原文 3–5"]
     assert len(character_result["payload"]["character_views"]) == 1
     assert len(character_result["payload"]["character_views"][0]["events"]) == 2
     assert "source_anchors" not in character_result["payload"]["character_views"][0]["events"][0]
@@ -156,9 +157,9 @@ def test_each_view_can_be_combined_and_saved_independently():
     assert "global_events" not in character_result["payload"]
     assert len(character_result["payload"]["character_views"][0]["events"]) == 1
     assert character_result["payload"]["character_views"][0]["events"][0]["character_event_id"] == "CEV-00001"
-    # The combined view is a view-only artifact; the last validated window's
-    # cumulative analysis is saved separately by Step1 execution.
+    # Each event retains its own analysis; there is no top-level analysis.
     assert "analysis" not in global_result
+    assert all(event["analysis"] for event in global_result["payload"]["global_events"])
     assert "analysis" not in character_result
 
 

@@ -16,9 +16,6 @@
             "source_global_events_ref": {
               "$ref": "#/$defs/EvidenceRef"
             },
-            "source_global_analysis_ref": {
-              "$ref": "#/$defs/EvidenceRef"
-            },
             "source_character_events_ref": {
               "$ref": "#/$defs/EvidenceRef"
             },
@@ -164,7 +161,6 @@
           },
           "required": [
             "source_global_events_ref",
-            "source_global_analysis_ref",
             "source_character_events_ref",
             "premise",
             "world_rules",
@@ -211,9 +207,9 @@
     "notes"
   ],
   "additionalProperties": false,
-  "description": "Step2 原作知识资产；依据固定的全局事件、全局分析和人物事件形成结构化候选。",
+  "description": "Step2 原作知识资产；依据固定的作品事件视图（含逐事件分析）和人物事件视图形成结构化候选。",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "BranchAgent_source_knowledge_asset_v1_0",
+  "title": "BranchAgent_source_knowledge_asset_v1_1",
   "$defs": {
     "EvidenceRef": {
       "type": "object",

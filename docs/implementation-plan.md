@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- 1 个协调 Agent、专用的 Step1 双分支 Agent 与 Step2 知识资产 Agent；结构化阶段输出采用活动的 17 种 Schema。
+- 1 个协调 Agent、专用的 Step1 双分支 Agent 与 Step2 知识资产 Agent；结构化阶段输出采用活动的 16 种 Schema。
 - 默认 gpt-5.6-sol / medium；Step1 原文200000、输入256000、输出32000、安全余量2000 tokens；其他阶段输入32000、输出8000。
 - Step1 全文同时输入，不分批、不摘要替代、不截断；压缩保留原始归档。
 - 人工确认基于实际用户消息、固定版本及明确范围；Step11通过后自动交付同一候选。

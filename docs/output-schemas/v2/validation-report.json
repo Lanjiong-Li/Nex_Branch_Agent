@@ -1,12 +1,11 @@
 {
   "status": "passed",
   "scope": "离线合同/样例检查；无外部调用",
-  "schema_count": 17,
+  "schema_count": 16,
   "schemas_checked": [
     "coordinator_response.schema.json",
     "source_global_events.schema.json",
     "source_character_events.schema.json",
-    "source_global_step1_result.schema.json",
     "source_character_step1_result.schema.json",
     "source_knowledge_asset.schema.json",
     "adaptation_strategy.schema.json",
@@ -21,8 +20,8 @@
     "chapter_graph.schema.json",
     "nexo_graph.schema.json"
   ],
-  "local_sdk_strict_checks": 17,
-  "local_refs_resolved": 193,
+  "local_sdk_strict_checks": 16,
+  "local_refs_resolved": 185,
   "source_interface_profiles_checked": 18,
   "source_check_limit": "检查字段归属与源接口必填项，并人工核对类型；未执行 TypeScript 编译。",
   "examples_checked": [

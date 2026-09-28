@@ -13,9 +13,9 @@ JSON 文件是 `output_type` 的定义源。[SchemaCatalog／JSONOutput](../../.
 | 使用位置 | Schema | 版本 |
 | --- | --- | --- |
 | 协调／历史回答 | [coordinator_response](coordinator_response.schema.json) | 1.1.0 |
-| Step1 · 全局事件 Agent | [source_global_step1_result](source_global_step1_result.schema.json)；Harness 分存 [source_global_events](source_global_events.schema.json) 和纯文本 `source_global_analysis` | 1.0.0 |
+| Step1 · 全局事件 Agent | [source_global_events](source_global_events.schema.json)；Agent 直接输出，Harness 校验后保存同名产物 | 1.1.0 |
 | Step1 · 主要人物事件 Agent | [source_character_step1_result](source_character_step1_result.schema.json)；Harness 保存 [source_character_events](source_character_events.schema.json) | 1.0.0 |
-| Step2 | [source_knowledge_asset](source_knowledge_asset.schema.json) | 1.0.0 |
+| Step2 | [source_knowledge_asset](source_knowledge_asset.schema.json) | 1.1.0 |
 | Step3 | [adaptation_strategy](adaptation_strategy.schema.json) | 2.2.0 |
 | Step4 | [adaptation_plan](adaptation_plan.schema.json) | 2.2.0 |
 | Step5 | [game_event_view](game_event_view.schema.json)（叙事功能暂为 null） | 2.3.0 |
@@ -28,11 +28,11 @@ JSON 文件是 `output_type` 的定义源。[SchemaCatalog／JSONOutput](../../.
 | 局部辅助任务 | [subtask_result](subtask_result.schema.json) | 1.0.0 |
 | 整剧输出／最终产物 | [nexo_graph](nexo_graph.schema.json) | 2.0.0 |
 
-共 17 个注册 Schema。Step1 的两个 Agent 各有独立输出合同：全局事件带逐事件原文索引及分析，人物事件不带逐事件原文索引且不输出分析。Step2 的专用 Agent 读取这三份产物，生成一份结构化知识资产。`source_global_analysis` 和工作摘要为纯文本产物，不注册为 Agent `output_type`。Step6 的模型输出仅是叙事功能补丁，Harness 将其合并到原有 `game_event_view`，保存新版本并更新方案的 `game_events` 引用。Step7 根据这个固定版本的事件视图生成独立 `ending_routes`；来源记录与版本由 Harness 保存，确认后更新方案的 `ending_routes` 引用。
+共 16 个注册 Schema。Step1 的两个 Agent 各有独立输出合同：作品事件中的 `analysis` 为逐事件必填非空字符串，作品事件带逐事件原文索引；人物事件不带逐事件原文索引，也不输出分析。Step2 的专用 Agent 读取 `source_global_events` 与 `source_character_events` 两份产物，生成一份结构化知识资产。工作摘要为纯文本产物，不注册为 Agent `output_type`。Step6 的模型输出仅是叙事功能补丁，Harness 将其合并到原有 `game_event_view`，保存新版本并更新方案的 `game_events` 引用。Step7 根据这个固定版本的事件视图生成独立 `ending_routes`；来源记录与版本由 Harness 保存，确认后更新方案的 `ending_routes` 引用。
 
 ## 返回结构与消费边界
 
-- 除 `nexo_graph` 外的注册结构化类型使用 `result_kind/payload/questions/evidence_refs/notes` 信封；Step1 全局结果额外包含 `analysis`，Step2 返回完整 `source_knowledge_asset`。任何模型状态或文本均不是实际用户确认。
+- 除 `nexo_graph` 外的注册结构化类型使用 `result_kind/payload/questions/evidence_refs/notes` 信封；Step1 作品事件的 `analysis` 位于 `payload.global_events[]` 的每个事件内，Step2 返回完整 `source_knowledge_asset`。任何模型状态或文本均不是实际用户确认。
 - `nexo_graph` **不使用信封**：`id/name/description/prompt/revision/updatedAt/chapters/chapterEdges/variables/scenes` 就是完整根结构。来源、运行、Schema、确认和产物版本存在 Harness 外壳。整剧模式只有在所需材料与身份目录完整后启用，缺项经前置阶段／协调处理，不在 Project 中塞入问题或伪造字段值。
 - 字段是编辑器的 camelCase，节点为 `story`；`body` 保存完整文字，互动以 `scriptInline.afterLine/order` 定位；`Variable.value` 为类型对应的字符串。上游原作 UTF-16 锚点与语义类型初值仍保持其本来定义。
 - 本 profile 保留 TypeScript 必需字段，并收紧适用类型。选入可选字段显式必填但使用原字段类型；没有采用“可选即 null”。可选制作/复制/版本缓存字段省略，已存工程中的对应原值必须在消费合并时保留。Project JSON 不是现有 API 可直接接收的请求体。
@@ -42,7 +42,7 @@ JSON 文件是 `output_type` 的定义源。[SchemaCatalog／JSONOutput](../../.
 
 ## HTML 与 instructions 配置
 
-全部 17 个活动结构化输出类型（包括直接 Project）进入 HTML 配置页的字段树／JSON Schema 编辑器。纯文本 `source_global_analysis` 和工作摘要不出现在该编辑器中。instructions 同样可编辑、预览。发布时保护既有消费者依赖字段及阶段绑定；不兼容改动需要新增消费端适配，不能仅修改 Schema 就宣称支持。`chapter_graph` 与 `nexo_graph` 内复制的领域定义必须一致且同步发布。
+全部 16 个活动结构化输出类型（包括直接 Project）进入 HTML 配置页的字段树／JSON Schema 编辑器。Step1 全局分支的 `output_type` 绑定 `source_global_events`，用户编辑并发布该 Schema 后，SDK 与 Harness 均按发布版本校验；工作摘要不出现在编辑器中。instructions 同样可编辑、预览。发布时保护既有消费者依赖字段及阶段绑定；不兼容改动需要新增消费端适配，不能仅修改 Schema 就宣称支持。`chapter_graph` 与 `nexo_graph` 内复制的领域定义必须一致且同步发布。
 
 规范见 [开发文档第 6 部分](../../分支Agent开发文档.md#6-输出类型与数据契约)，实际支持边界见 [交付状态](../../implementation-status.md)。当前与历史版本不可静默混用，运行固定配置与 Schema 版本；任意旧产物结构的自动迁移尚未实现。
 

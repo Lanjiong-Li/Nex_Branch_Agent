@@ -97,6 +97,9 @@ def build_manager_tools(engine, coordinator_task, coordinator_run, source_messag
         children = [task for task in all_records(engine.store, project, "task", parent_task_id=workflow["id"])
                     if not engine._task_data(task).get("superseded_by_task_id")
                     and not engine._task_data(task).get("invalid_stage_dispatch")]
+        if any(item["state"] == "open" for task in [workflow] + children
+               for item in engine._task_data(task).get("pending_user_items", [])):
+            raise WorkflowBlocked("confirmation_required")
         if any(task["state"] != "succeeded" for task in children):
             raise WorkflowBlocked("manager_workflow_incomplete")
         chapters = data.get("chapter_ids", [])
@@ -104,6 +107,12 @@ def build_manager_tools(engine, coordinator_task, coordinator_run, source_messag
             raise WorkflowBlocked("chapter_scope_required")
         for stage in data.get("stages", []):
             for chapter in (chapters if stage in (9, 10) else [None]):
+                if stage == 1:
+                    views = [engine.workflow.resolve(project, kind)
+                             for kind in STAGE_OUTPUTS[1]]
+                    engine.workflow.require_approved_step1_inputs(project, [
+                        {"kind": kind, "record": version}
+                        for kind, version in zip(STAGE_OUTPUTS[1], views)])
                 completed = any(engine._task_data(task).get("stage") == stage
                                 and (stage == 11 or engine._task_data(task).get("chapter_id") == chapter)
                                 and task["state"] == "succeeded" for task in children)
@@ -140,11 +149,20 @@ def build_manager_tools(engine, coordinator_task, coordinator_run, source_messag
                       and task["state"] in ("queued", "running", "waiting_user")]
             if active:
                 existing = active[-1]
-                if not engine._task_data(existing).get("manager_controlled") or existing["requested_by_message_id"] != source_message["id"]:
-                    raise WorkflowBlocked("manager_workflow_active", {"task_id": existing["id"]})
+                existing_data = engine._task_data(existing)
+                if not existing_data.get("manager_controlled") or existing["requested_by_message_id"] != source_message["id"]:
+                    # This is an ordinary routing conflict, not a failed SDK tool call.
+                    # The receipt lets the coordinator close or resume the existing
+                    # workflow without granting the new request any stage authority.
+                    return _json({"status": "workflow_active", "reason": "manager_workflow_active",
+                                  "workflow_id": existing["id"], "task_id": existing["id"],
+                                  "state": existing["state"],
+                                  "scope": {"stages": existing_data.get("stages", []),
+                                            "chapter_ids": existing_data.get("chapter_ids", [])},
+                                  "manager_controlled": bool(existing_data.get("manager_controlled"))})
                 selected["root_id"] = existing["id"]
                 return _json({"status": "already_started", "workflow_id": existing["id"],
-                              "stages": engine._task_data(existing).get("stages", [])})
+                              "stages": existing_data.get("stages", [])})
             if source_is_current_message:
                 engine._import_source_message(source_message)
             command = {"intent": "generate", "stage": stage, "chapter_id": chapter_id,
@@ -241,11 +259,13 @@ def build_manager_tools(engine, coordinator_task, coordinator_run, source_messag
             elif child["state"] in ("paused", "failed", "stopped") and workflow["state"] != "paused":
                 engine._transition(workflow, "paused", "child_blocked")
             data = engine._task_data(child)
+            open_items = [item["id"] for task in (workflow, child)
+                          for item in engine._task_data(task).get("pending_user_items", [])
+                          if item["state"] == "open"]
             candidate_ready = bool(child["state"] == "waiting_user" and stage in range(2, 11)
                 and (data.get("result_ref") or data.get("result_refs"))
-                and not any(item["state"] == "open" for item in data.get("pending_user_items", [])))
-            open_items = [item["id"] for item in data.get("pending_user_items", []) if item["state"] == "open"]
-            status = ("candidate_ready" if candidate_ready else "needs_user_input" if open_items else
+                and not open_items)
+            status = ("needs_user_input" if open_items else "candidate_ready" if candidate_ready else
                       "prerequisite_pending" if child["state"] == "waiting_user" else child["state"])
             if stage == 11 and status == "succeeded" and all_records(
                     engine.store, project, "runtime_event", event_name="project.delivered", task_id=child["id"]):
@@ -267,6 +287,7 @@ def build_manager_tools(engine, coordinator_task, coordinator_run, source_messag
         if continuation:
             raise WorkflowBlocked("manager_continuation_cannot_confirm")
         with engine.store.transaction():
+            engine.store.advisory_lock(f"{project}:materials")
             engine.store.advisory_lock(f"{project}:conversation:{conversation}")
             workflow = root()
             candidates = [workflow] + all_records(engine.store, project, "task", parent_task_id=workflow["id"])
@@ -326,6 +347,7 @@ def build_manager_tools(engine, coordinator_task, coordinator_run, source_messag
         if continuation:
             raise WorkflowBlocked("manager_continuation_cannot_revise")
         with engine.store.transaction():
+            engine.store.advisory_lock(f"{project}:materials")
             engine.store.advisory_lock(f"{project}:conversation:{conversation}")
             workflow = root()
             found = [(task, item) for task in [workflow] + all_records(engine.store, project, "task", parent_task_id=workflow["id"])

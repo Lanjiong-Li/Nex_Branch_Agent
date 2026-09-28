@@ -30,6 +30,10 @@
                   "summary": {
                     "type": "string"
                   },
+                  "analysis": {
+                    "type": "string",
+                    "description": "针对这条事件的内容、因果与叙事作用所做的非空分析；不得填写累计全文分析或空白文本。"
+                  },
                   "narrative_order": {
                     "type": "integer"
                   },
@@ -60,6 +64,7 @@
                   "event_id",
                   "title",
                   "summary",
+                  "analysis",
                   "narrative_order",
                   "story_time",
                   "character_ids",
@@ -88,7 +93,7 @@
             "remaining_source_anchors"
           ],
           "additionalProperties": false,
-          "description": "Step1 全局事件视图：独立锚定固定原作，窗口覆盖与完整事件边界由 Harness 校验。"
+          "description": "Step1 全局事件视图：每条事件包含独立分析并锚定固定原作，窗口覆盖与完整事件边界由 Harness 校验。"
         },
         {
           "type": "null"
@@ -124,7 +129,7 @@
   "additionalProperties": false,
   "description": "模型输出合同：ready 表示有待验证产物；needs_input 返回具体缺项。此字段不决定保存、确认、完成或生效状态。",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "BranchAgent_source_global_events_v1_0",
+  "title": "BranchAgent_source_global_events_v1_1",
   "$defs": {
     "EvidenceRef": {
       "type": "object",

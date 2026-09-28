@@ -10,7 +10,7 @@
 | 同页数据可视化 | [inspector.md](inspector.md) |
 | 示例 | [records.example.json](examples/records.example.json) |
 
-这里定义 Harness 自身持久化的数据。结构化阶段内容继续使用 [output-schemas/v2](../output-schemas/v2/README.md)；最终 Nexo Graph 仍是直接 `Project` JSON。内部记录与 Step1 的纯文本全局分析不注册为 `Agent.output_type`，不进入 Nexo Graph 根对象。当前共有 17 个活动模型输出 Schema。
+这里定义 Harness 自身持久化的数据。结构化阶段内容继续使用 [output-schemas/v2](../output-schemas/v2/README.md)；最终 Nexo Graph 仍是直接 `Project` JSON。内部记录与工作摘要不注册为 `Agent.output_type`，不进入 Nexo Graph 根对象。当前共有 16 个活动模型输出 Schema。
 
 ## 1. 公共字段与引用
 
@@ -68,7 +68,7 @@
 
 工作摘要作为 `artifact_kind=work_summary` 的纯文本 ArtifactVersion 保存，不绑定 Agent `output_type`；覆盖消息与来源由 `source_refs` 和 Session 记录维护。原作保存为 `artifact_kind=source_text`，正文版本中的 Blob 为权威原文。各阶段产物使用其 `schema_id` 作为 `artifact_kind`。
 
-Step1 不生成 `batch_manifest`；根据阈值在全文和滑动窗口之间选择。全局事件 Agent 与主要人物事件 Agent 并行读取同一固定原作版本，各有独立 Run、Session、窗口游标与输入输出记录。全局 Agent 保存带原文索引的 `source_global_events` 和纯文本 `source_global_analysis`；人物 Agent 只保存无逐事件索引的 `source_character_events`。下游阶段要求三份有效产物及一致的原作来源；一条视图失败不抹去另一条已验证的进度。超预算或无法确认安全区间时不推进对应游标，详见[上下文执行方案](../context/上下文执行方案.md)。
+Step1 不生成 `batch_manifest`；根据阈值在全文和滑动窗口之间选择。全局事件 Agent 与主要人物事件 Agent 并行读取同一固定原作版本，各有独立 Run、Session、窗口游标与输入输出记录。全局 Agent 直接输出并保存带原文索引和逐事件分析的 `source_global_events`；人物 Agent 保存无逐事件索引的 `source_character_events`。Step2 要求这两份有效产物及一致的原作来源；一条视图失败不抹去另一条已验证的进度。超预算或无法确认安全区间时不推进对应游标，详见[上下文执行方案](../context/上下文执行方案.md)。
 
 其他阶段的分批计划使用 `artifact_kind=batch_manifest`、`output_schema=null`，内容按[上下文执行方案](../context/上下文执行方案.md)的 `context.batch_manifest.v1` 内部处理器校验；它是程序生成的版本化计划，不是新增模型输出类型。覆盖进度由批次子 Task 和 `context.batch_completed` 事件重建。身份索引、版本比较、依赖评估与确认映射的事件载荷及跨记录约束见[版本与确认映射](../context/版本与确认映射.md)，不增加核心记录类型。
 

@@ -1240,7 +1240,7 @@
         "origin"
       ],
       "additionalProperties": false,
-      "description": "不可变内容版本。纯文本 work_summary、source_text 与 source_global_analysis 可无 output_schema；业务模型结构化输出必须绑定 Schema。"
+      "description": "不可变内容版本。纯文本 work_summary 与 source_text 可无 output_schema；业务模型结构化输出必须绑定 Schema。"
     },
     "ArtifactState": {
       "type": "object",

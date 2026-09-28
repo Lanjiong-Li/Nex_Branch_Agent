@@ -126,7 +126,7 @@ def failed_output(runtime, *, remote_unknown=False, unknown_cost=True):
                   'tool_definitions':{'storage':'inline_json','value':[]}}
         snapshot=engine.store.put(new_record('context_snapshot',pid,task_id=task['id'],run_id=run['id'],session_id=session['id'],
             config_version_id=run['config_version_id'],model=config['model']['name'],reasoning_effort=config['model']['reasoning_effort'],
-            **contents,output_schema=engine.workflow.catalog.binding('source_global_step1_result',config.get('schemas')),
+            **contents,output_schema=engine.workflow.catalog.binding('source_global_events',config.get('schemas')),
             content_sha256=hashlib.sha256(canonical_bytes(contents)).hexdigest(),input_token_estimate=1,input_token_budget=10000))
         measured={'input_tokens':5,'output_tokens':10,'cached_input_tokens':0,'reasoning_tokens':0,'estimated_cost':None if unknown_cost else {'amount':'0.01','currency':'USD'}}
         from branch_agent.records import usage

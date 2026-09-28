@@ -8,9 +8,10 @@ from branch_agent.context import build_materials, fit_input, input_budget, Budge
 
 
 def test_active_schemas_and_strict_json_adapter():
-    catalog=SchemaCatalog();assert len(catalog.schemas)==17
-    assert catalog.schema_for('step1.global')=='source_global_step1_result'
+    catalog=SchemaCatalog();assert len(catalog.schemas)==16
+    assert catalog.schema_for('step1.global')=='source_global_events'
     assert catalog.schema_for('step1.character')=='source_character_step1_result'
+    assert 'source_global_step1_result' not in catalog.schemas
     assert catalog.registry['bindings']['step6']=='game_event_narrative_patch'
     assert 'event_function_map' not in catalog.schemas
     assert 'work_summary' not in catalog.schemas
@@ -25,10 +26,10 @@ def test_active_schemas_and_strict_json_adapter():
 
 
 @pytest.mark.parametrize('view,schema_id,other_field', [
-    ('global', 'source_global_step1_result', 'character_views'),
+    ('global', 'source_global_events', 'character_views'),
     ('character', 'source_character_step1_result', 'global_events'),
 ])
-def test_step1_global_analysis_and_character_events_have_distinct_contracts(view, schema_id, other_field):
+def test_step1_global_events_and_character_events_have_distinct_contracts(view, schema_id, other_field):
     from test_runtime import source_response
     source_ref = {'record_id': str(uuid.uuid4()), 'version': '1',
                   'item_id': None, 'json_pointer': None}
@@ -37,9 +38,16 @@ def test_step1_global_analysis_and_character_events_have_distinct_contracts(view
     output['payload'].pop(other_field)
     catalog = SchemaCatalog()
     if view == 'global':
-        output['analysis'] = 'Analysis of the fixed source'
         catalog.validate(schema_id, output)
-        output['analysis'] = ''
+        catalog.output_type(catalog.schema_for('step1.global')).validate_json(json.dumps(output))
+        output['payload']['global_events'][0]['analysis'] = '  '
+        with pytest.raises(ValueError):
+            catalog.validate(schema_id, output)
+        del output['payload']['global_events'][0]['analysis']
+        with pytest.raises(ValueError):
+            catalog.validate(schema_id, output)
+        output['payload']['global_events'][0]['analysis'] = '甲乙相遇建立了人物关系。'
+        output['analysis'] = 'Unwanted top-level analysis'
         with pytest.raises(ValueError):
             catalog.validate(schema_id, output)
     else:
@@ -56,6 +64,51 @@ def test_step1_global_analysis_and_character_events_have_distinct_contracts(view
         output['analysis'] = 'Unwanted character analysis'
         with pytest.raises(ValueError):
             catalog.validate(schema_id, output)
+
+
+def test_step1_global_output_type_uses_the_editable_event_schema():
+    from test_runtime import source_response
+    catalog = SchemaCatalog()
+    schema_id = catalog.schema_for('step1.global')
+    source_ref = {'record_id': str(uuid.uuid4()), 'version': '1',
+                  'item_id': None, 'json_pointer': None}
+    output = source_response(None, [{'schema_id': 'source_text',
+                                     'ref': source_ref, 'content': '甲见乙。'}])
+    output['payload'].pop('character_views')
+    analysis = output['payload']['global_events'][0]['analysis']
+    edited = deepcopy(catalog.schemas)
+    field = edited[schema_id]['properties']['payload']['anyOf'][0]['properties']['global_events']['items']['properties']['analysis']
+    field['minLength'] = len(analysis) + 1
+    adapter = catalog.output_type(schema_id, edited)
+    assert adapter.json_schema()['properties']['payload']['anyOf'][0]['properties']['global_events']['items']['properties']['analysis']['minLength'] == len(analysis) + 1
+    with pytest.raises(ValueError):
+        catalog.validate(schema_id, output, edited)
+    with pytest.raises(Exception):
+        adapter.validate_json(json.dumps(output, ensure_ascii=False))
+    output['payload']['global_events'][0]['analysis'] += '补'
+    catalog.validate(schema_id, output, edited)
+    adapter.validate_json(json.dumps(output, ensure_ascii=False))
+
+
+def test_saved_step1_and_step2_schemas_upgrade_to_two_artifact_contract():
+    catalog = SchemaCatalog()
+    service = ConfigService.__new__(ConfigService)
+    service.catalog = catalog
+    saved = deepcopy(catalog.schemas)
+    saved['source_global_step1_result'] = deepcopy(saved['source_global_events'])
+    event = saved['source_global_events']['properties']['payload']['anyOf'][0]['properties']['global_events']['items']
+    event['properties'].pop('analysis')
+    event['required'].remove('analysis')
+    knowledge = saved['source_knowledge_asset']['properties']['payload']['anyOf'][0]
+    knowledge['properties']['source_global_analysis_ref'] = {'$ref': '#/$defs/EvidenceRef'}
+    knowledge['required'].append('source_global_analysis_ref')
+
+    upgraded = service._upgrade_schema_overrides(saved)
+    assert 'source_global_step1_result' not in upgraded
+    current_event = upgraded['source_global_events']['properties']['payload']['anyOf'][0]['properties']['global_events']['items']
+    assert 'analysis' in current_event['required']
+    assert 'source_global_analysis_ref' not in upgraded['source_knowledge_asset']['properties']['payload']['anyOf'][0]['properties']
+    catalog.validate_publication(upgraded)
 
 
 def test_saved_editable_schemas_upgrade_to_direct_source_index_contract():

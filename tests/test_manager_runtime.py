@@ -18,7 +18,7 @@ from branch_agent.model_service import ModelService
 from branch_agent.model_service import ask_user_request, manager_halt_request, manager_tool_behavior
 from branch_agent.records import new_record
 from branch_agent.storage import Store
-from branch_agent.workflow import all_records, ref, update
+from branch_agent.workflow import WorkflowBlocked, all_records, ref, update
 from test_runtime import step2_response
 from test_read_tools import source_event_case
 
@@ -146,7 +146,8 @@ def step1_view_message(engine, project, original, request_data):
                "remaining_source_anchors": []}
     if schema_name == "source_global_events":
         payload["global_events"] = [{"event_id": "event-1", "title": "相遇",
-            "summary": original, "narrative_order": 0, "story_time": None,
+            "summary": original, "analysis": "相遇建立人物关系并推动后续情节。",
+            "narrative_order": 0, "story_time": None,
             "character_ids": [], "source_anchors": [anchor]}]
     else:
         payload["character_views"] = [{"character_id": "甲", "name": "甲", "aliases": [],
@@ -155,7 +156,6 @@ def step1_view_message(engine, project, original, request_data):
             "involvement": "甲遇见乙"}]}]
     result = {"result_kind": "ready", "payload": payload, "questions": [],
               "evidence_refs": [source_ref], "notes": []}
-    if schema_name == "source_global_events": result["analysis"] = "作品事件分析"
     return message(result)
 
 
@@ -380,8 +380,7 @@ async def test_coordinator_does_not_duplicate_an_existing_pending_confirmation(r
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("structured", [True, False])
-@pytest.mark.parametrize("finish_on_resume", [True, False])
-async def test_manager_dispatches_stage_with_separate_audited_run(runtime, structured, finish_on_resume):
+async def test_manager_dispatches_stage_with_separate_audited_run(runtime, structured):
     store, project, conversation = runtime
     original = "甲见乙。"
     calls = []
@@ -397,25 +396,11 @@ async def test_manager_dispatches_stage_with_separate_audited_run(runtime, struc
         if len(calls) == 2:
             return httpx.Response(200, json=call("run_stage", {"stage": 1, "chapter_id": None}, 2))
         if len(calls) in (3, 4):
+            if "当前独立产物：作品事件视图" in data.get("instructions", ""):
+                event_schema = data["text"]["format"]["schema"]["properties"]["payload"]["anyOf"][0]["properties"]["global_events"]["items"]
+                assert "analysis" in event_schema["required"]
             return httpx.Response(200, json=step1_view_message(engine, project, original, data))
-        if len(calls) == 6:
-            return httpx.Response(200, json=call("finish_workflow", {}, 6) if finish_on_resume
-                                  else message({"result_kind": "ready", "payload": {"reply": "等待继续。",
-                                                "source_message_kind": "request", "task_requests": []},
-                                                "questions": [], "evidence_refs": [], "notes": []})
-                                  if structured else plain_message("等待继续。"))
-        assert len(calls) == 5
-        if len(calls) == 5:
-            stage_result = next(item for item in data["input"]
-                                if item.get("type") == "function_call_output" and item["call_id"] == "call_2")
-            receipt = json.loads(stage_result["output"])
-            assert receipt["markdown_download_urls"]["source_global_events"].endswith("/download.md")
-            assert receipt["markdown_download_urls"]["source_global_analysis"].endswith("/download.md")
-            assert original not in stage_result["output"]
-        final = {"result_kind": "ready", "payload": {"reply": "Step1 已完成。",
-                 "source_message_kind": "request", "task_requests": []},
-                 "questions": [], "evidence_refs": [], "notes": []}
-        return httpx.Response(200, json=message(final) if structured else plain_message("Step1 已完成。"))
+        pytest.fail("Step1 等待两份固定视图确认后，协调 Agent 不应继续调度")
 
     client = AsyncOpenAI(api_key="local-mock", http_client=httpx.AsyncClient(
         transport=mock_transport(handler)), max_retries=0)
@@ -432,12 +417,15 @@ async def test_manager_dispatches_stage_with_separate_audited_run(runtime, struc
     assert not any(stage == 2 for stage, _ in stages)
     assert engine.workflow.resolve(project, "source_global_events")
     assert engine.workflow.resolve(project, "source_character_events")
-    assert engine.workflow.resolve(project, "source_global_analysis", effective=False)
     coordinator_runs = [run for run in all_records(store, project, "run") if run["agent_key"] == "conversation_coordinator"]
     child_runs = [run for run in all_records(store, project, "run")
                   if run["agent_key"] in ("source_global_parser", "source_character_parser")]
     assert len(coordinator_runs) == 1
     assert {run["agent_key"] for run in child_runs} == {"source_global_parser", "source_character_parser"}
+    global_run = next(run for run in child_runs if run["agent_key"] == "source_global_parser")
+    global_snapshot = next(snapshot for snapshot in all_records(store, project, "context_snapshot")
+                           if snapshot["run_id"] == global_run["id"])
+    assert global_snapshot["output_schema"]["schema_id"] == "source_global_events"
     assert len({coordinator_runs[0]["session_id"], *(run["session_id"] for run in child_runs)}) == 3
     trace_rows=store._connection().execute(
         'SELECT run_id,kind,name FROM sdk_trace_spans WHERE project_id=%s',(project,)).fetchall()
@@ -446,20 +434,99 @@ async def test_manager_dispatches_stage_with_separate_audited_run(runtime, struc
     assert all(any(str(row['run_id']) == child['id'] and row['kind'] == 'agent'
                    for row in trace_rows) for child in child_runs)
     assert {item["tool_name"] for item in all_records(store, project, "tool_call")} >= {"begin_adaptation", "run_stage"}
-    assert len(calls) == 5
-    assert [(item['state'], engine._projection(project, 'queue_context', item['id']).get('manager_resume'))
-            for item in all_records(store, project, 'queued_request')] == [('dispatched', None), ('pending', True)]
-    continuation = next(item for item in all_records(store, project, "queued_request")
-                        if engine._projection(project, 'queue_context', item['id']).get('manager_resume'))
-    assert store.get(continuation["source_message_id"], project_id=project)["visibility"] == "internal"
-    await engine.tick(project, conversation)
     root = next(task for task in all_records(store, project, "task")
                 if engine._task_data(task).get("manager_controlled"))
-    assert store.get(root["id"], project_id=project)["state"] == ("succeeded" if finish_on_resume else "paused")
-    if not finish_on_resume:
-        assert store.get(root["id"], project_id=project)["pause_reason"] == "manager_no_progress"
-        assert len([item for item in all_records(store, project, "queued_request") if item["state"] == "pending"]) == 0
-    assert len(calls) == 6  # finish_workflow closes the SDK turn immediately.
+    assert len(calls) == 4
+    assert root["state"] == "waiting_user"
+    cards = ActionService(engine).list_cards(project, conversation)["cards"]
+    assert len(cards) == 1 and cards[0]["kind"] == "confirmation"
+    assert {target["record_id"] for target in cards[0]["targets"]} == {
+        version["record_id"] for version in engine._task_data(
+            next(task for task in all_records(store, project, "task")
+                 if engine._task_data(task).get("stage") == 1))["result_refs"].values()}
+    receipt = ActionService(engine).submit(project, conversation, cards[0]["id"],
+                                           "confirm", cards[0]["revision"], {})
+    assert receipt["status"] == "confirmed"
+    assert store.get(root["id"], project_id=project)["state"] == "succeeded"
+    followup = next(task for task in all_records(store, project, "task")
+                    if engine._task_data(task).get("triggered_by_step1_task_id") == root["id"])
+    assert followup["state"] == "queued"
+    assert engine._task_data(followup)["stages"] == [2]
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_scoped_step1_approval_runs_step2_from_approved_fixed_views(runtime):
+    store, project, conversation = runtime
+    original = "甲见乙。"
+    calls = []
+
+    def handler(request):
+        data = json.loads(request.content)
+        calls.append(data)
+        number = len(calls)
+        if number == 1:
+            return httpx.Response(200, json=call("begin_adaptation", {
+                "request": "只执行 Step1", "source_is_current_message": False,
+                "stage": 1, "chapter_id": None}, number))
+        if number == 2:
+            return httpx.Response(200, json=call("run_stage", {
+                "stage": 1, "chapter_id": None}, number))
+        if number in (3, 4):
+            return httpx.Response(200, json=step1_view_message(engine, project, original, data))
+        if number == 5:
+            assert "run_stage" in {tool["name"] for tool in data["tools"]}
+            return httpx.Response(200, json=call("run_stage", {
+                "stage": 2, "chapter_id": None}, number))
+        if number == 6:
+            return httpx.Response(200, json=message(step2_response()))
+        if number == 7:
+            step2 = next(task for task in all_records(store, project, "task")
+                         if engine._task_data(task).get("stage") == 2)
+            return httpx.Response(200, json=call("ask_user", {"questions": [{
+                "prompt": "确认原作知识资产？", "suggested_answers": ["确认"],
+                "confirmation_task_id": step2["id"]}]}, number))
+        pytest.fail("确认 Step1 后不应再次创建流程或继续其他阶段")
+
+    client = AsyncOpenAI(api_key="local-mock", http_client=httpx.AsyncClient(
+        transport=mock_transport(handler)), max_retries=0)
+    engine = Engine(store, ModelService(store, client), ConfigService(store))
+    engine.import_source(project, conversation, original, "测试原作")
+    engine.submit_message(project, conversation, "开始 Step1")
+    await engine.tick(project, conversation)
+    assert len(calls) == 4
+    old_root = next(task for task in all_records(store, project, "task")
+                    if engine._task_data(task).get("manager_controlled")
+                    and engine._task_data(task).get("stages") == [1])
+    assert old_root["state"] == "waiting_user"
+    approved_refs = engine._task_data(old_root)["step1_review"]["artifact_refs"]
+    cards = ActionService(engine).list_cards(project, conversation)["cards"]
+    assert len(cards) == 1 and cards[0]["kind"] == "confirmation"
+    assert {target["record_id"] for target in cards[0]["targets"]} == {
+        fixed_ref["record_id"] for fixed_ref in approved_refs.values()}
+
+    ActionService(engine).submit(project, conversation, cards[0]["id"],
+                                 "confirm", cards[0]["revision"], {})
+    assert store.get(old_root["id"], project_id=project)["state"] == "succeeded"
+    step2_root = next(task for task in all_records(store, project, "task")
+                      if engine._task_data(task).get("triggered_by_step1_task_id") == old_root["id"])
+    assert step2_root["state"] == "queued"
+    assert engine._task_data(step2_root)["stages"] == [2]
+    assert engine._task_data(step2_root)["step1_input_refs"] == approved_refs
+    assert len([task for task in all_records(store, project, "task")
+                if task["parent_task_id"] == step2_root["id"]]) == 0
+
+    await engine.tick(project, conversation)
+    assert len(calls) == 7
+    run = next(run for run in all_records(store, project, "run")
+               if run["agent_key"] == "source_knowledge_analyst")
+    assert {json.dumps(fixed_ref, sort_keys=True) for fixed_ref in run["input_refs"]} == {
+        json.dumps(fixed_ref, sort_keys=True) for fixed_ref in approved_refs.values()}
+    step2_child = next(task for task in all_records(store, project, "task")
+                       if task["parent_task_id"] == step2_root["id"]
+                       and engine._task_data(task).get("stage") == 2)
+    assert step2_child["state"] == "waiting_user"
+    assert store.get(old_root["id"], project_id=project)["state"] == "succeeded"
     await client.close()
 
 
@@ -511,12 +578,25 @@ async def test_manager_confirms_single_step2_knowledge_asset(runtime, via_messag
     await engine.tick(project, conversation)
     root = next(task for task in all_records(store, project, "task")
                 if engine._task_data(task).get("manager_controlled"))
+    assert root["state"] == "waiting_user"
+    approved_refs = engine._task_data(root)["step1_review"]["artifact_refs"]
+    actions = ActionService(engine)
+    step1_card = next(card for card in actions.list_cards(project, conversation)["cards"]
+                      if card["kind"] == "confirmation")
+    assert {target["record_id"] for target in step1_card["targets"]} == {
+        fixed_ref["record_id"] for fixed_ref in approved_refs.values()}
+    actions.submit(project, conversation, step1_card["id"], "confirm", step1_card["revision"], {})
+    assert store.get(root["id"], project_id=project)["state"] == "queued"
+    await engine.tick(project, conversation)
+    step2_run = next(run for run in all_records(store, project, "run")
+                     if run["agent_key"] == "source_knowledge_analyst")
+    assert {json.dumps(fixed_ref, sort_keys=True) for fixed_ref in step2_run["input_refs"]} == {
+        json.dumps(fixed_ref, sort_keys=True) for fixed_ref in approved_refs.values()}
     step2 = next(task for task in all_records(store, project, "task")
                  if task["parent_task_id"] == root["id"] and engine._task_data(task).get("stage") == 2)
     assert step2["state"] == "waiting_user"
     assert len(engine._task_data(step2)["pending_user_items"]) == 1
     assert len(engine._task_data(step2)["pending_user_items"][0]["targets"]) == 1
-    actions = ActionService(engine)
     assert actions.list_cards(project, conversation)["cards"][0]["description"] == "这份原作知识资产是否可以作为后续改编依据？"
     if via_message:
         engine.submit_message(project, conversation, "确认这份知识资产")
@@ -534,7 +614,7 @@ async def test_manager_confirms_single_step2_knowledge_asset(runtime, via_messag
     if not via_message:
         await engine.tick(project, conversation)
     assert len([run for run in all_records(store, project, "run")
-                if run["agent_key"] == "conversation_coordinator"]) == 2
+                if run["agent_key"] == "conversation_coordinator"]) == 3
     assert len(calls) == (9 if via_message else 8)
     await client.close()
 
@@ -576,6 +656,14 @@ async def test_step2_waits_for_knowledge_asset_confirmation_before_advancing(run
 
     root = next(task for task in all_records(store, project, "task")
                 if engine._task_data(task).get("manager_controlled"))
+    assert root["state"] == "waiting_user"
+    assert not [task for task in all_records(store, project, "task")
+                if engine._task_data(task).get("stage") == 2]
+    cards = ActionService(engine).list_cards(project, conversation)["cards"]
+    assert len(cards) == 1 and cards[0]["kind"] == "confirmation"
+    ActionService(engine).submit(project, conversation, cards[0]["id"],
+                                 "confirm", cards[0]["revision"], {})
+    await engine.tick(project, conversation)
     step2 = next(task for task in all_records(store, project, "task")
                  if task["parent_task_id"] == root["id"] and engine._task_data(task).get("stage") == 2)
     assert step2["state"] == "waiting_user"
@@ -599,3 +687,122 @@ async def test_step2_waits_for_knowledge_asset_confirmation_before_advancing(run
                     if item["state"] == "open"]) == 0
     assert len(calls) == 7  # Step2 has its own structured model call.
     await client.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("manager_controlled", [False, True])
+async def test_begin_adaptation_returns_active_workflow_receipt_without_starting_another(runtime, manager_controlled):
+    store, project, conversation = runtime
+    engine = Engine(store, ModelService(store), ConfigService(store))
+    with store.transaction():
+        origin = engine._message(project, conversation, "先执行 Step1", role="user")
+        existing = engine._new_task(project, conversation, origin, "generate")
+        data = engine._task_data(existing)
+        data.update(is_workflow=True, manager_controlled=manager_controlled,
+                    stages=[1], chapter_ids=["ch01"])
+        engine._save_task_data(existing, data)
+        engine._transition(existing, "running")
+        incoming = engine._message(project, conversation, "开始 Step2", role="user")
+
+    from branch_agent.manager import build_manager_tools
+    tool = next(tool for tool in build_manager_tools(engine, None, None, incoming,
+                     [], None) if tool.name == "begin_adaptation")
+    receipt = json.loads(await tool.on_invoke_tool(SimpleNamespace(tool_name="begin_adaptation"),
+        '{"request":"开始 Step2","source_is_current_message":true,"stage":2,"chapter_id":null}'))
+    assert receipt == {
+        "status": "workflow_active", "reason": "manager_workflow_active",
+        "workflow_id": existing["id"], "task_id": existing["id"], "state": "running",
+        "scope": {"stages": [1], "chapter_ids": ["ch01"]},
+        "manager_controlled": manager_controlled,
+    }
+    assert store.get(existing["id"], project_id=project)["state"] == "running"
+    assert [task["id"] for task in all_records(store, project, "task")
+            if engine._task_data(task).get("is_workflow")] == [existing["id"]]
+    assert not all_records(store, project, "artifact")
+
+
+@pytest.mark.asyncio
+async def test_begin_adaptation_preserves_same_message_idempotency(runtime):
+    store, project, conversation = runtime
+    engine = Engine(store, ModelService(store), ConfigService(store))
+    with store.transaction():
+        origin = engine._message(project, conversation, "开始 Step1", role="user")
+        existing = engine._new_task(project, conversation, origin, "generate")
+        data = engine._task_data(existing)
+        data.update(is_workflow=True, manager_controlled=True, stages=[1], chapter_ids=[])
+        engine._save_task_data(existing, data)
+
+    from branch_agent.manager import build_manager_tools
+    tool = next(tool for tool in build_manager_tools(engine, None, None, origin,
+                     [], None) if tool.name == "begin_adaptation")
+    receipt = json.loads(await tool.on_invoke_tool(SimpleNamespace(tool_name="begin_adaptation"),
+        '{"request":"开始 Step1","stage":1,"chapter_id":null}'))
+    assert receipt == {"status": "already_started", "workflow_id": existing["id"], "stages": [1]}
+
+
+@pytest.mark.asyncio
+async def test_step1_root_confirmation_blocks_manager_completion(runtime):
+    store, project, conversation = runtime
+    engine = Engine(store, ModelService(store), ConfigService(store))
+    with store.transaction():
+        origin = engine._message(project, conversation, "只执行 Step1", role="user")
+        root = engine._new_task(project, conversation, origin, "generate")
+        data = engine._task_data(root)
+        data.update(is_workflow=True, manager_controlled=True, stages=[1], chapter_ids=[])
+        engine._save_task_data(root, data)
+        child = engine._new_task(project, conversation, origin, "generate", stage=1, parent=root)
+
+    async def finish_child_and_open_confirmation(task, _token):
+        with store.transaction():
+            engine._transition(store.get(task["id"], project_id=project), "succeeded")
+            current_root = store.get(root["id"], project_id=project)
+            shown = engine._message(project, conversation, "请确认两份 Step1 视图", task=root["id"])
+            pending = engine._wait_item(current_root, "confirmation", shown, "请确认两份 Step1 视图")
+            root_data = engine._task_data(current_root)
+            root_data["pending_user_items"] = [pending]
+            engine._save_task_data(current_root, root_data)
+            engine._transition(current_root, "waiting_user")
+
+    engine._execute = finish_child_and_open_confirmation
+    from branch_agent.manager import build_manager_tools
+    tools = {tool.name: tool for tool in build_manager_tools(engine, None, None, origin, [], None)}
+    receipt = json.loads(await tools["run_stage"].on_invoke_tool(
+        SimpleNamespace(tool_name="run_stage"), '{"stage":1,"chapter_id":null}'))
+    assert receipt["status"] == "needs_user_input"
+    assert receipt["task_id"] == child["id"]
+    assert receipt["pending_item_ids"] == [engine._task_data(store.get(root["id"], project_id=project))
+                                         ["pending_user_items"][0]["id"]]
+    with pytest.raises(WorkflowBlocked, match="confirmation_required"):
+        await tools["finish_workflow"].on_invoke_tool(SimpleNamespace(tool_name="finish_workflow"), "{}")
+    assert store.get(root["id"], project_id=project)["state"] == "waiting_user"
+
+
+@pytest.mark.asyncio
+async def test_finish_workflow_cannot_reuse_unapproved_step1_views_without_a_child(runtime):
+    store, project, conversation = runtime
+    engine = Engine(store, ModelService(store), ConfigService(store))
+    _, source, global_view = source_event_case(store, project, "甲见乙。")
+    character_reply = step1_view_message(engine, project, "甲见乙。", {
+        "instructions": "当前独立产物：主要人物事件视图"})
+    character_output = json.loads(character_reply["output"][0]["content"][0]["text"])
+    with store.transaction():
+        character_view = engine.workflow.save(project, "source_character_events",
+            character_output, stage=1, inputs=[ref(source)], effective=True)
+        origin = engine._message(project, conversation, "结束 Step1", role="user")
+        root = engine._new_task(project, conversation, origin, "generate")
+        data = engine._task_data(root)
+        data.update(is_workflow=True, manager_controlled=True, stages=[1], chapter_ids=[],
+                    step1_review={"source_ref": ref(source),
+                        "artifact_refs": {"source_global_events": ref(global_view),
+                                          "source_character_events": ref(character_view)},
+                        "step1_task_id": str(uuid4())})
+        engine._save_task_data(root, data)
+
+    assert not all_records(store, project, "task", parent_task_id=root["id"])
+    from branch_agent.manager import build_manager_tools
+    finish = next(tool for tool in build_manager_tools(engine, None, None, origin,
+                  [], None) if tool.name == "finish_workflow")
+    with pytest.raises(WorkflowBlocked, match="confirmation_required"):
+        await finish.on_invoke_tool(SimpleNamespace(tool_name="finish_workflow"), "{}")
+    assert store.get(root["id"], project_id=project)["state"] == "queued"
+    assert not engine._task_data(store.get(root["id"], project_id=project)).get("step1_approved_refs")

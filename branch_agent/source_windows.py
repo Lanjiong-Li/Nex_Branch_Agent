@@ -33,6 +33,14 @@ def _anchor(source_ref, start, end):
             "exact_quote": None, "prefix": None, "suffix": None}
 
 
+def validate_global_event_analysis(events):
+    """Require a substantive analysis on every completed global event."""
+    for index, event in enumerate(events):
+        value = event.get("analysis") if isinstance(event, dict) else None
+        if not isinstance(value, str) or not value.strip():
+            raise WorkflowBlocked("source_event_analysis_incomplete", {"event_index": index})
+
+
 def validate_window(output, source, source_ref, pass_name, start, end):
     """Validate one view's independently committed prefix of a source window.
 
@@ -52,6 +60,7 @@ def validate_window(output, source, source_ref, pass_name, start, end):
         if payload.get("character_views"):
             raise WorkflowBlocked("source_window_wrong_view")
         events = payload["global_events"]
+        validate_global_event_analysis(events)
     else:
         if payload.get("global_events"):
             raise WorkflowBlocked("source_window_wrong_view")
@@ -120,6 +129,7 @@ def combine_view_windows(windows, pass_name, source_ref, source_length):
         if pass_name == "global":
             if payload.get("character_views"):
                 raise WorkflowBlocked("source_window_wrong_view")
+            validate_global_event_analysis(payload["global_events"])
             result["payload"]["global_events"].extend(deepcopy(payload["global_events"]))
         else:
             if payload.get("global_events"):

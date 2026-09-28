@@ -174,6 +174,7 @@ def test_stage_input_switch_omits_model_payload_but_keeps_fixed_reference(contex
               'exact_quote': source, 'prefix': None, 'suffix': None}
     content = {'result_kind': 'ready', 'payload': {'source_ref': ref(original),
         'global_events': [{'event_id': 'event-one', 'title': '相遇', 'summary': source,
+                           'analysis': '相遇建立后续关系。',
                            'narrative_order': 0, 'story_time': None, 'character_ids': [],
                            'source_anchors': [anchor]}],
         'covered_source_anchors': [anchor],
@@ -248,7 +249,7 @@ def test_historical_provenance_does_not_reintroduce_a_pinned_artifacts_old_body(
     anchor={'source_ref':ref(original),'start_utf16':0,'end_utf16':len(source.encode('utf-16-le'))//2,
             'exact_quote':source,'prefix':None,'suffix':None}
     content={'result_kind':'ready','payload':{'source_ref':ref(original),'global_events':[
-        {'event_id':'one','title':'相遇','summary':'Historical wording','narrative_order':0,
+        {'event_id':'one','title':'相遇','summary':'Historical wording','analysis':'相遇建立关系。','narrative_order':0,
          'story_time':None,'character_ids':[],'source_anchors':[anchor]}],
         'covered_source_anchors':[anchor],'remaining_source_anchors':[]},
         'questions':[],'evidence_refs':[ref(original)],'notes':[]}
@@ -266,10 +267,7 @@ def test_historical_provenance_does_not_reintroduce_a_pinned_artifacts_old_body(
                               artifact_id=old['artifact_id'],effective=True)
         character_version=workflow.save(pid,'source_character_events',character,stage=1,
             origin='program',inputs=[ref(original)],effective=True)
-        analysis=workflow.save(pid,'source_global_analysis','甲见乙。',stage=1,
-            inputs=[ref(original),ref(current)],effective=True)
-    materials=[{'ref':ref(current),'required':True},{'ref':ref(analysis),'required':True},
-               {'ref':ref(character_version),'required':True}]
+    materials=[{'ref':ref(current),'required':True},{'ref':ref(character_version),'required':True}]
     task,run,session,config=execution('step2',materials)
     prepared=prepare_runtime_materials('step2',task,run,session,config,materials,store)
     packed,_,audit=build_materials('step2',prepared,config,store,pid)
@@ -484,7 +482,7 @@ def test_aggregation_waits_for_full_ledger_then_preserves_original_refs(context_
     store,pid,original,source,workflow,execution=context_case
     anchor={'source_ref':ref(original),'start_utf16':0,'end_utf16':len(source.encode('utf-16-le'))//2,'exact_quote':source,'prefix':None,'suffix':None}
     content={'result_kind':'ready','payload':{'source_ref':ref(original),'global_events':[
-        {'event_id':'one','title':'相遇','summary':source,'narrative_order':0,'story_time':None,'character_ids':[],'source_anchors':[anchor]}],
+        {'event_id':'one','title':'相遇','summary':source,'analysis':'相遇建立关系。','narrative_order':0,'story_time':None,'character_ids':[],'source_anchors':[anchor]}],
         'covered_source_anchors':[anchor],'remaining_source_anchors':[]},'questions':[],'evidence_refs':[ref(original)],'notes':[]}
     character={'result_kind':'ready','payload':{'source_ref':ref(original),'character_views':[],
         'covered_source_anchors':[anchor],'remaining_source_anchors':[]},
@@ -494,10 +492,7 @@ def test_aggregation_waits_for_full_ledger_then_preserves_original_refs(context_
         content['evidence_refs'].append(ref(old_views))
         views=workflow.save(pid,'source_global_events',content,stage=1,origin='program',inputs=[ref(original)],effective=True)
         character_views=workflow.save(pid,'source_character_events',character,stage=1,origin='program',inputs=[ref(original)],effective=True)
-        analysis=workflow.save(pid,'source_global_analysis','甲见乙。',stage=1,
-            inputs=[ref(original),ref(views)],effective=True)
-    materials=[{'ref':ref(views),'required':True},{'ref':ref(analysis),'required':True},
-               {'ref':ref(character_views),'required':True}]
+    materials=[{'ref':ref(views),'required':True},{'ref':ref(character_views),'required':True}]
     task,run,session,config=execution('step2',materials)
     inputs=[{'source_ref':ref(views),'content':content},
             {'source_ref':ref(character_views),'content':character}]

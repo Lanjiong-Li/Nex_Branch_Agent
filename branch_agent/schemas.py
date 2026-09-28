@@ -124,10 +124,14 @@ class SchemaCatalog:
             if payload['result_kind'] == 'needs_input' and not payload['questions']:
                 raise OutputValidationError([{'path': '/questions', 'validator': 'stage_needs_input',
                     'message': 'needs_input 必须包含明确问题', 'category': 'content'}])
-            if schema_id == 'source_global_step1_result' \
-                    and payload['result_kind'] == 'ready' and not payload['analysis'].strip():
-                raise OutputValidationError([{'path': '/analysis', 'validator': 'stage_analysis',
-                    'message': 'Step1 全局事件视图与分析必须同时完整返回', 'category': 'content'}])
+            if schema_id == 'source_global_events' and isinstance(payload['payload'], dict):
+                for index, event in enumerate(payload['payload']['global_events']):
+                    analysis = event.get('analysis')
+                    if not isinstance(analysis, str) or not analysis.strip():
+                        raise OutputValidationError([{
+                            'path': f'/payload/global_events/{index}/analysis',
+                            'validator': 'stage_analysis',
+                            'message': '每条作品事件都必须填写非空分析', 'category': 'content'}])
         return payload
 
     def output_type(self, schema_id, schemas=None, *, strict=True):
@@ -136,9 +140,8 @@ class SchemaCatalog:
     def validate_publication(self, schemas, profiles=None):
         if set(schemas) != set(self.schemas):
             raise ValueError(f'必须保留全部{len(self.schemas)}种输出类型')
-        # The Step1 model contract contains an additional analysis field, but
-        # its remaining envelope is saved as a separate event-view artifact.
-        # Keep their structures aligned when either editable Schema changes.
+        # The character Step1 model contract and its saved event-view artifact
+        # share the same structure even when either editable Schema changes.
         def runtime_shape(value):
             if isinstance(value,dict):
                 return {key:runtime_shape(child) for key,child in value.items()
@@ -146,11 +149,8 @@ class SchemaCatalog:
             if isinstance(value,list):
                 return [runtime_shape(child) for child in value]
             return value
-        for view,result in (('source_global_events','source_global_step1_result'),
-                            ('source_character_events','source_character_step1_result')):
+        for view,result in (('source_character_events','source_character_step1_result'),):
             combined=deepcopy(schemas[result])
-            combined['properties'].pop('analysis',None)
-            combined['required']=[field for field in combined['required'] if field!='analysis']
             if runtime_shape(combined)!=runtime_shape(schemas[view]):
                 raise ValueError(f'{result} 的事件视图结构必须与 {view} 一致')
         for name, schema in schemas.items():
@@ -187,7 +187,7 @@ class SchemaCatalog:
                     name = item['source'].get('schema_id')
                     if name:
                         for path in item['selectors']:
-                            if name in ('work_summary','source_global_analysis') and path=='':
+                            if name == 'work_summary' and path=='':
                                 continue  # Internal plain-text artifacts.
                             if not schema_path(schemas[name], path):
                                 raise ValueError(f'消费者字段不存在: {name}{path}')

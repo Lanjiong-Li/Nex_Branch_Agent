@@ -250,6 +250,19 @@ def test_review_changed_source_restart_regenerates_step1_and_step2_with_new_conf
         for _ in range(3):
             await engine.tick(pid, cid)
     asyncio.run(drive())
+    assert model.calls == ["step1", "step1"]
+    root = engine.store.get(root["id"], pid)
+    assert root["state"] == "waiting_user"
+    review = engine._task_data(root)["step1_review"]
+    shown = card(service, pid, cid, "pending:" + next(item["id"] for item in
+        engine._task_data(root)["pending_user_items"] if item["state"] == "open"))
+    assert {target["record_id"] for target in shown["targets"]} == {
+        fixed_ref["record_id"] for fixed_ref in review["artifact_refs"].values()}
+    submit(service, pid, cid, shown, "confirm")
+    async def continue_after_review():
+        for _ in range(2):
+            await engine.tick(pid, cid)
+    asyncio.run(continue_after_review())
     assert model.calls == ["step1", "step1", "step2"]
     children = engine.store.list(pid, "task", filters={"parent_task_id": root["id"]})
     step2 = next(t for t in children if t["scope"]["stage"] == 2)

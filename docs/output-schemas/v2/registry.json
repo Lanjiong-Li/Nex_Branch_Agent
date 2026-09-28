@@ -1,5 +1,5 @@
 {
-  "catalog_version": "2.16.0",
+  "catalog_version": "2.17.0",
   "status": "design_draft_not_runtime_implementation",
   "schemas": [
     {
@@ -13,12 +13,12 @@
     },
     {
       "schema_id": "source_global_events",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "file": "source_global_events.schema.json",
       "status": "design_draft",
       "root_output": "model_result",
       "ui_editable": true,
-      "sha256": "e302e01cbc78a6d640e8dc66996dc2da08e69d19f01595e92ec8a81a968db771"
+      "sha256": "84832f5f3f77fb7a332f0360f313394885e7972315ce68645af284b7e0e3340b"
     },
     {
       "schema_id": "source_character_events",
@@ -28,15 +28,6 @@
       "root_output": "model_result",
       "ui_editable": true,
       "sha256": "d49c05030efb4d724295ec053c65425251b63cccc884fae16974e1372f43e45e"
-    },
-    {
-      "schema_id": "source_global_step1_result",
-      "version": "1.0.0",
-      "file": "source_global_step1_result.schema.json",
-      "status": "design_draft",
-      "root_output": "model_result",
-      "ui_editable": true,
-      "sha256": "1c754d145e85b6819e14213c59df0499ad49daa7e313f9d1b6f368c8c30bab7e"
     },
     {
       "schema_id": "source_character_step1_result",
@@ -49,12 +40,12 @@
     },
     {
       "schema_id": "source_knowledge_asset",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "file": "source_knowledge_asset.schema.json",
       "status": "design_draft",
       "root_output": "model_result",
       "ui_editable": true,
-      "sha256": "e2d9f2238dff4c161033effaf5cd71b7efa5812f15be13cf287b146eb581e9e3"
+      "sha256": "432e166794e12617ec076b69f69c15cdc93943ba059bafd0ada96a738bcd6d99"
     },
     {
       "schema_id": "adaptation_strategy",
@@ -159,7 +150,7 @@
   ],
   "bindings": {
     "conversation_coordinator": "coordinator_response",
-    "step1.global": "source_global_step1_result",
+    "step1.global": "source_global_events",
     "step1.character": "source_character_step1_result",
     "step3": "adaptation_strategy",
     "step4": "adaptation_plan",

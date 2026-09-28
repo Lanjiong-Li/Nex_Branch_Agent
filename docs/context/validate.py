@@ -130,7 +130,7 @@ for group in [config['common_materials']] + [p['materials'] for p in profiles]:
                 # Internal plain-text artifacts intentionally have no Agents
                 # SDK output_type JSON Schema.  Their only valid selector is
                 # the whole text value.
-                if source['schema_id'] in {'work_summary', 'source_global_analysis'}:
+                if source['schema_id'] == 'work_summary':
                     assert pointer == '', (material['id'], pointer)
                 else:
                     assert path_exists(schemas[source['schema_id']], pointer), (material['id'], pointer)

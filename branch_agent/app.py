@@ -89,6 +89,7 @@ def create_app(store=None,engine=None,model_service=None,data_dir=None):
             'confirmation_required':'当前阶段需要先确认指定版本与范围','confirmation_not_presented':'请先查看待确认的固定版本',
             'dependency_changed':'上游依赖已经改变，需要先完成复核','idempotency_conflict':'同一幂等键用于不同请求',
             'source_index_migration_required':'旧版阶段产物缺少独立原文索引，需重新生成并确认对应阶段',
+            'source_event_analysis_migration_required':'旧版阶段协议不兼容，请按新配置重跑对应阶段；若作品事件缺少逐事件分析，需从 Step1 重跑',
             'operation_uncertain':'上一次操作结果尚未确认，请先核对保存结果','queue_hold':'队列已暂停，需要明确继续',
             'source_import_workflow_active':'当前项目仍有正在执行或等待确认的改编任务，请先完成或停止后再导入新原作',
             'cost_limit':'任务费用已达到限额，请明确追加额度后继续','active_time_limit':'任务活动耗时已达到限额',

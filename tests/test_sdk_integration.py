@@ -274,22 +274,25 @@ async def test_step2_uses_structured_knowledge_asset_schema(runtime):
     workflow=Workflow(store)
     with store.transaction():
         source=workflow.save(pid,'source_text','甲见乙。',origin='import',effective=True)
-        global_events={'result_kind':'ready','payload':{'source_ref':ref(source),'global_events':[],
-            'covered_source_anchors':[],'remaining_source_anchors':[]},
+        anchor={'source_ref':ref(source),'start_utf16':0,'end_utf16':4,
+            'exact_quote':None,'prefix':None,'suffix':None}
+        global_events={'result_kind':'ready','payload':{'source_ref':ref(source),'global_events':[
+            {'event_id':'GEV-1','title':'相遇','summary':'甲见乙。','analysis':'相遇建立人物关系。',
+             'narrative_order':1,'story_time':None,'character_ids':[],
+             'source_anchors':[anchor]}],
+            'covered_source_anchors':[anchor],'remaining_source_anchors':[]},
             'questions':[],'evidence_refs':[ref(source)],'notes':[]}
         character_events={'result_kind':'ready','payload':{'source_ref':ref(source),'character_views':[],
             'covered_source_anchors':[],'remaining_source_anchors':[]},
             'questions':[],'evidence_refs':[ref(source)],'notes':[]}
         global_view=workflow.save(pid,'source_global_events',global_events,stage=1,inputs=[ref(source)],effective=True)
         character_view=workflow.save(pid,'source_character_events',character_events,stage=1,inputs=[ref(source)],effective=True)
-        global_analysis=workflow.save(pid,'source_global_analysis','甲与乙相遇。',stage=1,
-            inputs=[ref(source),ref(global_view)],effective=True)
     config=ConfigService(store).resolve(pid,'step2')
     task=store.put(new_record('task',pid,conversation_id=base_task['conversation_id'],
         requested_by_message_id=base_task['requested_by_message_id'],intent='generate',state='running'))
     session=store.put(new_record('work_session',pid,conversation_id=base_task['conversation_id'],session_key='source_knowledge_asset'))
     run=store.put(new_record('run',pid,task_id=task['id'],agent_key='source_knowledge_analyst',session_id=session['id'],
-        config_version_id=config['id'],state='running',input_refs=[ref(global_view),ref(global_analysis),ref(character_view)]))
+        config_version_id=config['id'],state='running',input_refs=[ref(global_view),ref(character_view)]))
     def handler(request):
         data=json.loads(request.content);requests.append(data)
         from test_runtime import step2_response
@@ -408,7 +411,7 @@ async def test_web_search_tool_is_available_to_every_agent_when_key_is_configure
                 source = workflow.save(pid, 'source_text', '甲见乙。',
                     origin='import', effective=True)
                 source_ref = ref(source)
-                global_events = workflow.save(pid, 'source_global_events', {
+                workflow.save(pid, 'source_global_events', {
                     'result_kind': 'ready', 'payload': {
                         'source_ref': source_ref, 'global_events': [],
                         'covered_source_anchors': [], 'remaining_source_anchors': []},
@@ -420,8 +423,6 @@ async def test_web_search_tool_is_available_to_every_agent_when_key_is_configure
                         'covered_source_anchors': [], 'remaining_source_anchors': []},
                     'questions': [], 'evidence_refs': [source_ref], 'notes': []},
                     stage=1, inputs=[source_ref], effective=True)
-                workflow.save(pid, 'source_global_analysis', '甲与乙相遇。',
-                    stage=1, inputs=[source_ref, ref(global_events)], effective=True)
             materials = workflow.materials(pid, 2)
         elif stage in ('aux.summary', 'aux.history_answer'):
             archive = store.get(base_task['requested_by_message_id'], pid)

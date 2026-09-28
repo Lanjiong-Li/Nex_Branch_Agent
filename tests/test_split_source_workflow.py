@@ -43,6 +43,7 @@ def _output(kind, source_ref):
                "remaining_source_anchors": []}
     if kind == "source_global_events":
         payload["global_events"] = [{"event_id": "GEV-1", "title": "相遇", "summary": "甲见乙。",
+            "analysis": "相遇建立两人的关系并引出后续冲突。",
             "narrative_order": 1, "story_time": None, "character_ids": ["C-甲"],
             "source_anchors": [anchor]}]
     else:
@@ -54,19 +55,19 @@ def _output(kind, source_ref):
             "evidence_refs": [source_ref], "notes": []}
 
 
-def _knowledge_asset(global_view, global_analysis, character_view):
+def _knowledge_asset(global_view, character_view):
     return {"result_kind": "ready", "payload": {
-        "source_global_events_ref": ref(global_view), "source_global_analysis_ref": ref(global_analysis),
+        "source_global_events_ref": ref(global_view),
         "source_character_events_ref": ref(character_view), "premise": "甲见乙。",
         "world_rules": [], "themes": [], "conflicts": [], "characters": [], "key_event_refs": [],
         "preservation_items": [], "event_causality": [], "canon_constraints": [], "uncertainties": [],
     }, "questions": [], "evidence_refs": [], "notes": []}
 
 
-def test_step1_schema_and_workflow_use_three_independent_artifacts(source_case, monkeypatch):
+def test_step1_schema_and_workflow_use_two_independent_artifacts(source_case, monkeypatch):
     store, workflow, project = source_case
     catalog = SchemaCatalog()
-    assert STAGE_OUTPUTS[1] == ("source_global_events", "source_global_analysis", "source_character_events")
+    assert STAGE_OUTPUTS[1] == ("source_global_events", "source_character_events")
     with store.transaction():
         original = workflow.save(project, "source_text", "甲见乙。", effective=True)
         source_ref = ref(original)
@@ -78,11 +79,9 @@ def test_step1_schema_and_workflow_use_three_independent_artifacts(source_case, 
                                     stage=1, inputs=[source_ref], effective=True)
         character_view = workflow.save(project, "source_character_events", outputs["source_character_events"],
                                        stage=1, inputs=[source_ref], effective=True)
-        global_analysis = workflow.save(project, "source_global_analysis", "全局分析", stage=1,
-            inputs=[source_ref, ref(global_view)], effective=True)
         asset = workflow.save(project, "source_knowledge_asset",
-            _knowledge_asset(global_view, global_analysis, character_view), stage=2,
-            inputs=[ref(global_view), ref(global_analysis), ref(character_view)], effective=True)
+            _knowledge_asset(global_view, character_view), stage=2,
+            inputs=[ref(global_view), ref(character_view)], effective=True)
     assert workflow.original_for(project, global_view)["id"] == original["id"]
     assert workflow.original_for(project, character_view)["id"] == original["id"]
     assert [item["kind"] for item in workflow.materials(project, 2)] == list(STAGE_OUTPUTS[1])
@@ -111,12 +110,33 @@ def test_step5_accepts_character_events_without_event_anchors(source_case, monke
                                     stage=1, inputs=[source_ref], effective=True)
         character_view = workflow.save(project, "source_character_events", _output("source_character_events", source_ref),
                                        stage=1, inputs=[source_ref], effective=True)
-        global_analysis = workflow.save(project, "source_global_analysis", "全局分析", stage=1,
-                                        inputs=[source_ref, ref(global_view)], effective=True)
-        workflow.save(project, "source_knowledge_asset", _knowledge_asset(global_view, global_analysis, character_view),
-                      stage=2, inputs=[ref(global_view), ref(global_analysis), ref(character_view)], effective=True)
+        workflow.save(project, "source_knowledge_asset", _knowledge_asset(global_view, character_view),
+                      stage=2, inputs=[ref(global_view), ref(character_view)], effective=True)
     assert [item["kind"] for item in workflow.materials(project, 5)] == [
         "source_global_events", "source_character_events", "source_knowledge_asset"]
+
+
+def test_old_global_view_without_per_event_analysis_requires_step1_regeneration(source_case, monkeypatch):
+    store, workflow, project = source_case
+    monkeypatch.setitem(PROGRAM_REQUIRES, 5, [])
+    with store.transaction():
+        original = workflow.save(project, "source_text", "甲见乙。", effective=True)
+        source_ref = ref(original)
+        old_content = _output("source_global_events", source_ref)
+        del old_content["payload"]["global_events"][0]["analysis"]
+        original_validate = workflow.catalog.validate
+        with monkeypatch.context() as legacy_protocol:
+            legacy_protocol.setattr(workflow.catalog, "validate",
+                lambda kind, content, custom=None: None if kind == "source_global_events"
+                else original_validate(kind, content, custom))
+            workflow.save(project, "source_global_events", old_content,
+                          stage=1, inputs=[source_ref], effective=True)
+        workflow.save(project, "source_character_events", _output("source_character_events", source_ref),
+                      stage=1, inputs=[source_ref], effective=True)
+    for stage in (2, 5):
+        with pytest.raises(WorkflowBlocked) as blocked:
+            workflow.materials(project, stage)
+        assert blocked.value.reason == "source_event_analysis_migration_required"
 
 
 def test_step2_rejects_views_from_different_original_versions(source_case):

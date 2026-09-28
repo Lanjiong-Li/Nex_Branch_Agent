@@ -20,10 +20,9 @@ from .workflow import Workflow, all_records, body
 EDITABLE_KINDS = ("adaptation_strategy", "adaptation_plan")
 ARTIFACT_INFO = {
     "source_text": ("原作全文", "导入的原文，供 Step1 读取。"),
-    "source_global_events": ("全局事件视图", "原作事件的全局时间线与关键事件。"),
+    "source_global_events": ("作品事件视图", "原作事件的全局时间线、原文位置与逐事件分析。"),
     "source_character_events": ("主要人物事件视图", "主要人物各自经历的事件；逐事件不保存原文位置。"),
-    "source_global_analysis": ("全局事件分析", "全局事件的因果关系和改编分析。"),
-    "source_knowledge_asset": ("原作知识资产", "综合全局事件、全局分析和人物事件形成的结构化原作知识。"),
+    "source_knowledge_asset": ("原作知识资产", "综合作品事件及其逐事件分析、人物事件形成的结构化原作知识。"),
     "adaptation_strategy": ("玩家与改编策略", "玩家身份与互动改编策略；可在运行前人工设置。"),
     "adaptation_plan": ("互动剧本改编方案", "完整的互动改编方案；可在运行前人工设置。"),
     "game_event_view": ("游戏事件视图", "游戏事件及其叙事功能。"),

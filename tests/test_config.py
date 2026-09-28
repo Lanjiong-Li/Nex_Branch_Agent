@@ -7,7 +7,8 @@ from branch_agent.model_service import ReadTools
 from branch_agent.prompts import (instructions, instruction_parts, instructions_preview,
                                   legacy_prompt_overrides, stage_agent, step1_agent,
                                   step1_run_appendix, LEGACY_HARNESS_RUNTIME,
-                                  LEGACY_HARNESS_STAGES)
+                                  LEGACY_HARNESS_STAGES, _PREVIOUS_DEFAULT_CLAUSES,
+                                  defaults as prompt_defaults)
 from branch_agent.records import new_record
 from branch_agent.workflow import session_key
 
@@ -139,6 +140,51 @@ def test_summary_layout_upgrade_changes_only_the_old_default_binding(runtime):
     assert stage_agent('aux.summary',service.resolve(pid,'aux.summary')['values'])=='conversation_coordinator'
 
 
+@pytest.mark.parametrize('layout_version', [2, 3])
+def test_previous_default_prompts_upgrade_exactly_and_preserve_edits(layout_version):
+    current = prompt_defaults()
+    previous = deepcopy(current)
+    previous['layout_version'] = layout_version
+
+    def field(values, path):
+        node = values
+        for key in path[:-1]:
+            node = node[key]
+        return node, path[-1]
+
+    # Rebuild all 11 defaults saved before the two-view contract changed.
+    for path, clauses in _PREVIOUS_DEFAULT_CLAUSES.items():
+        current_parent, key = field(current, path)
+        previous_parent, _ = field(previous, path)
+        old_text = current_parent[key]
+        for new_clause, old_clause in clauses:
+            assert old_text.count(new_clause) == 1, path
+            old_text = old_text.replace(new_clause, old_clause, 1)
+        assert old_text != current_parent[key], path
+        previous_parent[key] = old_text
+
+    original = {'prompts': previous}
+    upgraded = legacy_prompt_overrides(original)
+    assert original['prompts'] == previous
+    assert upgraded['prompts']['layout_version'] == 3
+    for path in _PREVIOUS_DEFAULT_CLAUSES:
+        parent, key = field(upgraded['prompts'], path)
+        current_parent, _ = field(current, path)
+        assert parent[key] == current_parent[key], path
+    assert legacy_prompt_overrides(upgraded) == upgraded
+
+    customized = deepcopy(previous)
+    for path in _PREVIOUS_DEFAULT_CLAUSES:
+        parent, key = field(customized, path)
+        parent[key] += '\n用户自定义补充：保留原文。'
+    customized_result = legacy_prompt_overrides({'prompts': customized})
+    for path in _PREVIOUS_DEFAULT_CLAUSES:
+        parent, key = field(customized_result['prompts'], path)
+        original_parent, _ = field(customized, path)
+        assert parent[key] == original_parent[key], path
+    assert legacy_prompt_overrides(customized_result) == customized_result
+
+
 def test_config_version_assignment_uses_database_max_in_scope(runtime):
     store,task,_,_,_=runtime;pid=task['project_id'];service=ConfigService(store)
     account=store.get(pid,pid)['owner_account_id'];service.values(pid)
@@ -257,7 +303,7 @@ def test_step1_branches_resolve_distinct_agent_profiles_and_instructions(runtime
     assert '人物分支专属协议' in instructions('step1',character_snapshot)
     preview=instructions_preview('step1',base)
     assert '作品事件视图' in preview['views']['global']['final']
-    assert '顶层非空 analysis' in preview['views']['global']['final']
+    assert '逐事件' in preview['views']['global']['final'] and 'analysis' in preview['views']['global']['final']
     assert '不生成逐人物事件原文锚点' in preview['views']['character']['final']
     assert '不输出顶层 analysis' in preview['views']['character']['final']
 
@@ -393,8 +439,58 @@ def test_step2_has_dedicated_knowledge_asset_agent():
     assert values['output']['bindings']['step2']=='source_knowledge_asset'
     assert values['output']['structured']['step2'] is True
     assert values['context']['stage_inputs']['step2']==[
-        'source_global_events','source_global_analysis','source_character_events']
+        'source_global_events','source_character_events']
     assert '结构化原作知识资产' in prompt
+
+
+def test_published_step1_and_step2_overrides_upgrade_to_per_event_analysis():
+    from copy import deepcopy
+    from branch_agent.schemas import SchemaCatalog
+
+    catalog = SchemaCatalog()
+    service = ConfigService.__new__(ConfigService)
+    service.catalog = catalog
+    global_schema = deepcopy(catalog.schemas['source_global_events'])
+    event = global_schema['properties']['payload']['anyOf'][0]['properties']['global_events']['items']
+    event['properties'].pop('analysis')
+    event['required'].remove('analysis')
+    knowledge_schema = deepcopy(catalog.schemas['source_knowledge_asset'])
+    knowledge_payload = knowledge_schema['properties']['payload']['anyOf'][0]
+    knowledge_payload['properties']['source_global_analysis_ref'] = deepcopy(
+        knowledge_payload['properties']['source_global_events_ref'])
+    knowledge_payload['required'].append('source_global_analysis_ref')
+    upgraded = service._upgrade_schema_overrides({
+        'source_global_events': global_schema,
+        'source_global_step1_result': {'obsolete': True},
+        'source_knowledge_asset': knowledge_schema,
+    })
+    assert 'source_global_step1_result' not in upgraded
+    upgraded_event = upgraded['source_global_events']['properties']['payload']['anyOf'][0]['properties']['global_events']['items']
+    assert 'analysis' in upgraded_event['properties']
+    assert 'analysis' in upgraded_event['required']
+    upgraded_knowledge = upgraded['source_knowledge_asset']['properties']['payload']['anyOf'][0]
+    assert 'source_global_analysis_ref' not in upgraded_knowledge['properties']
+    assert 'source_global_analysis_ref' not in upgraded_knowledge['required']
+
+    values = {'output': {'bindings': {'step1.global': 'source_global_step1_result'}},
+              'context': {'stage_inputs': {'step2': [
+                  'source_global_events', 'source_global_analysis', 'source_character_events']},
+                  'profiles': {'common_materials': [
+                      {'id': 'optional_old_analysis', 'source': {'schema_id': 'source_global_analysis'},
+                       'selectors': ['']},
+                  ], 'profiles': [{'stage': 'step2', 'materials': [
+                      {'id': 'source_global_analysis', 'source': {'schema_id': 'source_global_analysis'},
+                       'selectors': ['']},
+                      {'id': 'source_global_events_detail', 'source': {'schema_id': 'source_global_events'},
+                       'selectors': ['/payload/global_events']},
+                  ]}]}}}
+    resolved = service._upgrade_context_overrides(values)
+    assert resolved['output']['bindings']['step1.global'] == 'source_global_events'
+    assert resolved['context']['stage_inputs']['step2'] == [
+        'source_global_events', 'source_character_events']
+    assert [item['id'] for item in resolved['context']['profiles']['profiles'][0]['materials']] == [
+        'source_global_events_detail']
+    assert resolved['context']['profiles']['common_materials'] == []
 
 
 def test_validation_agent_is_configurable_and_disabled_by_default():

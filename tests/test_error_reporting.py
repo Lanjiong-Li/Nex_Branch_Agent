@@ -9,7 +9,7 @@ import pytest
 from branch_agent.model_service import ModelRunError
 from branch_agent.records import new_record, canonical_bytes, usage
 from branch_agent.workflow import WorkflowBlocked, all_records, update
-from test_runtime import FakeModel, runtime, coordinator, source_response
+from test_runtime import FakeModel, runtime, coordinator, source_response, seed_knowledge_asset
 
 
 def failed_operation(engine, pid, cid, *, known=True):
@@ -17,8 +17,9 @@ def failed_operation(engine, pid, cid, *, known=True):
     with engine.store.transaction():
         for queued in engine.status(pid)["queue"]:
             update(engine.store, queued, state="cancelled")
+        seed_knowledge_asset(engine, pid)
         task = engine._new_task(pid, cid, message, "generate", 2)
-        task, run, session, config = engine._start_run(task, 2, [])
+        task, run, session, config = engine._start_run(task, 2, engine.workflow.materials(pid, 2))
         contents = {"instructions": {"storage": "inline_text", "text": "test"},
                     "input_items": {"storage": "inline_json", "value": []},
                     "tool_definitions": {"storage": "inline_json", "value": []}}

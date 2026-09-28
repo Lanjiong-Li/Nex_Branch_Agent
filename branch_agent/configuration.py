@@ -35,7 +35,6 @@ ARTIFACT_PRODUCERS = {
     'source_text': 0,
     'source_global_events': 1,
     'source_character_events': 1,
-    'source_global_analysis': 1,
     'source_knowledge_asset': 2,
     'adaptation_strategy': 3,
     'adaptation_plan': 4,
@@ -48,7 +47,7 @@ ARTIFACT_PRODUCERS = {
 }
 STAGE_INPUT_DEFAULTS = {
     'step1': ['source_text'],
-    'step2': ['source_global_events', 'source_global_analysis', 'source_character_events'],
+    'step2': ['source_global_events', 'source_character_events'],
     'step3': ['source_knowledge_asset'],
     'step4': ['source_knowledge_asset', 'adaptation_strategy'],
     'step5': ['source_global_events', 'source_character_events', 'source_knowledge_asset'],
@@ -292,17 +291,33 @@ class ConfigService:
         """Add required runtime fields introduced after a saved editable schema."""
         upgraded=deepcopy(schemas)
         upgraded.pop('work_summary',None)
-        # Keep the editable event view and its Step1 model output aligned.
-        # Only the global branch has a top-level analysis.
-        for view,result in (('source_global_events','source_global_step1_result'),
-                            ('source_character_events','source_character_step1_result')):
+        # Step1's global output now is its saved event view. Old published
+        # overrides must not restore the removed top-level analysis contract.
+        upgraded.pop('source_global_step1_result',None)
+        global_events=upgraded.get('source_global_events')
+        if global_events:
+            try:
+                global_events['properties'].pop('analysis',None)
+                global_events['required']=[field for field in global_events['required'] if field!='analysis']
+                event=global_events['properties']['payload']['anyOf'][0]['properties']['global_events']['items']
+                current=self.catalog.schemas['source_global_events']['properties']['payload']['anyOf'][0]['properties']['global_events']['items']
+                event['properties'].setdefault('analysis',deepcopy(current['properties']['analysis']))
+                if 'analysis' not in event['required']:
+                    event['required'].append('analysis')
+            except (KeyError,IndexError,TypeError):
+                pass
+        knowledge=upgraded.get('source_knowledge_asset')
+        if knowledge:
+            try:
+                payload=knowledge['properties']['payload']['anyOf'][0]
+                payload['properties'].pop('source_global_analysis_ref',None)
+                payload['required']=[field for field in payload['required'] if field!='source_global_analysis_ref']
+            except (KeyError,IndexError,TypeError):
+                pass
+        # Character Step1 still has a separate model output Schema.
+        for view,result in (('source_character_events','source_character_step1_result'),):
             if view in upgraded and result not in upgraded:
                 combined=deepcopy(upgraded[view])
-                if view == 'source_global_events':
-                    combined['properties']['analysis']=deepcopy(
-                        self.catalog.schemas[result]['properties']['analysis'])
-                    if 'analysis' not in combined['required']:
-                        combined['required'].append('analysis')
                 combined['title']=self.catalog.schemas[result]['title']
                 upgraded[result]=combined
         # Step6 now returns a small patch; the enriched game_event_view is
@@ -406,9 +421,22 @@ class ConfigService:
         """Upgrade saved material profiles for the supported later stages."""
         upgraded=deepcopy(values)
         bindings=upgraded.get('output',{}).get('bindings',{})
+        if isinstance(bindings,dict) and bindings.get('step1.global')=='source_global_step1_result':
+            bindings['step1.global']='source_global_events'
         if isinstance(bindings,dict) and bindings.get('step6') in ('event_function_map', 'game_event_view'):
             bindings['step6']='game_event_narrative_patch'
-        profiles=upgraded.get('context',{}).get('profiles',{}).get('profiles')
+        context=upgraded.get('context',{})
+        stage_inputs=context.get('stage_inputs')
+        if isinstance(stage_inputs,dict):
+            for selected in stage_inputs.values():
+                if isinstance(selected,list):
+                    selected[:]=[kind for kind in selected if kind!='source_global_analysis']
+        profile_config=context.get('profiles',{})
+        common_materials=profile_config.get('common_materials')
+        if isinstance(common_materials,list):
+            common_materials[:]=[material for material in common_materials
+                if material.get('source',{}).get('schema_id')!='source_global_analysis']
+        profiles=profile_config.get('profiles')
         if not isinstance(profiles,list):
             return upgraded
         for profile in profiles:
@@ -434,6 +462,8 @@ class ConfigService:
                 continue
             expanded=[]
             for material in materials:
+                if material.get('source',{}).get('schema_id')=='source_global_analysis':
+                    continue
                 if material.get('source',{}).get('builtin')=='runtime.default_strategy':
                     continue
                 if profile.get('stage')=='step5' and material.get('source',{}).get('schema_id')=='adaptation_plan':

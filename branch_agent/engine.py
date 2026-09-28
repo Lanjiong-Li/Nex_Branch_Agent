@@ -717,6 +717,10 @@ class Engine:
         data = self._task_data(root)
         children = [t for t in all_records(self.store, root["project_id"], "task", parent_task_id=root["id"])
                     if not self._task_data(t).get('superseded_by_task_id')]
+        if any(item['state'] == 'open' for item in data.get('pending_user_items', [])):
+            if root['state'] != 'waiting_user':
+                self._transition(root, 'waiting_user')
+            return
         for audit in children:
             audit_data = self._task_data(audit)
             repair_ids = audit_data.get("repair_task_ids", [])
@@ -788,6 +792,70 @@ class Engine:
         if root["state"] != "succeeded":
             self._transition(root, "succeeded")
 
+    def _approve_step1_review(self, root, message):
+        """Close a reviewed Step1 and queue Step2 from the exact approved views."""
+        project, conversation = root['project_id'], root['conversation_id']
+        root = self.store.get(root['id'], project_id=project)
+        data = self._task_data(root)
+        review = data.get('step1_review')
+        if not review:
+            raise WorkflowBlocked('confirmation_target_ambiguous')
+        if data.get('step1_continuation_task_id'):
+            return {'status': 'confirmed', 'task_id': root['id'],
+                    'step2_task_id': data['step1_continuation_task_id']}
+        if any(item['state'] == 'open' for item in data.get('pending_user_items', [])):
+            raise WorkflowBlocked('confirmation_required')
+        if root['state'] != 'waiting_user':
+            raise WorkflowBlocked('confirmation_candidate_changed')
+        source = self.workflow.resolve(project, 'source_text')
+        if ref(source) != review['source_ref']:
+            raise WorkflowBlocked('dependency_changed', {'kind': 'source_text'})
+        stage_task = self.store.get(review['step1_task_id'], project_id=project)
+        if not stage_task or stage_task['parent_task_id'] != root['id'] or stage_task['state'] != 'succeeded':
+            raise WorkflowBlocked('confirmation_candidate_changed')
+        kinds = ('source_global_events', 'source_character_events')
+        if set(review['artifact_refs']) != set(kinds):
+            raise WorkflowBlocked('confirmation_candidate_changed')
+        for kind in kinds:
+            fixed_ref = review['artifact_refs'][kind]
+            version = self.workflow.fixed_version(project, fixed_ref)
+            artifact = self.store.get(version['artifact_id'], project_id=project)
+            state = self.workflow.state(version)
+            if (artifact['artifact_kind'] != kind or artifact['latest_version'] != version['version']
+                    or artifact['current_effective_version'] != version['version']
+                    or state['dependency_status'] != 'valid'
+                    or state['confirmation_status'] != 'confirmed'
+                    or body(self.store, version)['payload']['source_ref'] != review['source_ref']):
+                raise WorkflowBlocked('confirmation_candidate_changed', {'kind': kind})
+        data['step1_approved_refs'] = deepcopy(review['artifact_refs'])
+        data['step1_approved_by_message_id'] = message['id']
+        self._save_task_data(root, data)
+        self._event(project, 'source.step1_confirmed', {
+            'source_ref': review['source_ref'], 'artifact_refs': review['artifact_refs'],
+            'source_message_id': message['id']},
+            conversation=conversation, task=root['id'], source=message['id'])
+        if 2 in data.get('stages', []):
+            data['step1_input_refs'] = deepcopy(review['artifact_refs'])
+            self._save_task_data(root, data)
+            self._transition(root, 'queued', source=message['id'])
+            if data.get('manager_controlled'):
+                self._queue_manager_resume(root, message)
+            return {'status': 'confirmed', 'task_id': root['id'],
+                    'workflow_id': root['id'], 'next_stage': 2}
+        self._transition(root, 'succeeded', source=message['id'])
+        step2 = self._new_task(project, conversation, message, 'generate', is_workflow=True,
+            stages=[2], chapter_ids=[], request='使用已确认的两份 Step1 固定事件视图生成原作知识资产。',
+            source_ref=review['source_ref'], step1_input_refs=deepcopy(review['artifact_refs']),
+            manager_controlled=True, triggered_by_step1_task_id=root['id'])
+        data['step1_continuation_task_id'] = step2['id']
+        self._save_task_data(root, data)
+        self._event(project, 'source.step2_queued', {
+            'step1_task_id': root['id'], 'step2_task_id': step2['id'],
+            'source_ref': review['source_ref'], 'artifact_refs': review['artifact_refs']},
+            conversation=conversation, task=step2['id'], source=message['id'])
+        self._queue_manager_resume(step2, message)
+        return {'status': 'confirmed', 'task_id': root['id'], 'step2_task_id': step2['id']}
+
     def _wait_item(self, task, kind, message, description, targets=None, question_id=None):
         return {"id": str(uuid4()), "task_id": task["id"], "kind": kind, "question_id": question_id,
                 "description": description, "presented_message_ids": [message["id"]], "targets": targets or [],
@@ -801,6 +869,10 @@ class Engine:
                 source = self.workflow.resolve(task['project_id'], 'source_text')
                 if data['source_ref'] != ref(source):
                     raise WorkflowBlocked('dependency_changed', {'authorized_source_ref': data['source_ref'], 'current_source_ref': ref(source)})
+            for kind, fixed_ref in data.get('step1_input_refs', {}).items():
+                if ref(self.workflow.resolve(task['project_id'], kind)) != fixed_ref:
+                    raise WorkflowBlocked('dependency_changed', {'kind': kind,
+                        'authorized_ref': fixed_ref})
             current = self.store.get(current['parent_task_id'], project_id=task['project_id']) if current['parent_task_id'] else None
 
     def _session(self, task, stage, values=None, key_override=None):
@@ -815,7 +887,7 @@ class Engine:
             last_item_seq=0, lease_owner=None, lease_expires_at=None, fencing_token=0))
 
     def _start_run(self, task, stage, materials, *, recovery=False, session_key_override=None,
-                   fresh_allowance=False):
+                   fresh_allowance=False, contract_candidate=None):
         data = self._task_data(task)
         if fresh_allowance:
             data.pop("remaining_turns", None)
@@ -824,6 +896,8 @@ class Engine:
             data.pop("recovery_run_ids", None)
         config = self.store.get(data["config_version_id"], project_id=task["project_id"]) if data.get("config_version_id") else self.config_service.resolve(task["project_id"], stage if isinstance(stage, str) else f"step{stage}")
         values = config["values"]
+        self._assert_source_analysis_contract(stage, values, materials, contract_candidate,
+                                              check_materials=False, project_id=task['project_id'])
         if (isinstance(stage, int) and not recovery and materials
                 and not data.get("batch_coverage_ready")):
             selected = values.get("context", {}).get("stage_inputs", {}).get(f"step{stage}")
@@ -836,6 +910,8 @@ class Engine:
                 configured.extend(m for m in extras if (m.get("ref", {}).get("record_id"),
                                                         m.get("ref", {}).get("version")) not in identities)
                 materials[:] = configured
+        self._assert_source_analysis_contract(stage, values, materials, contract_candidate,
+                                              project_id=task['project_id'])
         session = self._session(task, stage, values, key_override=session_key_override)
         now = self.store.now()
         if session["lease_owner"] and session["lease_expires_at"] and session["lease_expires_at"] > now:
@@ -1358,7 +1434,8 @@ class Engine:
                 task, run, session, config = self._start_run(
                     task, stage, materials, recovery=bool(resume),
                     session_key_override=data.get('repair_session_key'),
-                    fresh_allowance=bool(data.get('repair_session_key') and not resume))
+                    fresh_allowance=bool(data.get('repair_session_key') and not resume),
+                    contract_candidate=resume["output"] if resume else None)
                 data = self._task_data(task)
                 data["model_dispatched"] = True
                 self._save_task_data(task, data)
@@ -1407,8 +1484,13 @@ class Engine:
                     category=category,
                     diagnostics=getattr(error, 'details', None))
             else:
+                migration_reason = (getattr(error, "details", None) or {}).get("reason")
                 message = (f"旧版 {error.details.get('kind', '阶段')} 产物缺少独立原文索引，需从该阶段重新生成并确认"
-                           if reason == "source_index_migration_required" else str(error))
+                           if reason == "source_index_migration_required" else
+                           "旧版作品事件视图缺少逐事件分析，需重新运行 Step1"
+                           if reason == "source_event_analysis_migration_required" and migration_reason == "old_global_view" else
+                           "旧版阶段协议不兼容，需用新配置重跑相应阶段"
+                           if reason == "source_event_analysis_migration_required" else str(error))
                 self._fail_execution(task, run, reason, message, getattr(error, "details", None))
 
     async def _drive_step1_views(self, task, token, source_version, source_text):
@@ -1454,6 +1536,9 @@ class Engine:
                 source_run = self.store.get(data["batch_source_run_id"], project_id=project)
                 if not self._dependencies_valid(source_run):
                     raise WorkflowBlocked("dependency_changed")
+                source_config = self.store.get(source_run["config_version_id"], project_id=project)["values"]
+                self._assert_source_analysis_contract(data["stage"], source_config,
+                    self._fixed_run_materials(source_run), project_id=project)
                 manifest = body(self.store, self.workflow.fixed_version(project, data["batch_manifest_ref"]))
                 ledger = batch_coverage(self.store, project, data["batch_manifest_ref"])
                 if ledger["complete"]:
@@ -1612,7 +1697,7 @@ class Engine:
                       'source_coverage_incomplete', 'source_window_coverage_invalid',
                       'source_window_boundary_invalid', 'source_window_event_outside_commit',
                       'source_window_wrong_view', 'source_window_incomplete',
-                      'source_view_incomplete', 'source_analysis_incomplete',
+                      'source_view_incomplete', 'source_event_analysis_incomplete',
                       'source_window_empty_interval_unverified', 'output_schema_invalid',
                       'incomplete_ready_result', 'evidence_pointer_not_concrete',
                       'evidence_pointer_missing', 'evidence_item_ambiguous_or_missing'):
@@ -1850,7 +1935,6 @@ class Engine:
         rules = {
             "source_knowledge_asset": {
                 "source_global_events_ref": ("source_global_events",),
-                "source_global_analysis_ref": ("source_global_analysis",),
                 "source_character_events_ref": ("source_character_events",),
                 "character_ref": ("source_character_events",),
                 "other_character_ref": ("source_character_events",),
@@ -2037,7 +2121,6 @@ class Engine:
         payload = value["payload"]
         fixed_fields = {
             2: (("source_global_events_ref", "source_global_events"),
-                ("source_global_analysis_ref", "source_global_analysis"),
                 ("source_character_events_ref", "source_character_events")),
             3: (("source_knowledge_asset_ref", "source_knowledge_asset"),),
             4: (("source_knowledge_asset_ref", "source_knowledge_asset"),
@@ -2073,13 +2156,49 @@ class Engine:
             payload["graph_checks"] = []
         return value
 
+    def _assert_source_analysis_contract(self, stage, values, materials, candidate=None,
+                                         *, check_materials=True, project_id=None):
+        """Keep legacy Step2/5 snapshots and fixed inputs out of the new contract."""
+        if stage not in (2, 5):
+            return
+        if check_materials:
+            self.workflow.require_fixed_source_event_analysis(stage, materials)
+            kinds = {item.get('kind') or item.get('schema_id') for item in materials}
+            if stage == 2 or (stage == 5 and {
+                    'source_global_events', 'source_character_events'} <= kinds):
+                self.workflow.require_approved_step1_inputs(project_id, materials)
+        schemas = values.get("schemas", {})
+        try:
+            event = schemas["source_global_events"]["properties"]["payload"]["anyOf"][0]["properties"]["global_events"]["items"]
+            analysis = event["properties"]["analysis"]
+            current_event_schema = analysis.get("type") == "string" and "analysis" in event["required"]
+        except (KeyError, IndexError, TypeError, AttributeError):
+            current_event_schema = False
+        if not current_event_schema:
+            raise WorkflowBlocked("source_event_analysis_migration_required",
+                                  {"reason": "old_global_schema"})
+        if stage == 2:
+            try:
+                knowledge = schemas["source_knowledge_asset"]["properties"]["payload"]["anyOf"][0]
+                old_knowledge_schema = "source_global_analysis_ref" in knowledge["properties"]
+            except (KeyError, IndexError, TypeError):
+                old_knowledge_schema = True
+            payload = candidate.get("payload") if isinstance(candidate, dict) else None
+            if (old_knowledge_schema or
+                    "source_global_analysis" in values.get("context", {}).get("stage_inputs", {}).get("step2", []) or
+                    isinstance(payload, dict) and "source_global_analysis_ref" in payload):
+                raise WorkflowBlocked("source_event_analysis_migration_required",
+                                      {"reason": "old_step2_contract"})
+
     def _apply_stage(self, task, run, result, materials):
         data = self._task_data(task)
         stage = data["stage"]
+        fixed_config = self.store.get(run["config_version_id"], project_id=task["project_id"])
+        self._assert_source_analysis_contract(stage, fixed_config["values"], materials, result,
+                                              project_id=task['project_id'])
         if isinstance(result, dict) and "__ask_user__" in result:
             self._await_user_questions(task, run, result["__ask_user__"])
             return
-        fixed_config = self.store.get(run["config_version_id"], project_id=task["project_id"])
         structured = fixed_config["values"].get("output", {}).get("structured", {}).get(
             f"step{stage}", True)
         if not structured:
@@ -2682,6 +2801,7 @@ class Engine:
                     return self._confirm_chapters(candidate, plan, request, message, presented, run)
             confirmation, version, complete = self.workflow.confirm(project, request, message, presented, run["id"])
             self._event(project, "confirmation.recorded", {"confirmation_id": confirmation["id"], "subject": ref(version), "complete": complete}, conversation=cid, source=message["id"])
+            step1_receipt = None
             for waiting in all_records(self.store, project, "task", conversation_id=cid):
                 data = self._task_data(waiting)
                 tracked = ([data["result_ref"]] if data.get("result_ref") else []) + list(data.get("result_refs", {}).values())
@@ -2707,10 +2827,14 @@ class Engine:
                     all_results_confirmed = all(self.workflow.state(saved)["confirmation_status"] in
                                                 ("confirmed", "not_required") for saved in pending_versions)
                     if not remaining and all_results_confirmed and self.workflow.state(version)["dependency_status"] == "valid" and waiting["state"] == "waiting_user":
-                        self._transition(waiting, "succeeded", source=message["id"])
-                        self.workflow.writeback_plan(project, version, data["stage"])
+                        if data.get('step1_review'):
+                            step1_receipt = self._approve_step1_review(waiting, message)
+                        else:
+                            self._transition(waiting, "succeeded", source=message["id"])
+                            self.workflow.writeback_plan(project, version, data["stage"])
             self._unblock_requests(project, cid, ("confirmation_required", "missing_material"))
-            return {"status": "confirmed" if complete else "partially_confirmed", "confirmation_id": confirmation["id"], "task_id": coordinator_task["id"]}
+            return {"status": "confirmed" if complete else "partially_confirmed", "confirmation_id": confirmation["id"],
+                    "task_id": coordinator_task["id"], **({'step1': step1_receipt} if step1_receipt else {})}
         if intent == "continue":
             target = request.get("target_ref")
             selected = self.store.get(target["record_id"], project_id=project) if target else steered_task

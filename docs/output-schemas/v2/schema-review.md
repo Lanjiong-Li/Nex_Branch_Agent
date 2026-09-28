@@ -1,15 +1,15 @@
 # 全部输出 Schema 审查
 
-审查日期：2026-09-26。目标为 `nexo-studio feature/v2.1.0 / 006296f` 的编辑器领域 `Project / Chapter / StoryNode`。当前注册表共 17 个活动类型；活动绑定见 [registry.json](registry.json)。本文件记录结构影响和校验结论。
+审查日期：2026-09-26；Step1 协议更新：2026-09-28。目标为 `nexo-studio feature/v2.1.0 / 006296f` 的编辑器领域 `Project / Chapter / StoryNode`。当前注册表共 16 个活动类型；活动绑定见 [registry.json](registry.json)。本文件记录结构影响和校验结论。
 
 ## 逐类型结论
 
 | 类型 | 结论／版本 | 依据与改动 |
 | --- | --- | --- |
 | coordinator_response | 保留 1.0.0 | 回复、任务与确认候选是调度提案，未依赖旧 Graph 字段；保留原字节 |
-| source_global_step1_result / source_global_events | 新增 1.0.0 | 全局 Agent 返回带逐事件 UTF-16 原文索引的事件和顶层分析，Harness 将分析另存为纯文本 |
+| source_global_events | 更新 1.1.0 | 全局 Agent 直接按此 output_type 返回事件视图；每个事件有非空 `analysis` 和逐事件 UTF-16 原文索引，Harness 直接保存同名产物 |
 | source_character_step1_result / source_character_events | 新增 1.0.0 | 人物 Agent 只返回人物事件，不含逐事件原文索引或顶层分析；窗口覆盖区间仍校验 |
-| source_knowledge_asset | 新增 1.0.0 | Step2 专用 Agent 综合固定的全局事件、全局分析和人物事件，形成一份结构化知识资产并等待一次确认 |
+| source_knowledge_asset | 更新 1.1.0 | Step2 专用 Agent 综合固定的作品事件与人物事件两份视图，形成一份结构化知识资产并等待一次确认 |
 | adaptation_strategy | 更新 2.2.0 | 读取原作知识资产的固定版本；描述明确当前交互能力 |
 | adaptation_plan | 更新 2.2.0 | 引用原作知识资产的固定版本；人物/地点设定保留为叙事身份目录，不混入 Project 媒体资产；明确跨章约束 |
 | game_event_view | 更新 2.3.0 | Step5 依据原作双视图、原作知识资产与固定全文重新设计游戏事件，事件与覆盖项直接锚定原文，不复用 Step1 事件身份；Step6 只补充 `events[].narrative_function` 并保留原文索引；确认后由 Harness 将最新版本写回方案 |
@@ -22,7 +22,7 @@
 | subtask_result | 保留 1.0.0 | 发现、建议、限制、来源和产物引用仍有效；保留原字节 |
 | nexo_graph | 新增 2.0.0 | 最终根直接为 Project；规范化严格 profile，保留 camelCase、story、body、scriptInline、DSL 和图关系，可作为整剧 output_type 定义源 |
 
-Step1 全局分析 `source_global_analysis` 为纯文本内部产物；Step2 的 `source_knowledge_asset` 是活动结构化输出。旧合并视图不在 v2 活动注册表中。
+Step1 不再保存独立的全局分析产物；逐事件分析位于 `source_global_events.payload.global_events[].analysis`。Step2 负责跨事件综合。旧合并视图不在 v2 活动注册表中。
 
 ## 新增语义与消费者
 
@@ -47,8 +47,8 @@ Step9 原作来源、正文段和 flow_links 保留原有独立语义；上游�
 
 以下为已有离线合同／样例检查记录，见 [validation-report.json](validation-report.json)，执行入口 [validate.py](validate.py)。这些检查不定义首版运行时的质量检查清单；2.1.0 的审核字段结构保持不变，仅同步启用范围描述与注册哈希。
 
-- 17 个活动 Schema 元验证及本地 Agents SDK strict 处理通过；strict 处理没有静默修改结构。
-- 193 个本地 `$ref` 可解析，注册文件哈希和绑定一致；chapter_graph 与 nexo_graph 的领域定义完全一致。
+- 16 个活动 Schema 元验证及本地 Agents SDK strict 处理通过；strict 处理没有静默修改结构。
+- 185 个本地 `$ref` 可解析，注册文件哈希和绑定一致；chapter_graph 与 nexo_graph 的领域定义完全一致。
 - 对 18 个源接口 profile 检查字段归属及必需项，类型另经人工源码审查；未运行 TypeScript 编译。
 - 4 个示例结构验证通过；章节/最终 Graph 示例相互一致，原作/方案示例是独立 fixture。
 - 样例图的身份、引用、端口、互动位置、顺序章节、变量、可达性和章节删除差异通过；17 个故意错误样例被拒绝，禁用失败而保留合法草稿目标的正例通过。

@@ -15,11 +15,11 @@
     "required": "required=true 表示相应子任务开始前必须解析、读到并校验；load=on_demand 仅改变加载时机。有效空集合允许，来源缺失/失败不等于空。任何材料一旦被声明为直接依赖，即使此模板 required=false 也须读取。",
     "load": "auto 由 Harness 预取；on_demand 在 Agent 工具请求或对应消费子任务前展开。引用本身不足以满足要求正文的必需材料。",
     "detail": "full 为 selectors 指向内容的完整值；index 为所列目录/定位字段且不代表全文阅读；ref 仅保留固定引用。改变 full 为 index/ref 不解除 complete_scope 的后续展开义务。",
-    "priority": "整数越大越先装入预算；低优先级必需材料仍不可丢弃。Step3–11 超预算可按契约分批；Step1 的全文或固定窗口都是不可裁剪的必需输入，实际总上下文超限即暂停。Step2 固定读取三份 Step1 产物并生成结构化知识资产。",
+    "priority": "整数越大越先装入预算；低优先级必需材料仍不可丢弃。Step3–11 超预算可按契约分批；Step1 的全文或固定窗口都是不可裁剪的必需输入，实际总上下文超限即暂停。Step2 固定读取两份 Step1 产物并生成结构化知识资产。",
     "coverage": "complete_scope 要求固定目标范围内全部选中字段/条目最终被读取并完成任务检查；context_only 仅提供控制/索引/工作连续性；evidence_only 只证明实际展开的证据。索引、摘要和 top-k 不算全量覆盖。",
     "common": "每个 profile 先加载 common_materials，再按源身份/版本/字段/范围去重；工作摘要非权威且仅当已有有效摘要时加载。",
     "config_boundary": "允许 HTML 调整 selectors、scope_filter 注册名、load、detail、priority 及可选材料。不得通过配置绕过项目隔离、固定版本、阶段前置确认、必需约束或全量覆盖；修改必须通过静态路径与依赖检查，并生成 ConfigVersion。",
-    "step1_full_text": "Step1 两路按各自模型估算原文 token。未超过 trigger_tokens 且全文请求可放进该路输入预算时，各自直接读取冻结原作全文；否则按各自 window_tokens 上限独立扫描，并为指令、索引和前窗累计分析预留输入预算。作品事件分支只在完整事件边界提交；人物分支按实际阅读并校验的连续前缀提交，不依赖作品事件边界。全局分支的 analysis 累计前窗已校验结论；两路阅读覆盖各自校验直至全文。窗口预算不足或无法安全推进时暂停；原文不得以摘要或索引替代。"
+    "step1_full_text": "Step1 两路按各自模型估算原文 token。未超过 trigger_tokens 且全文请求可放进该路输入预算时，各自直接读取冻结原作全文；否则按各自 window_tokens 上限独立扫描，并为指令、索引及必要的人物连续性材料预留输入预算。作品事件分支只在完整事件边界提交，逐事件 analysis 随事件保存；人物分支按实际阅读并校验的连续原文前缀提交，不依赖作品事件边界。两路阅读覆盖各自校验直至全文。窗口预算不足或无法安全推进时暂停；原文不得以摘要或索引替代。"
   },
   "builtin_sources": {
     "runtime.task_frame": {
@@ -313,7 +313,7 @@
         }
       ],
       "notes": [
-        "两路独立读取同一固定原作。全局分支生成带原文索引的事件视图和累计分析；人物分支只生成人物事件视图，不保存逐事件原文索引。两路窗口阅读覆盖各自由 Harness 记录与校验。"
+        "两路独立读取同一固定原作。作品分支生成带原文索引及逐事件 analysis 的事件视图；人物分支只生成人物事件视图，不保存逐事件原文索引。两路窗口阅读覆盖各自由 Harness 记录与校验。"
       ]
     },
     {
@@ -357,21 +357,6 @@
           "coverage": "context_only"
         },
         {
-          "id": "source_global_analysis",
-          "source": {
-            "schema_id": "source_global_analysis"
-          },
-          "selectors": [
-            ""
-          ],
-          "scope_filter": "all_pinned",
-          "load": "auto",
-          "required": true,
-          "detail": "full",
-          "priority": 70,
-          "coverage": "complete_scope"
-        },
-        {
           "id": "source_global_events_detail",
           "source": {
             "schema_id": "source_global_events"
@@ -409,7 +394,7 @@
         }
       ],
       "notes": [
-        "固定读取全局事件、全局分析和主要人物事件三个 Step1 产物，生成单一结构化原作知识资产。来源版本由 Harness 校验并绑定；知识资产需用户一次确认。"
+        "固定读取包含逐事件 analysis 的作品事件视图和主要人物事件视图两份 Step1 产物，生成单一结构化原作知识资产。来源版本由 Harness 校验并绑定；知识资产需用户一次确认。"
       ],
       "agent": "source_knowledge_analyst"
     },
@@ -985,7 +970,7 @@
   "readme": [
     "source.schema_id 只指 output-schemas/v2 注册表中的真实业务 Schema；source.builtin 指本文件明确登记的程序投影，二者互斥。runtime.* 不增加业务 output_type 字段，也不允许模型把投影冒充正式产物。",
     "scope_filter 是受控注册处理器名，先按固定身份/范围选取对象，再执行 selectors。HTML 不执行用户填入的 Python/JavaScript。只保留标题/摘要的 index 材料不能用于完整内容验收。",
-    "Step1 两路并行生成 source_global_events、source_global_analysis、source_character_events 三份独立产物；全局事件以 source_anchors 指向固定原作的 UTF-16 区间，人物事件不保存逐事件原文锚点，但 Harness 独立记录该分支逐窗阅读区间。Step2 综合三份产物生成结构化 source_knowledge_asset。游戏事件是 Step5 重新设计的集合，独立锚定原文。三类事件 ID 不按同名自动互换。",
+    "Step1 两路并行生成 source_global_events、source_character_events 两份独立产物；作品事件包含逐事件 analysis，并以 source_anchors 指向固定原作的 UTF-16 区间，人物事件不保存逐事件原文锚点，但 Harness 独立记录该分支逐窗阅读区间。Step2 综合两份产物生成结构化 source_knowledge_asset。游戏事件是 Step5 重新设计的集合，独立锚定原文。三类事件 ID 不按同名自动互换。",
     "payload 保留要求、策略和方案说明不等于人工确认；确认范围来自 runtime.applicable_controls。只有方案中的固定 stage_artifact_refs 生效引用才能提供下游阶段依赖。",
     "Step5–8 确认后由 Harness 写回方案并形成新版本。Step5 产物不含 plan_ref；Step6 复用 Step5 Session 生成仅含事件 ID 和 narrative_function 的补丁；Harness 合并为新版 game_event_view，并将新版本写回 game_events。Step7 独立 Session 仅读取方案引用的固定事件视图，确认后写回 ending_routes；Step8 独立 Session 仅读取方案引用的固定事件视图与已确认结局路线，确认后写回 player_profiles。各阶段另加本阶段 instructions。输入解析按最新获准基线的引用清单协调，不循环要求旧产物改写引用。是否受影响由依赖/范围映射判断。",
     "Step1 使用冻结原作全文或两路独立滑动窗口，不创建 batch_manifest；作品分支按完整作品事件边界推进，人物分支按已检查的连续原文前缀推进。Step2 是知识资产分析 Agent 阶段；Step3–11 的阶段事件、章节材料及审核批次使用内部 batch_manifest。",

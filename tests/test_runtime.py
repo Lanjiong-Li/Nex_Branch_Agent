@@ -38,9 +38,9 @@ class FakeModel:
             result = deepcopy(result)
             result["payload"].pop("character_views" if step1_view == "global" else "global_events", None)
             if step1_view == "global":
-                result["analysis"] = "全局事件分析：甲与乙相遇，保留事件因果。"
+                for event in result["payload"]["global_events"]:
+                    event["analysis"] = "全局事件分析：甲与乙相遇，保留事件因果。"
             else:
-                result.pop("analysis", None)
                 if not result["payload"].get("character_views"):
                     result["payload"]["character_views"] = [{
                         "character_id": "CHAR-甲", "name": "甲", "aliases": [], "description": "主人物",
@@ -114,19 +114,20 @@ def source_response(task, materials):
               "exact_quote": source["content"], "prefix": None, "suffix": None}
     return {"result_kind": "ready", "payload": {"source_ref": source["ref"],
         "global_events": [{"event_id": "event-1", "title": "见面", "summary": "甲见乙。",
-            "narrative_order": 0, "story_time": None, "character_ids": [], "source_anchors": [anchor]}],
+            "analysis": "甲乙相遇建立了后续关系。", "narrative_order": 0,
+            "story_time": None, "character_ids": [], "source_anchors": [anchor]}],
         "character_views": [], "covered_source_anchors": [anchor], "remaining_source_anchors": []},
         "questions": [], "evidence_refs": [source["ref"]], "notes": []}
 
 
-def step2_response(global_analysis="甲与乙相遇。", character_analysis="甲与乙的人物关系保持不变。"):
+def step2_response(premise="甲与乙相遇。", event_causality="甲与乙的人物关系保持不变。"):
     hint = {"record_id": str(uuid4()), "version": "1", "item_id": None, "json_pointer": None}
     return {"result_kind": "ready", "payload": {
-        "source_global_events_ref": hint, "source_global_analysis_ref": hint,
-        "source_character_events_ref": hint, "premise": global_analysis.strip(),
+        "source_global_events_ref": hint, "source_character_events_ref": hint,
+        "premise": premise.strip(),
         "world_rules": [], "themes": [], "conflicts": [], "characters": [], "key_event_refs": [],
         "preservation_items": [], "event_causality": [{"finding_id": "cause-1",
-            "statement": character_analysis.strip(), "evidence_refs": [], "knowledge_type": "inference"}],
+            "statement": event_causality.strip(), "evidence_refs": [], "knowledge_type": "inference"}],
         "canon_constraints": [], "uncertainties": [],
     }, "questions": [], "evidence_refs": [], "notes": []}
 
@@ -149,6 +150,7 @@ def seed_knowledge_asset(engine, project_id):
         global_view = workflow.save(project_id, "source_global_events", {
             "result_kind": "ready", "payload": {"source_ref": source_ref,
                 "global_events": [{"event_id": "GEV-1", "title": "相遇", "summary": text,
+                    "analysis": "甲乙相遇建立了人物关系。",
                     "narrative_order": 1, "story_time": None, "character_ids": ["CHAR-甲"],
                     "source_anchors": [anchor]}],
                 "covered_source_anchors": [anchor], "remaining_source_anchors": []},
@@ -166,16 +168,11 @@ def seed_knowledge_asset(engine, project_id):
                 "covered_source_anchors": [anchor], "remaining_source_anchors": []},
             "questions": [], "evidence_refs": [source_ref], "notes": [],
         }, stage=1, inputs=[source_ref], effective=True)
-    try:
-        global_analysis = workflow.resolve(project_id, "source_global_analysis")
-    except WorkflowBlocked:
-        global_analysis = workflow.save(project_id, "source_global_analysis", "甲与乙相遇。",
-            stage=1, inputs=[source_ref, ref(global_view)], effective=True)
     result = step2_response()
     result["payload"].update(source_global_events_ref=ref(global_view),
-        source_global_analysis_ref=ref(global_analysis), source_character_events_ref=ref(character_view))
+        source_character_events_ref=ref(character_view))
     return workflow.save(project_id, "source_knowledge_asset", result, stage=2,
-        inputs=[ref(global_view), ref(global_analysis), ref(character_view)], effective=True)
+        inputs=[ref(global_view), ref(character_view)], effective=True)
 
 
 def test_persistent_queue_and_idempotent_message(runtime):
@@ -197,6 +194,17 @@ def test_steer_closed_target_is_retained(runtime):
     assert not engine.status(pid)["queue"]
 
 
+def _confirm_step1_views(engine, project, conversation):
+    from branch_agent.actions import ActionService
+    actions = ActionService(engine)
+    cards = [card for card in actions.list_cards(project, conversation)["cards"]
+             if card["kind"] == "confirmation" and len(card["targets"]) == 2]
+    assert len(cards) == 1
+    card = cards[0]
+    receipt = actions.submit(project, conversation, card["id"], "confirm", card["revision"], {})
+    assert receipt["status"] == "confirmed"
+
+
 def test_full_workflow_builds_step1_events_and_step2_knowledge_asset(runtime):
     engine, model, pid, cid = runtime
     engine.import_source(pid, cid, "甲见乙。", "故事")
@@ -206,21 +214,25 @@ def test_full_workflow_builds_step1_events_and_step2_knowledge_asset(runtime):
         for _ in range(6):
             await engine.tick(pid, cid)
     asyncio.run(drive())
+    assert model.calls == ["coordinator", "step1", "step1"]
+    _confirm_step1_views(engine, pid, cid)
+    asyncio.run(drive())
     tasks = engine.status(pid)["tasks"]
     assert model.calls == ["coordinator", "step1", "step1", "step2"]
     assert any(t["scope"]["stage"] == 1 and t["state"] == "succeeded" for t in tasks)
     assert any(t["scope"]["stage"] == 2 and t["state"] == "waiting_user" for t in tasks)
-    assert "全局事件分析" in engine.workflow.resolve(pid, "source_global_analysis", effective=False)["content"]["text"]
+    global_view = engine.workflow.resolve(pid, "source_global_events")
+    assert "全局事件分析" in global_view["content"]["value"]["payload"]["global_events"][0]["analysis"]
+    assert not all_records(engine.store, pid, "artifact", artifact_kind="source_global_analysis")
     character = engine.workflow.resolve(pid, "source_character_events")
     assert "source_anchors" not in character["content"]["value"]["payload"]["character_views"][0]["events"][0]
     asset = engine.workflow.resolve(pid, "source_knowledge_asset", effective=False)
     asset_payload = asset["content"]["value"]["payload"]
     assert asset_payload["premise"] == "甲与乙相遇。"
-    assert asset_payload["source_global_events_ref"] == ref(engine.workflow.resolve(pid, "source_global_events"))
-    assert asset_payload["source_global_analysis_ref"] == ref(engine.workflow.resolve(pid, "source_global_analysis"))
+    assert asset_payload["source_global_events_ref"] == ref(global_view)
     assert asset_payload["source_character_events_ref"] == ref(character)
     assert asset["source_refs"] == [asset_payload[key] for key in (
-        "source_global_events_ref", "source_global_analysis_ref", "source_character_events_ref")]
+        "source_global_events_ref", "source_character_events_ref")]
     step2_task = next(task for task in tasks if task["scope"]["stage"] == 2)
     assert len(engine._task_data(step2_task)["pending_user_items"][0]["targets"]) == 1
     with pytest.raises(WorkflowBlocked, match="confirmation_required"):
@@ -229,7 +241,7 @@ def test_full_workflow_builds_step1_events_and_step2_knowledge_asset(runtime):
     shown = [h["content"]["text"] for h in all_records(engine.store, pid, "history_record")
              if h["visibility"] == "conversation" and h["role"] == "assistant"]
     assert any("Step 1 · 作品事件视图" in text and "甲见乙。" in text for text in shown)
-    assert any("Step 1 · 作品事件分析" in text and "全局事件分析" in text for text in shown)
+    assert any("Step 1 · 作品事件视图" in text and "全局事件分析" in text for text in shown)
     assert any("Step 1 · 主要人物事件视图" in text for text in shown)
     assert any("Step 2 · 原作知识资产" in text for text in shown)
     assert any("甲与乙相遇" in text for text in shown)
@@ -257,6 +269,9 @@ def test_pasted_complete_source_is_saved_verbatim_and_runs_steps_1_and_2(runtime
     async def drive():
         for _ in range(7):
             await engine.tick(pid, cid)
+    asyncio.run(drive())
+    assert model.calls == ["coordinator", "step1", "step1"]
+    _confirm_step1_views(engine, pid, cid)
     asyncio.run(drive())
 
     assert all_records(engine.store, pid, "artifact", artifact_kind="source_text"), engine.status(pid)
@@ -580,7 +595,7 @@ def test_two_chapter_workflow_confirm_audit_and_deliver_fixed_candidate(runtime)
                 response = source_response(task, materials)
                 response["payload"].pop("character_views" if step1_view == "global" else "global_events", None)
                 if step1_view == "global":
-                    response["analysis"] = "故事前提：甲与乙相遇，保留事件因果。"
+                    response["payload"]["global_events"][0]["analysis"] = "甲乙相遇推动后续情节。"
                 else:
                     response["payload"]["character_views"] = [{
                         "character_id": "CHAR-甲", "name": "甲", "aliases": [], "description": "主人物",
@@ -1091,14 +1106,55 @@ def test_step1_runs_two_agents_concurrently_and_saves_independent_artifacts(runt
     runs = [run for run in all_records(engine.store, pid, "run") if run["task_id"] in {child["id"] for child in children}]
     assert {run["agent_key"] for run in runs} == {"source_global_parser", "source_character_parser"}
     assert len({run["session_id"] for run in runs}) == 2
-    for kind in ("source_global_events", "source_character_events", "source_global_analysis"):
-        saved = engine.workflow.resolve(pid, kind, effective=kind.endswith("_events"))
-        if kind.endswith("_events"):
-            assert saved["source_refs"] == [ref(original)]
-            assert saved["content"]["value"]["payload"]["source_ref"] == ref(original)
-        else:
-            assert saved["source_refs"] == [ref(original), ref(engine.workflow.resolve(pid, "source_global_events"))]
-            assert saved["content"]["text"]
+    for kind in ("source_global_events", "source_character_events"):
+        saved = engine.workflow.resolve(pid, kind)
+        assert saved["source_refs"] == [ref(original)]
+        assert saved["content"]["value"]["payload"]["source_ref"] == ref(original)
+    global_events = engine.workflow.resolve(pid, "source_global_events")["content"]["value"]["payload"]["global_events"]
+    assert all(event["analysis"].strip() for event in global_events)
+    assert not all_records(engine.store, pid, "artifact", artifact_kind="source_global_analysis")
+
+
+@pytest.mark.parametrize("windowed", [False, True])
+def test_step1_repairs_empty_event_analysis_before_saving(runtime, windowed):
+    engine, _, pid, cid = runtime
+    if windowed:
+        draft = engine.config_service.draft(pid, {"context": {"step1_source": {
+            "trigger_tokens": 1, "window_tokens": 128}}})
+        engine.config_service.publish(pid, draft["id"])
+    engine.import_source(pid, cid, "甲见乙。", "故事")
+    with engine.store.transaction():
+        message = engine._message(pid, cid, "切分", role="user")
+        task = engine._new_task(pid, cid, message, "generate", stage=1)
+
+    class AnalysisRepairModel(FakeModel):
+        def __init__(self):
+            super().__init__()
+            self.first_global = True
+
+        async def run(self, stage, task, run, session, config, materials, message, control=None,
+                      step1_view=None, step1_window=None, instructions_override=None):
+            output = await super().run(stage, task, run, session, config, materials, message,
+                                       control=control, step1_view=step1_view,
+                                       step1_window=step1_window,
+                                       instructions_override=instructions_override)
+            if step1_view == "global" and self.first_global:
+                output["payload"]["global_events"][0]["analysis"] = "  "
+                self.first_global = False
+            return output
+
+    model = AnalysisRepairModel()
+    model.store = engine.store
+    engine.model_service = model
+    asyncio.run(engine.tick(pid, cid))
+    assert engine.store.get(task["id"], pid)["state"] == "succeeded"
+    children = {engine._task_data(child)["step1_view"]: child for child in all_records(
+        engine.store, pid, "task") if child["parent_task_id"] == task["id"]}
+    assert engine._task_data(children["global"])["content_repair_rounds_used"] == 1
+    assert model.calls.count("step1") == 3
+    saved = engine.workflow.resolve(pid, "source_global_events")
+    assert saved["content"]["value"]["payload"]["global_events"][0]["analysis"].strip()
+    assert not all_records(engine.store, pid, "artifact", artifact_kind="source_global_analysis")
 
 
 def test_step1_sliding_window_keeps_independent_runs_and_saves_two_views(runtime):
@@ -1132,7 +1188,8 @@ def test_step1_sliding_window_keeps_independent_runs_and_saves_two_views(runtime
                       "exact_quote": None, "prefix": None, "suffix": None}
             event = {"title": "相遇", "summary": "甲见乙", "narrative_order": 1,
                      "story_time": None, "source_anchors": [anchor]}
-            global_events = [{**event, "event_id": "local-1", "character_ids": ["CHAR-甲"]}] if step1_view == "global" else []
+            global_events = [{**event, "event_id": "local-1", "character_ids": ["CHAR-甲"],
+                              "analysis": f"global analysis for source {start}–{end}"}] if step1_view == "global" else []
             character_views = ([{"character_id": "CHAR-甲", "name": "甲", "aliases": [],
                                  "description": "主人物", "events": [{
                                  "title": event["title"], "summary": event["summary"],
@@ -1143,11 +1200,8 @@ def test_step1_sliding_window_keeps_independent_runs_and_saves_two_views(runtime
                     "covered_source_anchors": [anchor], "remaining_source_anchors": []}
             payload["global_events" if step1_view == "global" else "character_views"] = (
                 global_events if step1_view == "global" else character_views)
-            result = {"result_kind": "ready", "payload": payload,
-                      "questions": [], "evidence_refs": [], "notes": []}
-            if step1_view == "global":
-                result["analysis"] = f"global analysis for source {start}–{end}"
-            return result
+            return {"result_kind": "ready", "payload": payload,
+                    "questions": [], "evidence_refs": [], "notes": []}
 
     model = WindowModel()
     model.store = engine.store
@@ -1160,8 +1214,9 @@ def test_step1_sliding_window_keeps_independent_runs_and_saves_two_views(runtime
     character_view = engine.workflow.resolve(pid, "source_character_events")
     assert len(global_view["content"]["value"]["payload"]["global_events"]) == 2
     assert len(character_view["content"]["value"]["payload"]["character_views"]) == 1
-    global_analysis = engine.workflow.resolve(pid, "source_global_analysis", effective=False)
-    assert "global analysis" in global_analysis["content"]["text"]
+    assert all("global analysis" in event["analysis"]
+               for event in global_view["content"]["value"]["payload"]["global_events"])
+    assert not all_records(engine.store, pid, "artifact", artifact_kind="source_global_analysis")
     assert "source_anchors" not in character_view["content"]["value"]["payload"]["character_views"][0]["events"][0]
     activities = all_records(engine.store, pid, "runtime_event", event_name="chat.activity")
     assert {row["payload"]["view"] for row in activities if row["payload"]["status"] == "progress"} == {"global", "character"}
@@ -1186,7 +1241,8 @@ def test_step1_failed_window_keeps_other_view_and_independent_cursor(runtime):
             anchor = {"source_ref": source_ref, "start_utf16": start, "end_utf16": end,
                       "exact_quote": None, "prefix": None, "suffix": None}
             events = ([{"event_id": "local", "title": "事件", "summary": "摘要", "narrative_order": 1,
-                        "story_time": None, "character_ids": [], "source_anchors": [anchor]}]
+                        "analysis": f"global scanned {start}–{end}", "story_time": None,
+                        "character_ids": [], "source_anchors": [anchor]}]
                       if start == 0 and step1_view == "global" else [])
             payload = {"source_ref": source_ref,
                     "covered_source_anchors": [anchor], "remaining_source_anchors": []}
@@ -1196,7 +1252,6 @@ def test_step1_failed_window_keeps_other_view_and_independent_cursor(runtime):
                     "questions": [], "evidence_refs": [],
                     "notes": (["空人物事件区间：本窗口未见主要人物事件。"]
                               if step1_view == "character" else [])}
-            if step1_view == "global": result["analysis"] = f"global scanned {start}–{end}"
             return result
 
     model = IncompleteSecondWindow()
@@ -1240,6 +1295,7 @@ def test_step1_window_resume_adopts_new_size_without_repeating_completed_view(ru
             anchor = {"source_ref": source_ref, "start_utf16": start, "end_utf16": end,
                       "exact_quote": None, "prefix": None, "suffix": None}
             event = {"event_id": "local", "title": "事件", "summary": "摘要",
+                     "analysis": f"global scanned {start}–{end}",
                      "narrative_order": 1, "story_time": None, "character_ids": [],
                      "source_anchors": [anchor]}
             global_events = ([event] if step1_view == "global" and (start == 0 or size > 7)
@@ -1252,7 +1308,6 @@ def test_step1_window_resume_adopts_new_size_without_repeating_completed_view(ru
                     "questions": [], "evidence_refs": [],
                     "notes": (["空人物事件区间：本窗口未见主要人物事件。"]
                               if step1_view == "character" else [])}
-            if step1_view == "global": result["analysis"] = f"global scanned {start}–{end}"
             return result
 
     model = ResizeModel()
@@ -1322,9 +1377,196 @@ def test_rejected_output_does_not_consume_repair_rounds_after_resume(runtime, en
     current = engine.store.get(task["id"], pid)
     assert current["state"] == "waiting_user" and current["repair_rounds_used"] == 2
     assert model.calls == ["step2"] * 3
-    assert engine.workflow.resolve(pid, "source_global_analysis", effective=False)
+    assert engine.workflow.resolve(pid, "source_global_events")
     assert engine.workflow.resolve(pid, "source_knowledge_asset", effective=False)
     assert len(all_records(engine.store, pid, "runtime_event", event_name="repair.scheduled")) == 2
+
+
+def test_legacy_step2_candidate_cannot_be_saved_with_old_snapshot(runtime):
+    engine, _, pid, cid = runtime
+    with engine.store.transaction():
+        seed_knowledge_asset(engine, pid)
+        current = engine.config_service.resolve(pid, "step2")
+        legacy_values = deepcopy(current["values"])
+        payload_schema = legacy_values["schemas"]["source_knowledge_asset"]["properties"]["payload"]["anyOf"][0]
+        payload_schema["properties"]["source_global_analysis_ref"] = deepcopy(
+            payload_schema["properties"]["source_global_events_ref"])
+        payload_schema["required"].append("source_global_analysis_ref")
+        legacy = engine.store.put(new_record("config_version", pid, config_key="harness",
+            scope_kind="run_snapshot", scope_key="step2", state="snapshot", version=current["version"] + 1,
+            values=legacy_values))
+        message = engine._message(pid, cid, "继续旧版知识分析", role="user")
+        task = engine._new_task(pid, cid, message, "generate", stage=2)
+        materials = engine.workflow.materials(pid, 2)
+        task, run, _, _ = engine._start_run(task, 2, materials, recovery=True)
+        historical_run = {**run, "config_version_id": legacy["id"]}
+        candidate = step2_response()
+        candidate["payload"]["source_global_analysis_ref"] = ref(engine.workflow.resolve(pid, "source_global_events"))
+        before = engine.workflow.resolve(pid, "source_knowledge_asset", effective=False)
+        with pytest.raises(WorkflowBlocked) as blocked:
+            engine._apply_stage(task, historical_run, candidate, materials)
+        assert blocked.value.reason == "source_event_analysis_migration_required"
+        assert engine.workflow.resolve(pid, "source_knowledge_asset", effective=False)["id"] == before["id"]
+
+
+def test_legacy_step2_snapshot_is_rejected_before_creating_a_run(runtime):
+    engine, model, pid, cid = runtime
+    with engine.store.transaction():
+        seed_knowledge_asset(engine, pid)
+        current = engine.config_service.resolve(pid, "step2")
+        legacy_values = deepcopy(current["values"])
+        knowledge = legacy_values["schemas"]["source_knowledge_asset"]["properties"]["payload"]["anyOf"][0]
+        knowledge["properties"]["source_global_analysis_ref"] = deepcopy(
+            knowledge["properties"]["source_global_events_ref"])
+        knowledge["required"].append("source_global_analysis_ref")
+        legacy_values["context"]["stage_inputs"]["step2"].append("source_global_analysis")
+        legacy = engine.store.put(new_record("config_version", pid, config_key="harness",
+            scope_kind="run_snapshot", scope_key="step2", state="snapshot",
+            version=current["version"] + 1, values=legacy_values))
+        message = engine._message(pid, cid, "使用旧版配置继续", role="user")
+        task = engine._new_task(pid, cid, message, "generate", stage=2)
+        data = engine._task_data(task)
+        data["config_version_id"] = legacy["id"]
+        engine._save_task_data(task, data)
+    asyncio.run(engine.tick(pid, cid))
+    finished = engine.store.get(task["id"], pid)
+    assert finished["state"] == "paused"
+    assert finished["pause_reason"] == "source_event_analysis_migration_required"
+    assert all_records(engine.store, pid, "run", task_id=task["id"]) == []
+    assert model.calls == []
+
+
+def test_step2_rejects_missing_fixed_character_view_before_creating_a_run(runtime):
+    engine, _, pid, cid = runtime
+    with engine.store.transaction():
+        seed_knowledge_asset(engine, pid)
+        message = engine._message(pid, cid, "生成知识资产", role="user")
+        task = engine._new_task(pid, cid, message, "generate", stage=2)
+        materials = [item for item in engine.workflow.materials(pid, 2)
+                     if item["schema_id"] != "source_character_events"]
+        with pytest.raises(WorkflowBlocked) as blocked:
+            engine._start_run(task, 2, materials, recovery=True)
+        assert blocked.value.reason == "invalid_stage_inputs"
+        assert blocked.value.details["kind"] == "source_character_events"
+        assert all_records(engine.store, pid, "run", task_id=task["id"]) == []
+
+
+def test_step5_custom_source_text_traces_original_without_old_global_analysis(runtime):
+    engine, _, pid, cid = runtime
+    with engine.store.transaction():
+        seed_knowledge_asset(engine, pid)
+        source = engine.workflow.resolve(pid, "source_text")
+        current_global = engine.workflow.resolve(pid, "source_global_events")
+        config = engine.config_service.resolve(pid, "step5")
+        plan_artifact = engine.store.put(new_record("artifact", pid, artifact_kind="adaptation_plan"))
+        plan = engine.store.put(new_record("artifact_version", pid,
+            artifact_id=plan_artifact["id"], content={"storage": "inline_json", "value": {"payload": {}}},
+            output_schema=engine.workflow.catalog.binding("adaptation_plan", config["values"]["schemas"]),
+            config_version_id=config["id"], origin="program"))
+        engine.store.put(new_record("artifact_state", pid, artifact_id=plan_artifact["id"],
+            artifact_version_id=plan["id"], confirmation_status="not_required",
+            dependency_status="valid", quality_status="passed",
+            effective_selections=[{"item_id": None, "json_pointer": ""}]))
+        update(engine.store, plan_artifact, latest_version=1, current_effective_version=1)
+        old_artifact = engine.store.put(new_record("artifact", pid, artifact_kind="source_global_events"))
+        old_content = deepcopy(current_global["content"]["value"])
+        old_content["payload"]["global_events"][0].pop("analysis")
+        old_view = engine.store.put(new_record("artifact_version", pid,
+            artifact_id=old_artifact["id"], content={"storage": "inline_json", "value": old_content},
+            output_schema=current_global["output_schema"], source_refs=[ref(source)],
+            config_version_id=config["id"], origin="model"))
+        engine.store.put(new_record("artifact_state", pid, artifact_id=old_artifact["id"],
+            artifact_version_id=old_view["id"], confirmation_status="not_required",
+            dependency_status="valid", quality_status="passed",
+            effective_selections=[{"item_id": None, "json_pointer": ""}]))
+        update(engine.store, old_artifact, latest_version=1, current_effective_version=1)
+        custom_values = deepcopy(config["values"])
+        custom_values["context"]["stage_inputs"]["step5"] = ["source_text"]
+        custom = engine.store.put(new_record("config_version", pid, config_key="harness",
+            scope_kind="run_snapshot", scope_key="step5", state="snapshot",
+            version=config["version"] + 1, values=custom_values))
+        message = engine._message(pid, cid, "只读原文生成互动事件", role="user")
+        task = engine._new_task(pid, cid, message, "generate", stage=5)
+        data = engine._task_data(task)
+        data["config_version_id"] = custom["id"]
+        engine._save_task_data(task, data)
+        materials = engine.workflow.materials(pid, 5, input_kinds=["source_text"])
+        task, run, _, _ = engine._start_run(task, 5, materials)
+        assert run["input_refs"] == [ref(source)]
+        assert [item["schema_id"] for item in materials] == ["source_text"]
+
+
+@pytest.mark.parametrize("stage", [2, 5])
+@pytest.mark.parametrize("use_legacy_snapshot", [False, True])
+def test_saved_stage_result_rejects_fixed_legacy_global_view_even_with_current_valid_view(runtime, stage, use_legacy_snapshot):
+    engine, model, pid, cid = runtime
+    with engine.store.transaction():
+        knowledge = seed_knowledge_asset(engine, pid)
+        current_global = engine.workflow.resolve(pid, "source_global_events")
+        characters = engine.workflow.resolve(pid, "source_character_events")
+        source_ref = current_global["content"]["value"]["payload"]["source_ref"]
+        config = engine.config_service.resolve(pid, f"step{stage}")
+        legacy_values = deepcopy(config["values"])
+        event_schema = legacy_values["schemas"]["source_global_events"]["properties"]["payload"]["anyOf"][0]["properties"]["global_events"]["items"]
+        event_schema["properties"].pop("analysis")
+        event_schema["required"].remove("analysis")
+        legacy_snapshot = engine.store.put(new_record("config_version", pid, config_key="harness",
+            scope_kind="run_snapshot", scope_key=f"step{stage}", state="snapshot",
+            version=config["version"] + 1, values=legacy_values))
+        fixed_config = legacy_snapshot if use_legacy_snapshot else config
+        legacy_artifact = engine.store.put(new_record("artifact", pid, artifact_kind="source_global_events"))
+        legacy_content = deepcopy(current_global["content"]["value"])
+        legacy_content["payload"]["global_events"][0].pop("analysis")
+        legacy_global = engine.store.put(new_record("artifact_version", pid,
+            artifact_id=legacy_artifact["id"], content={"storage": "inline_json", "value": legacy_content},
+            output_schema=engine.workflow.catalog.binding("source_global_events", legacy_values["schemas"]),
+            source_refs=[source_ref], config_version_id=legacy_snapshot["id"], origin="model"))
+        engine.store.put(new_record("artifact_state", pid, artifact_id=legacy_artifact["id"],
+            artifact_version_id=legacy_global["id"], confirmation_status="not_required",
+            dependency_status="valid", quality_status="passed",
+            effective_selections=[{"item_id": None, "json_pointer": ""}]))
+        update(engine.store, legacy_artifact, latest_version=1, current_effective_version=1)
+        current_artifact = engine.store.put(new_record("artifact", pid, artifact_kind="source_global_events"))
+        engine.workflow.save(pid, "source_global_events", current_global["content"]["value"], stage=1,
+            inputs=[source_ref], effective=True, artifact_id=current_artifact["id"])
+        current_global = engine.workflow.resolve(pid, "source_global_events")
+        assert engine.workflow.resolve(pid, "source_global_events")["id"] != legacy_global["id"]
+        message = engine._message(pid, cid, "继续旧版阶段", role="user")
+        task = engine._new_task(pid, cid, message, "generate", stage=stage)
+        fixed_versions = [("source_global_events", legacy_global),
+                          ("source_character_events", characters)]
+        if stage == 5:
+            fixed_versions.append(("source_knowledge_asset", knowledge))
+        materials = [{"ref": ref(version), "kind": kind, "schema_id": kind,
+            "record": version, "content": version["content"]["value"],
+            "state": engine.workflow.state(version), "required": True}
+            for kind, version in fixed_versions]
+        current_materials = [{**item, "ref": ref(current_global), "record": current_global,
+            "content": current_global["content"]["value"]} if item["schema_id"] == "source_global_events"
+            else item for item in materials]
+        task, run, _, _ = engine._start_run(task, stage, current_materials, recovery=True)
+        engine._close_run(task, run, "paused")
+        engine._transition(engine.store.get(task["id"], pid), "paused")
+        historical_run = engine.store.put(new_record("run", pid, task_id=task["id"],
+            agent_key=run["agent_key"], session_id=run["session_id"], state="paused",
+            config_version_id=fixed_config["id"], input_refs=[item["ref"] for item in materials],
+            started_at=run["started_at"], finished_at=engine.store.now(), max_turns=0,
+            model_turns_used=0, lease_owner=None, lease_expires_at=None,
+            fencing_token=run["fencing_token"], execution_kind="recovery"))
+        result = step2_response() if stage == 2 else {"result_kind": "ready", "payload": {}}
+        engine._save_projection(pid, "run_result", historical_run["id"], {"output": result})
+        data = engine._task_data(task)
+        data["config_version_id"] = fixed_config["id"]
+        data["resume_saved_result"] = {"source_run_id": historical_run["id"], "output": result}
+        engine._save_task_data(task, data)
+        engine._transition(engine.store.get(task["id"], pid), "queued")
+        before_runs = {item["id"] for item in all_records(engine.store, pid, "run", task_id=task["id"])}
+    asyncio.run(engine.tick(pid, cid))
+    finished = engine.store.get(task["id"], pid)
+    assert finished["state"] == "paused"
+    assert finished["pause_reason"] == "source_event_analysis_migration_required"
+    assert {item["id"] for item in all_records(engine.store, pid, "run", task_id=task["id"])} == before_runs
+    assert model.calls == []
 
 
 def test_repair_exhaustion_rejects_last_output_before_explicit_continue(runtime):
@@ -1348,7 +1590,7 @@ def test_repair_exhaustion_rejects_last_output_before_explicit_continue(runtime)
     assert model.calls == ["step2"] * 7
     current = engine.store.get(task["id"], pid)
     assert current["state"] == "waiting_user" and current["repair_rounds_used"] == 5
-    assert engine.workflow.resolve(pid, "source_global_analysis", effective=False)
+    assert engine.workflow.resolve(pid, "source_global_events")
     assert engine.workflow.resolve(pid, "source_knowledge_asset", effective=False)
 
 
@@ -1630,12 +1872,10 @@ def test_long_stage_uses_real_batch_children_and_coverage_before_aggregation(run
     character_response = deepcopy(response)
     character_response["payload"].pop("global_events")
     with engine.store.transaction():
-        global_view = engine.workflow.save(pid, "source_global_events", global_response, stage=1,
-                                          effective=True, inputs=[ref(source)], origin="program")
+        engine.workflow.save(pid, "source_global_events", global_response, stage=1,
+                             effective=True, inputs=[ref(source)], origin="program")
         engine.workflow.save(pid, "source_character_events", character_response, stage=1,
                              effective=True, inputs=[ref(source)], origin="program")
-        engine.workflow.save(pid, "source_global_analysis", "甲乙相遇引发后续关系变化。", stage=1,
-                             effective=True, inputs=[ref(source), ref(global_view)], origin="program")
         message = engine._message(pid, cid, "分析原作", role="user")
         workflow_root = engine._new_task(pid, cid, message, "generate", is_workflow=True, stages=[2], request="完整流程") if ask_user == "ancestor" else None
         task = engine._new_task(pid, cid, message, "generate", stage=2, request="分析原作", parent=workflow_root)
@@ -2001,14 +2241,16 @@ def test_new_source_recursively_invalidates_current_stage_materials(runtime):
                                      inputs=[ref(source)], effective=True, origin="program")
         other = engine.workflow.save(pid, "source_character_events", character_output,
                                      inputs=[ref(source)], effective=True, origin="program")
-        value = "故事前提\n甲与乙相遇。\n\n原作保留建议\n保留相遇事件。"
-        second = engine.workflow.save(pid, "source_global_analysis", value,
+        value = step2_response()
+        value["payload"].update(source_global_events_ref=ref(first),
+                                source_character_events_ref=ref(other))
+        second = engine.workflow.save(pid, "source_knowledge_asset", value, stage=2,
                                       inputs=[ref(first), ref(other)], effective=True, origin="program")
     engine.import_source(pid, cid, "甲拒绝见乙。", "新原作")
     assert engine.workflow.state(first)["dependency_status"] == "review_required"
     assert engine.workflow.state(other)["dependency_status"] == "review_required"
     assert engine.workflow.state(second)["dependency_status"] == "review_required"
-    with pytest.raises(WorkflowBlocked): engine.workflow.resolve(pid, "source_global_analysis")
+    with pytest.raises(WorkflowBlocked): engine.workflow.resolve(pid, "source_knowledge_asset")
 
 
 def test_recovery_consumes_saved_run_steer_before_artifact_commit(runtime):

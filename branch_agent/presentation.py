@@ -27,7 +27,6 @@ STAGE_TITLES = {
 ARTIFACT_TITLES = {
     "source_text": "原作全文",
     "source_global_events": "作品事件视图",
-    "source_global_analysis": "作品事件分析",
     "source_character_events": "主要人物事件视图",
 }
 
@@ -46,6 +45,7 @@ LABELS = {
     "world_and_character_changes": "世界与人物调整", "entity_specs": "人物与地点设定",
     "writing_style": "写作风格", "events": "事件", "event_links": "事件关系",
     "global_events": "全局事件", "character_views": "主要人物视角", "aliases": "别名",
+    "analysis": "事件分析",
     "event_id": "事件 ID", "character_event_id": "人物事件 ID",
     "involvement": "参与方式", "narrative_order": "叙事顺序", "story_time": "故事时间",
     "event_annotations": "事件功能与玩家意图", "narrative_function": "叙事功能",

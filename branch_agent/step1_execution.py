@@ -2,18 +2,16 @@
 from __future__ import annotations
 
 import asyncio
-from copy import deepcopy
 import json
 
 from .context import BudgetExceeded, build_materials, input_budget, prepare_runtime_materials, prune_optional_materials, tokens, utf16_length
 from .presentation import stage_result_text
 from .prompts import harness_prompts, instructions, step1_agent, step1_run_appendix
-from .source_windows import combine_view_windows, source_window, validate_window
-from .workflow import WorkflowBlocked, all_records, body, locate_source_anchors, ref, update
+from .source_windows import combine_view_windows, source_window, validate_global_event_analysis, validate_window
+from .workflow import WorkflowBlocked, WHOLE, all_records, body, locate_source_anchors, ref, update
 
 
 VIEW_KINDS = {"global": "source_global_events", "character": "source_character_events"}
-ANALYSIS_KINDS = {"global": "source_global_analysis"}
 VIEW_LABELS = {"global": "作品事件", "character": "主要人物事件"}
 
 
@@ -25,8 +23,8 @@ class _WindowPreviewComplete(Exception):
 
 
 async def _budgeted_window(engine, child, run, session, values, materials, source_text,
-                           cursor, view, previous_analysis, previous_characters, request):
-    """Fit the real Step1 envelope, including its index and prior analysis.
+                           cursor, view, previous_characters, request):
+    """Fit the real Step1 envelope, including its source index.
 
     Preview projections are rolled back. The model service rebuilds them once
     for the chosen window, so sizing never leaves phantom source-index records.
@@ -50,9 +48,6 @@ async def _budgeted_window(engine, child, run, session, values, materials, sourc
                  for tool in ReadTools(engine.store, child["project_id"], values).functions()]
     history = await PersistentSession(engine.store, session, child, run).get_items()
     message = request + f"\n当前视图：{VIEW_LABELS[view]}"
-    if previous_analysis:
-        message += ("\n上一已检查原文前缀的累计分析（须结合本窗口更新，不得丢失仍有效的事实）：\n"
-                    + previous_analysis)
     if previous_characters:
         message += "\n已阅读前缀中的人物身份与最近事件（沿用人物 ID；不要重复输出已完成事件）：\n" + previous_characters
 
@@ -95,19 +90,6 @@ async def _budgeted_window(engine, child, run, session, values, materials, sourc
         limit = max(1, min(limit - 1, limit - max(1, (count - target) * 5 // 4)))
 
 
-def _analysis(output, view):
-    value = output.get("analysis") if isinstance(output, dict) else None
-    if not isinstance(value, str) or not value.strip():
-        raise WorkflowBlocked("source_analysis_incomplete", {"view": view})
-    return value.strip()
-
-
-def _view_only(output):
-    result = deepcopy(output)
-    result.pop("analysis", None)
-    return result
-
-
 def _character_continuity(engine, project, windows):
     """Carry compact identity and boundary context across separate character Sessions."""
     known = {}
@@ -126,8 +108,6 @@ def _character_continuity(engine, project, windows):
 
 
 def _validated_full(output, source_text, source_ref, view):
-    if view == "global":
-        _analysis(output, view)
     if output.get("result_kind") != "ready" or output.get("payload") is None or output.get("questions"):
         raise WorkflowBlocked("source_view_incomplete", {"view": view})
     result = locate_source_anchors(output, source_text, source_ref, full_coverage=True)
@@ -139,6 +119,8 @@ def _validated_full(output, source_text, source_ref, view):
         raise WorkflowBlocked("source_window_wrong_view", {"view": view})
     events = payload["global_events"] if view == "global" else [
         event for character in payload["character_views"] for event in character["events"]]
+    if view == "global":
+        validate_global_event_analysis(events)
     if view == "global" and not events:
         raise WorkflowBlocked("source_window_no_complete_event", {"view": view})
     if view == "global" and any(not event["source_anchors"] for event in events):
@@ -146,26 +128,20 @@ def _validated_full(output, source_text, source_ref, view):
     return result
 
 
-def _save_view(engine, child, run, output, analysis, kind):
+def _save_view(engine, child, run, output, kind):
     project = child["project_id"]
     if not engine._dependencies_valid(run):
         raise WorkflowBlocked("dependency_changed", {"view": engine._task_data(child)["step1_view"]})
     view = engine._task_data(child)["step1_view"]
     version = engine.workflow.save(project, kind, output, stage=1, run=run,
                                    inputs=run["input_refs"], effective=True)
-    refs = {kind: ref(version)}
-    if view == "global":
-        analysis_version = engine.workflow.save(project, ANALYSIS_KINDS[view], analysis, stage=1, run=run,
-                                                inputs=[*run["input_refs"], ref(version)], effective=True)
-        refs[ANALYSIS_KINDS[view]] = ref(analysis_version)
     data = engine._task_data(child)
     data["result_ref"] = ref(version)
-    data["result_refs"] = refs
+    data["result_refs"] = {kind: ref(version)}
     data.pop("resume_saved_result", None)
     engine._save_task_data(child, data)
     engine._event(project, "source.view_completed",
-                  {"view": view, "artifact_ref": ref(version),
-                   "analysis_ref": refs.get(ANALYSIS_KINDS.get(view))},
+                  {"view": view, "artifact_ref": ref(version)},
                   conversation=child["conversation_id"], task=child["id"], run=run["id"])
     label = "作品事件" if view == "global" else "主要人物事件"
     engine._event(project, "chat.activity",
@@ -199,6 +175,20 @@ async def run_view(engine, child, token, source_ref, source_text, windowed):
                 state = data["source_window_state"]
                 if state["source_ref"] != source_ref or state["mode"] != ("window" if windowed else "full"):
                     raise WorkflowBlocked("dependency_changed", {"view": view})
+                if view == "global":
+                    fixed_config_id = data.get("config_version_id")
+                    if fixed_config_id:
+                        fixed_config = engine.store.get(fixed_config_id, project_id=project)
+                        if fixed_config["values"]["output"]["bindings"].get("step1.global") != "source_global_events":
+                            raise WorkflowBlocked("source_event_analysis_migration_required",
+                                                  {"view": view, "reason": "old_output_type"})
+                    for prior_window in state["windows"]:
+                        prior = engine._projection(project, "source_window_output", prior_window["run_id"])
+                        events = prior["output"]["payload"]["global_events"]
+                        if any(not isinstance(event.get("analysis"), str) or not event["analysis"].strip()
+                               for event in events):
+                            raise WorkflowBlocked("source_event_analysis_migration_required",
+                                                  {"view": view, "reason": "old_window_output"})
                 cursor = state["cursor"]
                 if cursor == source_length and state["windows"]:
                     last = engine.store.get(state["windows"][-1]["run_id"], project_id=project)
@@ -206,15 +196,9 @@ async def run_view(engine, child, token, source_ref, source_text, windowed):
                         project, "source_window_output", item["run_id"])["output"]}
                         for item in state["windows"]]
                     output = combine_view_windows(windows, view, source_ref, source_length)
-                    _save_view(engine, child, last, output,
-                               _analysis(windows[-1]["output"], view) if view == "global" else None,
-                               VIEW_KINDS[view])
+                    _save_view(engine, child, last, output, VIEW_KINDS[view])
                     return
-                previous_analysis = None
                 previous_characters = None
-                if windowed and state["windows"] and view == "global":
-                    previous = engine._projection(project, "source_window_output", state["windows"][-1]["run_id"])
-                    previous_analysis = _analysis(previous["output"], view)
                 if windowed and state["windows"] and view == "character":
                     previous_characters = _character_continuity(engine, project, state["windows"])
                 materials = engine.workflow.materials(project, 1)
@@ -264,7 +248,7 @@ async def run_view(engine, child, token, source_ref, source_text, windowed):
                 request += ('\nHarness 校验修复单（仅按需读取候选，不继承失败 Run 历史）：\n' +
                             json.dumps(data['repair_brief'], ensure_ascii=False))
             window = (await _budgeted_window(engine, child, run, session, values,
-                       materials, source_text, cursor, view, previous_analysis, previous_characters, request)
+                       materials, source_text, cursor, view, previous_characters, request)
                       if windowed and not resume else
                       source_window(source_text, cursor,
                           values["context"]["step1_source"]["window_tokens"], values["model"]["name"])
@@ -279,8 +263,6 @@ async def run_view(engine, child, token, source_ref, source_text, windowed):
             result = resume["output"] if resume else await engine._invoke(
                 1, child, run, session, values, materials,
                 request + f"\n当前视图：{VIEW_LABELS[view]}" +
-                ("\n上一已检查原文前缀的累计分析（须结合本窗口更新，不得丢失仍有效的事实）：\n" +
-                 previous_analysis if previous_analysis else "") +
                 ("\n已阅读前缀中的人物身份与最近事件（沿用人物 ID；不要重复输出已完成事件）：\n" +
                  previous_characters if previous_characters else ""), token,
                 instructions_override=prompt, step1_window=window, step1_view=view)
@@ -299,8 +281,6 @@ async def run_view(engine, child, token, source_ref, source_text, windowed):
                 if windowed:
                     validated, commit = validate_window(bound, source_text, source_ref, view,
                                                          cursor, window["end_utf16"])
-                    if view == "global":
-                        _analysis(validated, view)
                     engine._save_projection(project, "source_window_output", run["id"],
                                             {"output": validated, "source_ref": source_ref})
                     data = engine._task_data(child)
@@ -330,13 +310,9 @@ async def run_view(engine, child, token, source_ref, source_text, windowed):
                         project, "source_window_output", item["run_id"])["output"]}
                         for item in state["windows"]]
                     final = combine_view_windows(windows, view, source_ref, source_length)
-                    analysis = _analysis(windows[-1]["output"], view) if view == "global" else None
                 else:
                     final = _validated_full(bound, source_text, source_ref, view)
-                    analysis = _analysis(final, view) if view == "global" else None
-                    if view == "global":
-                        final = _view_only(final)
-                _save_view(engine, child, run, final, analysis, VIEW_KINDS[view])
+                _save_view(engine, child, run, final, VIEW_KINDS[view])
                 return
         except asyncio.CancelledError:
             if engine._closing:
@@ -350,7 +326,7 @@ async def run_view(engine, child, token, source_ref, source_text, windowed):
                  "source_coverage_incomplete", "source_window_coverage_invalid",
                  "source_window_boundary_invalid", "source_window_event_outside_commit",
                  "source_window_wrong_view", "source_window_incomplete", "source_view_incomplete",
-                 "source_analysis_incomplete", "source_window_empty_interval_unverified",
+                 "source_event_analysis_incomplete", "source_window_empty_interval_unverified",
                  "output_schema_invalid"))
             if repairable and run:
                 category=engine._repair_category(error, reason)
@@ -371,6 +347,7 @@ async def run_view(engine, child, token, source_ref, source_text, windowed):
                 "input_budget_exceeded": "原文和 instructions 超过模型输入预算；请缩小窗口或调整模型",
                 "output_limit_exceeded": "模型输出达到上限，本窗口未记为完成",
                 "source_view_output_type_required": "Step 1 两个事件视图都需要启用结构化 output_type",
+                "source_event_analysis_migration_required": "旧版作品事件任务缺少逐事件分析，请重新运行 Step1",
             }.get(reason, str(error))
             engine._fail_execution(child, run, reason, explanation, getattr(error, "details", None))
             return
@@ -450,24 +427,46 @@ async def drive_step1_views(engine, task, token, source_version, source_text):
                 version = engine.workflow.fixed_version(project, fixed_ref)
                 if body(engine.store, version)["payload"]["source_ref"] != source_ref:
                     raise WorkflowBlocked("dependency_changed", {"kind": kind})
-            for kind in ANALYSIS_KINDS.values():
-                version = engine.workflow.fixed_version(project, refs[kind])
-                if source_ref not in version["source_refs"]:
-                    raise WorkflowBlocked("dependency_changed", {"kind": kind})
             data = engine._task_data(task)
             data["result_refs"] = refs
             engine._save_task_data(task, data)
-            for kind in ("source_global_events", "source_global_analysis",
-                         "source_character_events"):
+            for kind in ("source_global_events", "source_character_events"):
                 fixed_ref = refs[kind]
                 version = engine.workflow.fixed_version(project, fixed_ref)
                 presented = stage_result_text(1, body(engine.store, version),
                     version=version["version"], artifact_kind=kind)
                 message = engine._message(project, cid, presented, task=task["id"])
                 engine._event(project, "artifact.presented",
-                    {"artifact_ref": fixed_ref, "message_id": message["id"], "selections": [{"item_id": None, "json_pointer": ""}]},
+                    {"artifact_ref": fixed_ref, "message_id": message["id"], "selections": [WHOLE]},
                     conversation=cid, task=task["id"])
             engine._transition(task, "succeeded")
+            root = (engine.store.get(task["parent_task_id"], project_id=project)
+                    if task["parent_task_id"] else None)
+            if root and engine._task_data(root).get("is_workflow"):
+                root_data = engine._task_data(root)
+                if root_data.get("step1_review"):
+                    if root_data["step1_review"].get("artifact_refs") != refs:
+                        raise WorkflowBlocked("confirmation_candidate_changed")
+                    return
+                targets = [{"subject": refs[kind], "selections": [WHOLE]}
+                           for kind in ("source_global_events", "source_character_events")]
+                description = ("Step1 两路产物已完整保存。请审阅作品事件视图与主要人物事件视图的固定版本；"
+                               "两路都通过后，Harness 会结束 Step1 并自动启动 Step2 原作知识资产分析。")
+                question = engine._message(project, cid, description, task=root["id"])
+                root_data["step1_review"] = {"source_ref": source_ref,
+                                             "artifact_refs": refs, "step1_task_id": task["id"]}
+                root_data["pending_user_items"].append(
+                    engine._wait_item(root, "confirmation", question, description, targets))
+                engine._save_task_data(root, root_data)
+                presentations = engine._projection(project, "presentations", cid, targets=[])
+                presentations["targets"].extend({**target, "message_id": question["id"],
+                                                  "task_id": root["id"]} for target in targets)
+                engine._save_projection(project, "presentations", cid, presentations)
+                engine._event(project, "source.step1_review_requested",
+                              {"source_ref": source_ref, "artifact_refs": refs,
+                               "pending_item_id": root_data["pending_user_items"][-1]["id"]},
+                              conversation=cid, task=root["id"])
+                engine._transition(root, "waiting_user")
     except asyncio.CancelledError:
         if engine._closing:
             return
